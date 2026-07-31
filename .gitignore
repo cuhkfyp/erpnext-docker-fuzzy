@@ -1,0 +1,44 @@
+# This repository intentionally tracks only the fuzzy-matching component.
+*
+
+!.gitignore
+!README.md
+!LICENSE
+!requirements.txt
+!__init__.py
+!api_ccd_fuzzy.py
+!api_ccd_fuzzy.md
+
+# Implementation packages added after the baseline commit.
+!fuzzy_matching/
+!fuzzy_matching/**
+!db_connector/
+db_connector/*
+!db_connector/__init__.py
+!db_connector/doctype/
+!db_connector/doctype/**
+!tests/
+!tests/**
+
+# Never track generated or sensitive runtime material.
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.ruff_cache/
+**/.coverage
+**/htmlcov/
+**/*.duckdb
+**/*.db
+**/*.log
+**/.env
+**/.env.*
+**/*secret*
+**/*credential*
+**/node_modules/
+**/dist/
+**/build/
+**/*.tar
+**/*.tar.gz
+**/*.zip
+**/*backup*
+**/*.bak*
