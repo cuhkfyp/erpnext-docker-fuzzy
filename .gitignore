@@ -8,17 +8,16 @@
 !__init__.py
 !api_ccd_fuzzy.py
 !api_ccd_fuzzy.md
+!api_fuzzy_evaluation.py
 
 # Implementation packages added after the baseline commit.
 !fuzzy_matching/
 !fuzzy_matching/**
-!db_connector/
-db_connector/*
-!db_connector/__init__.py
-!db_connector/doctype/
-!db_connector/doctype/**
+!doctype/
+!doctype/**
 !tests/
 !tests/**
+!MATCHING_PILOT.md
 
 # Never track generated or sensitive runtime material.
 **/__pycache__/
@@ -29,6 +28,11 @@ db_connector/*
 **/htmlcov/
 **/*.duckdb
 **/*.db
+**/*.sqlite*
+**/*.csv
+**/*.jsonl
+**/*.parquet
+**/*.xlsx
 **/*.log
 **/.env
 **/.env.*

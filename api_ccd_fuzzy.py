@@ -18,11 +18,13 @@ Phase 1 delivers:
   • test_*() helpers             — callable from bench console for verification
 """
 
-import frappe
+import ast
 import json
 import re
 from collections import defaultdict
+from html import escape
 
+import frappe
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Low-level Match Functions
@@ -163,6 +165,37 @@ def id_match(str_a, str_b):
 # Formula Evaluator
 # ─────────────────────────────────────────────────────────────────────────────
 
+_ALLOWED_ARITHMETIC_NODES = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.UAdd,
+    ast.USub,
+    ast.Name,
+    ast.Load,
+    ast.Constant,
+)
+
+
+def _compile_safe_arithmetic(expression, allowed_names=()):
+    """Compile numeric formula arithmetic while rejecting calls and attributes."""
+    tree = ast.parse(expression, mode='eval')
+    allowed_names = set(allowed_names)
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED_ARITHMETIC_NODES):
+            raise ValueError(f'unsupported formula syntax: {type(node).__name__}')
+        if isinstance(node, ast.Name) and node.id not in allowed_names:
+            raise ValueError(f'unknown formula value: {node.id}')
+        if isinstance(node, ast.Constant) and (
+            isinstance(node.value, bool) or not isinstance(node.value, (int, float))
+        ):
+            raise ValueError('formula constants must be numeric')
+    return compile(tree, '<fuzzy_formula>', 'eval')
+
 def _eval_expr(expr, row):
     """Evaluate a macro argument expression using a record row as variable scope.
 
@@ -251,7 +284,8 @@ def evaluate_fuzzy_formula(formula_text, source_row, candidate_row):
 
     # Evaluate the arithmetic score expression
     try:
-        raw_score = float(eval(score_expr, {"__builtins__": {}}, {}))
+        code = _compile_safe_arithmetic(score_expr)
+        raw_score = float(eval(code, {"__builtins__": {}}, {}))
     except Exception as e:
         frappe.log_error(
             f'evaluate_fuzzy_formula: eval failed for expr [{score_expr}]: {e}',
@@ -299,7 +333,7 @@ def compile_formula(formula_text):
         pair_fn       : callable(src_cache, cand_cache) -> (score: float, is_match: bool)
     """
     if not formula_text:
-        return (lambda row: {}), (lambda s, c: (0.0, False))
+        return (lambda row: {}), (lambda s, c: (0.0, False, {})), []
 
     # ── Strip trailing threshold ──────────────────────────────────────────────
     thresh_m = re.search(
@@ -346,8 +380,8 @@ def compile_formula(formula_text):
 
     # ── Compile arithmetic expression once ───────────────────────────────────
     try:
-        code = compile(expr, '<fuzzy_formula>', 'eval')
-    except SyntaxError as e:
+        code = _compile_safe_arithmetic(expr, {slot for slot, _, _ in slot_defs})
+    except (SyntaxError, ValueError) as e:
         raise ValueError(f'compile_formula: syntax error in [{expr}]: {e}')
 
     # ── Pre-computation closure (called once per record) ──────────────────────
@@ -392,7 +426,7 @@ def compile_formula(formula_text):
         try:
             raw = float(eval(code, {'__builtins__': {}}, ns))
         except Exception:
-            return 0.0, False
+            return 0.0, False, ns
         return round(raw, 4), cmp_fn(raw, threshold), ns
 
     return precompute, pair_fn, slot_details_definitions
@@ -551,22 +585,22 @@ def _insert_match_rows(rows):
 #      (source_doc_name, mas_client, client, client_id, score, ns)
 
 #    idx (row number) is assigned per parent in sequence starting from 1.
-#    """    
-    
+#    """
+
     """Insert match_table rows via direct SQL for performance."""
     if not rows:
         return
 
-    
+
     idx_counter = defaultdict(int)
-    
-    for (source_doc_name, mas_client, client, client_id, score, ns, html_table) in rows:
+
+    for (source_doc_name, mas_client, client, client_id, score, _ns, html_table) in rows:
         #print(f"DEBUG | Processing row for source_doc_name: {source_doc_name}")
         idx_counter[source_doc_name] += 1
-        
+
         # Convert the python dictionary to a valid JSON string
         #ns_json_string = json.dumps(html_table) if html_table else "{}"
-        
+
         frappe.db.sql(
             """INSERT INTO `tabCCD Master matching`
                (name, parent, parenttype, parentfield, idx,
@@ -586,19 +620,13 @@ def _insert_match_rows(rows):
         )
 
 # HTML audit table
-def building_html_audit_table(slot_details_definitions,ns,src_cache, cand_cache,formula): 
+def building_html_audit_table(slot_details_definitions, ns, src_cache, cand_cache, formula):
     # Start building the visual HTML audit breakdown table
     if not formula:
         return ""
-    
-    
-    processed_expression = formula
-    
-    macro_pattern = r'(@[A-Za-z]+Match)\("([^"]+)"\)'
-    matches = re.findall(macro_pattern, formula)
 
-    
-        
+    processed_expression = formula
+
     html_table = """
     <div style="overflow-x: auto; margin-top: 5px;">
         <table class="table table-bordered table-condensed" style="font-size: 12px; margin-bottom: 5px; background-color: #fafbfc;">
@@ -612,29 +640,29 @@ def building_html_audit_table(slot_details_definitions,ns,src_cache, cand_cache,
                 </tr>
             </thead>
             <tbody>
-    """    
-    
+    """
+
     for slot, function_name, field in slot_details_definitions:
         val1 = src_cache.get(slot) or ""
-        
+
         val2 = cand_cache.get(slot) or ""
-        
+
         # Calculate raw similarity (0-100)
         if function_name == 'ChineseMatch':
-            
+
             field_score = ns.get(slot, 0.0)
             #print(f"DEBUG | ChineseMatch: {val1} vs {val2} → Score: {field_score}")
-           
+
         elif function_name == 'EnglishMatch':
             #field_score = english_match(val1, val2) * 100
             field_score = ns.get(slot, 0.0)
             #print(f"DEBUG | EnglishMatch: {val1} vs {val2} → Score: {field_score}")
-            
+
         elif function_name == 'PhoneMatch':
             #field_score = phone_match(val1, val2) * 100
             field_score = ns.get(slot, 0.0)
             #print(f"DEBUG | PhoneMatch: {val1} vs {val2} → Score: {field_score}")
-            
+
         elif function_name == 'IDMatch':
             #field_score = id_match(val1, val2) * 100
             field_score = ns.get(slot, 0.0)
@@ -642,32 +670,24 @@ def building_html_audit_table(slot_details_definitions,ns,src_cache, cand_cache,
         else:
             #print(f"DEBUG | Unknown function: {function_name} for field: {field}")
             field_score = 0.0
-        
-        
+
+
         score_full = field_score * 100
         #print(f"DEBUG | Score full for {function_name}({field}): {score_full:.4f}")
-        
+
         # Generate clean presentation variables for our table body rows
         clean_field_label = field.replace('_', ' ').title()
-        #print(f"DEBUG | Clean field label for {field}: {clean_field_label}")
-        
-        
-        
-        # 1. Strip extra quotes just in case the source data leaves them attached
-        clean_field_name = field.strip('"\'')
-        
-        # 2. Perform the replace using the clean string
-        processed_expression = processed_expression.replace(f'@{function_name}("{clean_field_name}")', str(field_score))
-        
-        #print(f"DEBUG | Processed expression after replacing {function_name}({clean_field_name}): {processed_expression}")        
-
-        
+        # Replace the exact macro call captured by compile_formula. This also
+        # supports f-string/concatenated field expressions used by the engine.
+        processed_expression = processed_expression.replace(
+            f'@{function_name}({field})', str(field_score), 1
+        )
         html_table += f"""
                 <tr>
-                    <td style="padding: 4px 8px; font-family: monospace; color: #b91c1c; font-weight: bold;">@{function_name}</td>
-                    <td style="padding: 4px 8px; font-weight: 500; color: #1f2937;">{clean_field_label.replace('"', '').replace("'", "")}</td>
-                    <td style="padding: 4px 8px; color: #4b5563;">{val1}</td>
-                    <td style="padding: 4px 8px; color: #4b5563;">{val2}</td>
+                    <td style="padding: 4px 8px; font-family: monospace; color: #b91c1c; font-weight: bold;">@{escape(str(function_name))}</td>
+                    <td style="padding: 4px 8px; font-weight: 500; color: #1f2937;">{escape(clean_field_label.replace('"', '').replace("'", ""))}</td>
+                    <td style="padding: 4px 8px; color: #4b5563;">{escape(str(val1))}</td>
+                    <td style="padding: 4px 8px; color: #4b5563;">{escape(str(val2))}</td>
                     <td style="padding: 4px 8px; text-align: center;">
                         <span class="indicator { 'green' if score_full >= 70 else 'orange' if score_full >= 40 else 'red' }">
                             {score_full:.2f}% ({field_score:.2f})
@@ -675,23 +695,29 @@ def building_html_audit_table(slot_details_definitions,ns,src_cache, cand_cache,
                     </td>
                 </tr>
         """
-    
-    equation_part = processed_expression.split('>')[0].strip()
-    print(f"DEBUG | Final equation part to evaluate: {equation_part}")
+
+    threshold = re.search(
+        r'\s*(>=|<=|!=|>|<|==)\s*(-?[0-9]+\.?[0-9]*)\s*$',
+        processed_expression,
+    )
+    equation_part = (
+        processed_expression[:threshold.start()].strip()
+        if threshold
+        else processed_expression.strip()
+    )
     try:
-        # Evaluates the literal math result pattern string safely via the native Frappe environment framework
-        score = frappe.safe_eval(equation_part)
+        code = _compile_safe_arithmetic(equation_part)
+        score = float(eval(code, {'__builtins__': {}}, {}))
     except Exception:
-        score = 0    
+        score = 0
     html_table += f"""
                 </tbody>
             </table>
             <div style="font-size: 11px; color: #6b7280; padding: 4px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-top: 0; border-radius: 0 0 4px 4px;">
-                <strong>Formula Evaluation Trail:</strong> <code style="color: #db2777; font-size: 11px;">{equation_part}</code> &rarr; <strong>Total Combined Score: <span style="color: #059669; font-size: 12px;">{round(score, 3)}</span></strong>
+                <strong>Formula Evaluation Trail:</strong> <code style="color: #db2777; font-size: 11px;">{escape(equation_part)}</code> &rarr; <strong>Total Combined Score: <span style="color: #059669; font-size: 12px;">{round(score, 3)}</span></strong>
             </div>
         </div>
-        """    
-    print("DEBUG | Finished building HTML audit table")
+        """
     return html_table
 # ─────────────────────────────────────────────────────────────────────────────
 # Core Matching Runner
@@ -712,7 +738,7 @@ def run_fuzzy_match_for_center(hostname, changed_keys=None, is_new_center=False,
 
         is_new_center (bool):
             Reserved for Phase 3 cross-trigger logic.  Not used in Phase 1.
-            
+
         specific_records (list[str] | None):
             If given, only process the CCD Master records whose names are in this list.
 
@@ -830,23 +856,23 @@ def run_fuzzy_match_for_center(hostname, changed_keys=None, is_new_center=False,
                 cand_center = cand.get('ccd_reg_source', '')
                 if not cand_center or cand_center == hostname:
                     continue
-                
+
                 score, is_match, ns = pair_fn(src_cache, cand.get('_fc', {}))
                 #cand_name = cand.get('name', 'Unknown')
-                #print(f"DEBUG | Cand: {cand_name} | Total: {score} | Match: {is_match} | Marks: {ns}")                 
+                #print(f"DEBUG | Cand: {cand_name} | Total: {score} | Match: {is_match} | Marks: {ns}")
                 if is_match:
                     #print("src_cache:", src_cache)
                     #print("cand_cache:", cand.get('_fc', {}))
                     cand_key = cand.get('ccd_source_key', '')
                     #print(f"DEBUG | Match found: {src_key} ↔ {cand_key} | Score: {score} | Marks: {ns} | Formula: {formula}")
                     html_table = building_html_audit_table(slot_details_definitions, ns, src_cache, cand.get('_fc', {}), formula)
-                    
+
                     record_matches.append((cand_center, cand_key, score,ns,html_table))
 
             # Queue new rows
             for cand_center, cand_key, score, ns, html_table in record_matches:
                 #print(f"New row: {(ns, html_table)}")
-                
+
                 new_rows.append((src_doc_name, src_center, cand_center, cand_key, score, ns, html_table))
                 matches_found += 1
 

@@ -1,0 +1,43 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "matching_policy", "policy_version", "policy_snapshot_json", "status", "approval_status", "snapshot_at",
+  "sample_size", "double_review_count", "record_count", "profile_json", "candidate_count",
+  "candidate_truncated", "sampled_pair_count", "model_versions_json",
+  "skipped_blocks_json", "metrics_json", "error_summary"
+ ],
+ "fields": [
+  {"fieldname": "matching_policy", "fieldtype": "Link", "in_list_view": 1, "label": "Matching Policy", "options": "CCD Matching Policy", "reqd": 1},
+  {"fieldname": "policy_version", "fieldtype": "Data", "label": "Policy Version", "read_only": 1},
+  {"fieldname": "policy_snapshot_json", "fieldtype": "Code", "hidden": 1, "label": "Policy Snapshot", "options": "JSON", "read_only": 1, "reqd": 1},
+  {"default": "Queued", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Queued\nProfiling\nGenerating Candidates\nScoring\nReviewing\nAwaiting Management Approval\nCompleted\nFailed", "read_only": 1},
+  {"default": "Pending Management Review", "fieldname": "approval_status", "fieldtype": "Select", "label": "Approval Status", "options": "Pending Management Review\nApproved\nRejected", "read_only": 1},
+  {"fieldname": "snapshot_at", "fieldtype": "Datetime", "label": "Snapshot At", "read_only": 1, "reqd": 1},
+  {"default": "500", "fieldname": "sample_size", "fieldtype": "Int", "label": "Sample Size", "read_only": 1},
+  {"default": "100", "fieldname": "double_review_count", "fieldtype": "Int", "label": "Double Review Count", "read_only": 1},
+  {"fieldname": "record_count", "fieldtype": "Int", "label": "Record Count", "read_only": 1},
+  {"fieldname": "profile_json", "fieldtype": "Code", "label": "Source Data Profile", "options": "JSON", "read_only": 1},
+  {"fieldname": "candidate_count", "fieldtype": "Int", "label": "Candidate Count", "read_only": 1},
+  {"fieldname": "candidate_truncated", "fieldtype": "Check", "label": "Candidate Truncated", "read_only": 1},
+  {"fieldname": "sampled_pair_count", "fieldtype": "Int", "label": "Sampled Pair Count", "read_only": 1},
+  {"fieldname": "model_versions_json", "fieldtype": "Code", "label": "Model Versions", "options": "JSON", "read_only": 1},
+  {"fieldname": "skipped_blocks_json", "fieldtype": "Code", "label": "Skipped Blocks", "options": "JSON", "read_only": 1},
+  {"fieldname": "metrics_json", "fieldtype": "Code", "label": "Metrics", "options": "JSON", "read_only": 1},
+  {"fieldname": "error_summary", "fieldtype": "Small Text", "label": "Error Summary", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Match Evaluation Run",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"read": 1, "role": "CCD Match Reviewer"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

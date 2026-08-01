@@ -1,3 +1,5 @@
-hanziconv
-pypinyin
-rapidfuzz>=3
+duckdb==1.5.5
+hanziconv==0.3.2
+pypinyin==0.55.0
+rapidfuzz==3.14.5
+splink==4.0.16

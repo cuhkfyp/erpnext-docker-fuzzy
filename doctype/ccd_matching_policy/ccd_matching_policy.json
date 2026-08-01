@@ -1,0 +1,37 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:policy_version",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "policy_version", "title", "status", "trusted_global_identifiers",
+  "high_precision_target", "minimum_high_samples", "max_block_size",
+  "max_candidate_pairs", "source_profiles", "notes"
+ ],
+ "fields": [
+  {"fieldname": "policy_version", "fieldtype": "Data", "in_list_view": 1, "label": "Policy Version", "reqd": 1, "unique": 1},
+  {"fieldname": "title", "fieldtype": "Data", "label": "Title", "reqd": 1},
+  {"default": "Draft", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Draft\nPilot\nApproved\nArchived", "reqd": 1},
+  {"description": "Comma-separated canonical identifiers. They remain inactive unless the source profile marks them global.", "fieldname": "trusted_global_identifiers", "fieldtype": "Small Text", "label": "Trusted Global Identifiers"},
+  {"default": "0.95", "fieldname": "high_precision_target", "fieldtype": "Float", "label": "High Precision Target", "reqd": 1},
+  {"default": "30", "fieldname": "minimum_high_samples", "fieldtype": "Int", "label": "Minimum High Samples", "reqd": 1},
+  {"default": "10000", "fieldname": "max_block_size", "fieldtype": "Int", "label": "Maximum Block Size", "reqd": 1},
+  {"default": "500000", "fieldname": "max_candidate_pairs", "fieldtype": "Int", "label": "Maximum Candidate Pairs", "reqd": 1},
+  {"fieldname": "source_profiles", "fieldtype": "Table", "label": "Source Profiles", "options": "CCD Matching Source Profile"},
+  {"fieldname": "notes", "fieldtype": "Text Editor", "label": "Notes"}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Matching Policy",
+ "naming_rule": "By fieldname",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"read": 1, "role": "CCD Match Reviewer"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
