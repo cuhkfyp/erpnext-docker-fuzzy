@@ -13,11 +13,15 @@
 # Implementation packages added after the baseline commit.
 !fuzzy_matching/
 !fuzzy_matching/**
-!doctype/
-!doctype/**
+!db_connector/
+!db_connector/__init__.py
+!db_connector/doctype/
+!db_connector/doctype/**
 !tests/
 !tests/**
 !MATCHING_PILOT.md
+!deployment/
+!deployment/**
 
 # Never track generated or sensitive runtime material.
 **/__pycache__/

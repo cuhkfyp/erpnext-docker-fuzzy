@@ -48,6 +48,12 @@ def build_evidence(
         "birthday": compare_birthday(
             "birthday", policy.value(left, "birthday"), policy.value(right, "birthday")
         ),
+        "hksr_num": compare_identifier(
+            "hksr_num", policy.value(left, "hksr_num"), policy.value(right, "hksr_num")
+        ),
+        "hkid": compare_identifier(
+            "hkid", policy.value(left, "hkid"), policy.value(right, "hkid")
+        ),
     }
     left_source = str(left.get("source") or left.get("ccd_reg_source") or "")
     right_source = str(right.get("source") or right.get("ccd_reg_source") or "")
@@ -57,9 +63,12 @@ def build_evidence(
             and policy.globally_comparable(right_source, attribute)
         ):
             continue
-        evidence[attribute] = compare_identifier(
-            attribute, policy.value(left, attribute), policy.value(right, attribute)
-        )
+        # The two built-in strong identifiers are already present. This branch
+        # keeps policy extensions safe without changing their comparison rule.
+        if attribute not in evidence:
+            evidence[attribute] = compare_identifier(
+                attribute, policy.value(left, attribute), policy.value(right, attribute)
+            )
     return evidence
 
 
@@ -91,20 +100,26 @@ def tiered_result(
     policy: MatchingPolicy,
     *,
     conflict_mode: str,
+    trusted_identifiers: frozenset[str] = frozenset(),
 ) -> ModelResult:
     exact_ids = [
         attribute
-        for attribute in policy.trusted_global_identifiers
+        for attribute in trusted_identifiers
         if attribute in evidence and evidence[attribute].exact
     ]
     conflicting_ids = [
         attribute
-        for attribute in policy.trusted_global_identifiers
+        for attribute in trusted_identifiers
         if attribute in evidence and evidence[attribute].level == EvidenceLevel.DISAGREE
     ]
     chinese_exact, english_exact, name_support = _names(evidence)
     exact_secondary = [
         key for key in ("birthday", "phone", "email") if evidence[key].exact
+    ]
+    unverified_exact_ids = [
+        key
+        for key in ("hkid", "hksr_num")
+        if key in evidence and evidence[key].exact and key not in trusted_identifiers
     ]
     name_disagreement = any(
         evidence[key].level == EvidenceLevel.DISAGREE
@@ -119,6 +134,8 @@ def tiered_result(
         reasons.extend(f"trusted_global_id_conflict:{key}" for key in conflicting_ids)
     if exact_secondary:
         reasons.extend(f"independent_exact:{key}" for key in exact_secondary)
+    if unverified_exact_ids:
+        reasons.extend(f"unverified_identifier_exact:{key}" for key in unverified_exact_ids)
     if chinese_exact:
         reasons.append("chinese_full_name_exact")
     if english_exact:
@@ -141,10 +158,10 @@ def tiered_result(
     elif (chinese_exact or english_exact) and exact_secondary:
         tier = MatchTier.HIGH
         reasons.append("exact_name_plus_independent_evidence")
-    elif name_support or exact_secondary:
+    elif name_support or exact_secondary or unverified_exact_ids:
         tier = MatchTier.REVIEW
         reasons.append("human_review_required")
-        if not exact_secondary:
+        if not exact_secondary and not unverified_exact_ids:
             reasons.append("insufficient_independent_evidence")
     else:
         tier = MatchTier.LOW
@@ -197,9 +214,27 @@ def compare_all_models(
     review_threshold: float | None = None,
 ) -> EvaluationResult:
     evidence = build_evidence(left, right, policy)
+    left_source = str(left.get("source") or left.get("ccd_reg_source") or "")
+    right_source = str(right.get("source") or right.get("ccd_reg_source") or "")
+    trusted_identifiers = frozenset(
+        attribute
+        for attribute in policy.trusted_global_identifiers
+        if policy.globally_comparable(left_source, attribute)
+        and policy.globally_comparable(right_source, attribute)
+    )
     baseline = baseline_result(evidence)
-    gated = tiered_result(evidence, policy, conflict_mode="gated")
-    recoverable = tiered_result(evidence, policy, conflict_mode="recoverable")
+    gated = tiered_result(
+        evidence,
+        policy,
+        conflict_mode="gated",
+        trusted_identifiers=trusted_identifiers,
+    )
+    recoverable = tiered_result(
+        evidence,
+        policy,
+        conflict_mode="recoverable",
+        trusted_identifiers=trusted_identifiers,
+    )
     probabilistic = None
     if probability is not None:
         probabilistic = ModelResult(

@@ -24,6 +24,17 @@ class CCDMatchingPolicy(Document):
             "hksr_num",
             "hkid",
         }
+        expected_comparators = {
+            "chi_surname": "Chinese Name",
+            "chi_firstname": "Chinese Name",
+            "eng_surname": "English Name",
+            "eng_firstname": "English Name",
+            "phone": "Phone Exact",
+            "email": "Email Exact",
+            "birthday": "Birthday Exact",
+            "hksr_num": "Identifier Exact",
+            "hkid": "Identifier Exact",
+        }
         trusted = {
             value.strip()
             for value in str(self.trusted_global_identifiers or "").split(",")
@@ -47,5 +58,12 @@ class CCDMatchingPolicy(Document):
                     f"Duplicate source profile for {row.ccd_registration} and {attribute}"
                 )
             seen.add(key)
+            expected = expected_comparators[attribute]
+            if not row.comparator:
+                row.comparator = expected
+            elif row.comparator != expected:
+                frappe.throw(
+                    f"{row.ccd_registration} {attribute} must use comparator {expected}"
+                )
             if row.enabled and not ccd_master.has_field(row.fieldname):
                 frappe.throw(f"CCD Master has no field named {row.fieldname}")

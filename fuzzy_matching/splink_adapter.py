@@ -16,6 +16,10 @@ class SplinkUnavailable(RuntimeError):
     pass
 
 
+RANDOM_MATCH_PRIOR = 0.0001
+MAX_DIRECT_SCORING_PAIRS = 5_000
+
+
 @dataclass(frozen=True)
 class ProbabilityPrediction:
     left_id: str
@@ -49,6 +53,7 @@ def fit_predict(
     *,
     max_block_size: int = 10_000,
     max_prediction_pairs: int = 500_000,
+    requested_pairs: Iterable[tuple[str, str]] | None = None,
 ) -> list[ProbabilityPrediction]:
     """Train an unsupervised link-only model and return local predictions.
 
@@ -151,6 +156,11 @@ def fit_predict(
         unique_id_column_name="record_id",
         comparisons=comparisons,
         blocking_rules_to_generate_predictions=blocking_rules,
+        # Exact names in CCD can be common or incomplete, so they are not a
+        # sufficiently precise deterministic rule for estimating the random
+        # match prior. Use Splink's conservative default explicitly and let
+        # governed human labels calibrate the deployable score thresholds.
+        probability_two_random_records_match=RANDOM_MATCH_PRIOR,
         retain_matching_columns=True,
         retain_intermediate_calculation_columns=True,
     )
@@ -160,14 +170,17 @@ def fit_predict(
     # Separate frames plus explicit aliases make Splink create that column and
     # also guarantee that it predicts cross-source pairs only.
     source_frames = [frame.loc[frame["source"].astype(str) == source].copy() for source in sources]
+    # Splink uses aliases as DuckDB table identifiers in generated SQL. CCD
+    # Registration names may contain hyphens, spaces, or other punctuation, so
+    # never pass the business-facing source name through as an SQL identifier.
+    # Positional aliases are private working names; the original source remains
+    # available in the input column for policy logic and audit output.
+    source_aliases = [f"source_{index}" for index in range(len(source_frames))]
     linker = Linker(
         source_frames,
         settings,
         db_api=DuckDBAPI(),
-        input_table_aliases=sources,
-    )
-    linker.training.estimate_probability_two_random_records_match(
-        [rule for rule in blocking_rules[:1]], recall=0.70
+        input_table_aliases=source_aliases,
     )
     linker.training.estimate_u_using_random_sampling(max_pairs=1_000_000, seed=0)
     for rule in blocking_rules[:3]:
@@ -178,11 +191,13 @@ def fit_predict(
     predictions = linker.inference.predict(threshold_match_weight=-20).as_pandas_dataframe()
 
     output: list[ProbabilityPrediction] = []
+    predicted_keys: set[tuple[str, str]] = set()
     for row in predictions.to_dict("records"):
         left = str(row.get("record_id_l") or row.get("unique_id_l") or "")
         right = str(row.get("record_id_r") or row.get("unique_id_r") or "")
         if not left or not right:
             continue
+        predicted_keys.add(tuple(sorted((left, right))))
         output.append(
             ProbabilityPrediction(
                 left,
@@ -191,4 +206,46 @@ def fit_predict(
                 float(row["match_weight"]) if row.get("match_weight") is not None else None,
             )
         )
+
+    # Population inference remains restricted to the safeguarded blocking
+    # rules above. For a small, already-selected human-review set, score any
+    # missing pairs directly with the trained model so the statistical model
+    # can be calibrated on the same governed labels. This never creates new
+    # production candidates and is bounded by the caller's review sample.
+    row_by_id = {
+        str(row.get("record_id") or ""): row
+        for row in frame.to_dict("records")
+        if row.get("record_id")
+    }
+    direct_pairs = {
+        tuple(sorted((str(left), str(right))))
+        for left, right in (requested_pairs or ())
+        if left and right and left != right
+    }
+    for left, right in sorted(direct_pairs - predicted_keys)[:MAX_DIRECT_SCORING_PAIRS]:
+        left_row = row_by_id.get(left)
+        right_row = row_by_id.get(right)
+        if not left_row or not right_row:
+            continue
+        try:
+            direct = linker.inference.compare_two_records(left_row, right_row).as_pandas_dataframe()
+            if direct.empty:
+                continue
+            prediction = direct.iloc[0]
+            output.append(
+                ProbabilityPrediction(
+                    left,
+                    right,
+                    float(prediction["match_probability"]),
+                    (
+                        float(prediction["match_weight"])
+                        if prediction.get("match_weight") is not None
+                        else None
+                    ),
+                )
+            )
+        except Exception:
+            # A single sparse/malformed pair must not discard the trained
+            # model's valid predictions for the remainder of the review set.
+            continue
     return output

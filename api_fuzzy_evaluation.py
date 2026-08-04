@@ -7,6 +7,7 @@ It stores predictions and human labels in dedicated evaluation DocTypes.
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import traceback
 from dataclasses import replace
@@ -24,6 +25,8 @@ from db_connector.fuzzy_matching.profiling import profile_attributes
 from db_connector.fuzzy_matching.sampling import double_review_ids, stratified_sample
 from db_connector.fuzzy_matching.security import mask_identifier
 from db_connector.fuzzy_matching.splink_adapter import (
+    MAX_DIRECT_SCORING_PAIRS,
+    RANDOM_MATCH_PRIOR,
     SplinkUnavailable,
     available,
     dependency_versions,
@@ -35,6 +38,48 @@ REVIEW_ROLE = "CCD Match Reviewer"
 SENSITIVE_ROLE = "CCD Match Sensitive Reviewer"
 ALLOWED_LABELS = {"Same", "Different", "Unsure"}
 SENSITIVE_ATTRIBUTES = {"hkid", "hksr_num"}
+MAX_SPLINK_TRAINING_RECORDS = 5_000
+
+IDENTITY_ATTRIBUTES = (
+    "chi_surname",
+    "chi_firstname",
+    "eng_surname",
+    "eng_firstname",
+    "phone",
+    "email",
+    "birthday",
+    "hksr_num",
+    "hkid",
+)
+
+# CCD Registration maps arbitrary source columns into CCD Master fields. Only
+# these targets are identity evidence; addresses, sex, application data, and
+# other operational fields must never enter scoring merely because they exist.
+FIELD_TO_IDENTITY_ATTRIBUTE = {
+    "chi_surname": ("chi_surname", "Chinese Name", 0),
+    "chi_firstname": ("chi_firstname", "Chinese Name", 0),
+    "eng_surname": ("eng_surname", "English Name", 0),
+    "eng_firstname": ("eng_firstname", "English Name", 0),
+    "phone_num": ("phone", "Phone Exact", 0),
+    "mobile": ("phone", "Phone Exact", 1),
+    "res_phone": ("phone", "Phone Exact", 2),
+    "email": ("email", "Email Exact", 0),
+    "birthday": ("birthday", "Birthday Exact", 0),
+    "hksr_num": ("hksr_num", "Identifier Exact", 0),
+    "hkid": ("hkid", "Identifier Exact", 0),
+}
+
+DEFAULT_FIELDS = {
+    "chi_surname": "chi_surname",
+    "chi_firstname": "chi_firstname",
+    "eng_surname": "eng_surname",
+    "eng_firstname": "eng_firstname",
+    "phone": "phone_num",
+    "email": "email",
+    "birthday": "birthday",
+    "hksr_num": "hksr_num",
+    "hkid": "hkid",
+}
 
 
 def _require_reviewer() -> None:
@@ -50,6 +95,45 @@ def _require_manager() -> None:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _fieldname_from_registration(value: Any) -> str:
+    """Extract ``fieldname`` from ``fieldname: Label`` registration values."""
+    return str(value or "").split(":", 1)[0].strip()
+
+
+def _registration_profile_rows(registration: Any) -> list[dict[str, Any]]:
+    selected: dict[str, tuple[int, str, str]] = {}
+    for row in registration.get("fieldmatch") or []:
+        fieldname = _fieldname_from_registration(row.sys_fieldname)
+        definition = FIELD_TO_IDENTITY_ATTRIBUTE.get(fieldname)
+        if not definition:
+            continue
+        attribute, comparator, priority = definition
+        current = selected.get(attribute)
+        if current is None or priority < current[0]:
+            selected[attribute] = (priority, fieldname, comparator)
+
+    output = []
+    for attribute in IDENTITY_ATTRIBUTES:
+        configured = selected.get(attribute)
+        default_field = DEFAULT_FIELDS[attribute]
+        output.append(
+            {
+                "ccd_registration": registration.name,
+                "canonical_attribute": attribute,
+                "fieldname": configured[1] if configured else default_field,
+                "comparator": (
+                    configured[2]
+                    if configured
+                    else FIELD_TO_IDENTITY_ATTRIBUTE[default_field][1]
+                ),
+                "identifier_scope": "Unknown",
+                "reliability_status": "Unverified",
+                "enabled": int(configured is not None),
+            }
+        )
+    return output
 
 
 def _policy_from_doc(doc: Any) -> MatchingPolicy:
@@ -138,29 +222,57 @@ def _canonical_record(row: dict[str, Any], policy: MatchingPolicy) -> dict[str, 
     return record
 
 
+def _bounded_probability_records(
+    records: list[dict[str, Any]],
+    required_record_ids: set[str] | None = None,
+    *,
+    limit: int = MAX_SPLINK_TRAINING_RECORDS,
+) -> list[dict[str, Any]]:
+    """Return a deterministic bounded background sample plus required rows."""
+    required = {str(item) for item in (required_record_ids or set()) if item}
+    by_id = {str(row.get("record_id") or ""): row for row in records if row.get("record_id")}
+    selected = [by_id[item] for item in sorted(required) if item in by_id]
+    remaining = max(0, int(limit) - len(selected))
+    if remaining:
+        background = (row for record_id, row in by_id.items() if record_id not in required)
+        selected.extend(
+            heapq.nsmallest(
+                remaining,
+                background,
+                key=lambda row: hashlib.sha256(str(row["record_id"]).encode()).digest(),
+            )
+        )
+    return selected
+
+
 def _probability_map(
-    records: list[dict[str, Any]], policy: MatchingPolicy
-) -> tuple[dict[tuple[str, str], float], str | None]:
+    records: list[dict[str, Any]],
+    policy: MatchingPolicy,
+    required_record_ids: set[str] | None = None,
+    requested_pairs: set[tuple[str, str]] | None = None,
+) -> tuple[dict[tuple[str, str], float], str | None, int]:
+    training_records = _bounded_probability_records(records, required_record_ids)
     if not available():
-        return {}, "splink_dependency_unavailable"
+        return {}, "splink_dependency_unavailable", len(training_records)
     try:
         predictions = fit_predict(
-            records,
+            training_records,
             max_block_size=policy.max_block_size,
             max_prediction_pairs=policy.max_candidate_pairs,
+            requested_pairs=requested_pairs,
         )
     except (SplinkUnavailable, ValueError) as exc:
-        return {}, str(exc)
+        return {}, str(exc), len(training_records)
     except Exception as exc:
         # The statistical model is optional during a shadow run. Sparse data,
         # singular EM estimates, or backend incompatibilities must not prevent
         # the deterministic models and review sample from being generated.
-        return {}, f"splink_training_failed:{type(exc).__name__}"
+        return {}, f"splink_training_failed:{type(exc).__name__}", len(training_records)
     output = {}
     for prediction in predictions:
         key = tuple(sorted((prediction.left_id, prediction.right_id)))
         output[key] = prediction.probability
-    return output, None
+    return output, None, len(training_records)
 
 
 def _formula_baseline(
@@ -205,9 +317,7 @@ def _formula_baseline(
     return replace(result, baseline=baseline)
 
 
-@frappe.whitelist()
-def ensure_matching_roles() -> dict[str, str]:
-    _require_manager()
+def _ensure_matching_roles() -> dict[str, str]:
     for role_name in (REVIEW_ROLE, SENSITIVE_ROLE):
         if not frappe.db.exists("Role", role_name):
             frappe.get_doc({"doctype": "Role", "role_name": role_name, "desk_access": 1}).insert(
@@ -218,18 +328,108 @@ def ensure_matching_roles() -> dict[str, str]:
 
 
 @frappe.whitelist()
-def enqueue_evaluation(
+def ensure_matching_roles() -> dict[str, str]:
+    _require_manager()
+    return _ensure_matching_roles()
+
+
+def install_matching_roles() -> dict[str, str]:
+    """Bench-only migration helper; deliberately not whitelisted."""
+    return _ensure_matching_roles()
+
+
+def _sync_policy_source_profiles(policy_name: str) -> dict[str, Any]:
+    policy_doc = frappe.get_doc("CCD Matching Policy", policy_name)
+    if policy_doc.status != "Draft":
+        frappe.throw("Source mappings can only be synchronized on a Draft policy")
+
+    record_sources = frappe.db.sql_list(
+        """SELECT DISTINCT ccd_reg_source
+           FROM `tabCCD Master`
+           WHERE COALESCE(ccd_reg_source, '') != ''
+           ORDER BY ccd_reg_source"""
+    )
+    policy_doc.set("source_profiles", [])
+    imported_sources = []
+    skipped_sources = []
+    for source in record_sources:
+        if not frappe.db.exists("CCD Registration", source):
+            skipped_sources.append(source)
+            continue
+        registration = frappe.get_doc("CCD Registration", source)
+        for row in _registration_profile_rows(registration):
+            policy_doc.append("source_profiles", row)
+        imported_sources.append(source)
+    if not imported_sources:
+        frappe.throw("No CCD Master sources have a matching CCD Registration")
+    policy_doc.save(ignore_permissions=True)
+    frappe.db.commit()
+    return {
+        "policy": policy_doc.name,
+        "imported_sources": imported_sources,
+        "skipped_sources": skipped_sources,
+        "profile_rows": len(policy_doc.source_profiles),
+    }
+
+
+@frappe.whitelist()
+def sync_policy_source_profiles(policy_name: str) -> dict[str, Any]:
+    """Replace a Draft policy's profiles from live CCD Registration mappings."""
+    _require_manager()
+    return _sync_policy_source_profiles(policy_name)
+
+
+def _ensure_default_pilot_policy(policy_version: str) -> dict[str, Any]:
+    if frappe.db.exists("CCD Matching Policy", policy_version):
+        return {"policy": policy_version, "created": False}
+    frappe.get_doc(
+        {
+            "doctype": "CCD Matching Policy",
+            "policy_version": policy_version,
+            "title": "CCD Recommendation-Only Matching Pilot",
+            "status": "Draft",
+            "trusted_global_identifiers": "",
+            "high_precision_target": 0.95,
+            "minimum_high_samples": 30,
+            "max_block_size": 10_000,
+            "max_candidate_pairs": 500_000,
+            "notes": (
+                "Generated from CCD Registration mappings. Strong identifier scope "
+                "starts Unknown and must be approved before it can create a High match."
+            ),
+        }
+    ).insert(ignore_permissions=True)
+    frappe.db.commit()
+    result = _sync_policy_source_profiles(policy_version)
+    result["created"] = True
+    return result
+
+
+@frappe.whitelist()
+def ensure_default_pilot_policy(policy_version: str = "pilot-1.0") -> dict[str, Any]:
+    """Create the initial safe policy and import centre mappings idempotently."""
+    _require_manager()
+    return _ensure_default_pilot_policy(policy_version)
+
+
+def install_default_pilot_policy(policy_version: str = "pilot-1.0") -> dict[str, Any]:
+    """Bench-only deployment helper; deliberately not whitelisted."""
+    return _ensure_default_pilot_policy(policy_version)
+
+
+def _enqueue_evaluation(
     policy_name: str,
     sample_size: int = 500,
     double_review_count: int = 100,
 ) -> dict[str, str]:
-    _require_manager()
     policy_doc = frappe.get_doc("CCD Matching Policy", policy_name)
     if policy_doc.status not in {"Draft", "Pilot"}:
         frappe.throw("Only Draft or Pilot policies may create shadow runs")
     sample_size = max(1, min(int(sample_size), 5_000))
     double_review_count = max(0, min(int(double_review_count), sample_size))
     policy = _policy_from_doc(policy_doc)
+    if not policy.sources():
+        frappe.throw("The policy has no source profiles; import CCD Registration mappings first")
     run = frappe.get_doc(
         {
             "doctype": "CCD Match Evaluation Run",
@@ -254,14 +454,43 @@ def enqueue_evaluation(
     return {"run": run.name, "status": "Queued"}
 
 
+@frappe.whitelist()
+def enqueue_evaluation(
+    policy_name: str,
+    sample_size: int = 500,
+    double_review_count: int = 100,
+) -> dict[str, str]:
+    """Queue a shadow run from Desk after enforcing manager permissions."""
+    _require_manager()
+    return _enqueue_evaluation(policy_name, sample_size, double_review_count)
+
+
+def install_evaluation_run(
+    policy_name: str = "pilot-1.0",
+    sample_size: int = 500,
+    double_review_count: int = 100,
+) -> dict[str, str]:
+    """Bench-only run launcher; deliberately not exposed as a web method.
+
+    Deployment operators can start an evaluation without placing an ERPNext
+    password in shell history.  The public API above remains manager-only.
+    """
+    return _enqueue_evaluation(policy_name, sample_size, double_review_count)
+
+
 def run_evaluation(run_name: str) -> None:
     run = frappe.get_doc("CCD Match Evaluation Run", run_name)
     run.db_set("status", "Profiling")
     try:
         policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
+        sources = policy.sources()
+        if len(sources) < 2:
+            frappe.throw("At least two governed CCD sources are required for an evaluation")
+        placeholders = ", ".join(["%s"] * len(sources))
         raw_rows = frappe.db.sql(
-            "SELECT * FROM `tabCCD Master` WHERE modified <= %s",
-            (run.snapshot_at,),
+            f"""SELECT * FROM `tabCCD Master`
+                WHERE modified <= %s AND ccd_reg_source IN ({placeholders})""",
+            (run.snapshot_at, *sources),
             as_dict=True,
         )
         records = [_canonical_record(dict(row), policy) for row in raw_rows]
@@ -277,28 +506,64 @@ def run_evaluation(run_name: str) -> None:
         run.db_set("skipped_blocks_json", _json(blocked.skipped_blocks), update_modified=False)
 
         run.db_set("status", "Scoring")
-        probabilities, probability_warning = _probability_map(records, policy)
         formulas = {
             item.name: str(item.fuzzymachingscript or "")
-            for item in frappe.get_all("CCD Registration", fields=["name", "fuzzymachingscript"])
+            for item in frappe.get_all(
+                "CCD Registration",
+                filters={"name": ["in", list(sources)]},
+                fields=["name", "fuzzymachingscript"],
+            )
         }
-        results = []
-        for pair in blocked.pairs:
+        def evaluated_results():
+            for pair in blocked.pairs:
+                left = record_by_id[pair.left_id]
+                right = record_by_id[pair.right_id]
+                result = compare_all_models(pair, left, right, policy)
+                yield _formula_baseline(
+                    result,
+                    raw_by_id[pair.left_id],
+                    raw_by_id[pair.right_id],
+                    formulas.get(left["source"], ""),
+                    formulas.get(right["source"], ""),
+                )
+
+        sampled = stratified_sample(
+            evaluated_results(),
+            int(run.sample_size),
+            seed=run.name,
+        )
+        required_ids = {
+            record_id
+            for result in sampled
+            for record_id in (result.pair.left_id, result.pair.right_id)
+        }
+        requested_pairs = {
+            tuple(sorted((result.pair.left_id, result.pair.right_id)))
+            for result in sampled
+        }
+        probabilities, probability_warning, splink_training_count = _probability_map(
+            records,
+            policy,
+            required_ids,
+            requested_pairs,
+        )
+        rescored = []
+        for result in sampled:
+            pair = result.pair
             left = record_by_id[pair.left_id]
             right = record_by_id[pair.right_id]
             probability = probabilities.get(tuple(sorted((pair.left_id, pair.right_id))))
-            result = compare_all_models(pair, left, right, policy, probability=probability)
-            result = _formula_baseline(
-                result,
-                raw_by_id[pair.left_id],
-                raw_by_id[pair.right_id],
-                formulas.get(left["source"], ""),
-                formulas.get(right["source"], ""),
+            rescored.append(
+                _formula_baseline(
+                    compare_all_models(pair, left, right, policy, probability=probability),
+                    raw_by_id[pair.left_id],
+                    raw_by_id[pair.right_id],
+                    formulas.get(left["source"], ""),
+                    formulas.get(right["source"], ""),
+                )
             )
-            results.append(result)
-
-        cluster_conflicts = inconsistent_pairs(results)
-        sampled = stratified_sample(results, int(run.sample_size), seed=run.name)
+        sampled = rescored
+        cluster_conflicts = inconsistent_pairs(sampled)
         doubles = double_review_ids(sampled, int(run.double_review_count), seed=run.name)
         for result in sampled:
             pair_key = f"{result.pair.left_id}::{result.pair.right_id}"
@@ -320,8 +585,9 @@ def run_evaluation(run_name: str) -> None:
                     "tiered_tier": result.tiered_gated.tier.value,
                     "recoverable_tier": result.tiered_recoverable.tier.value,
                     "probabilistic_score": (
-                        result.probabilistic.probability if result.probabilistic else None
+                        result.probabilistic.probability if result.probabilistic else 0
                     ),
+                    "probabilistic_available": int(result.probabilistic is not None),
                     "hybrid_tier": (
                         "pending_calibration"
                         if result.probabilistic
@@ -356,6 +622,13 @@ def run_evaluation(run_name: str) -> None:
                     },
                     "tiered": policy.version,
                     "splink": dependency_versions(),
+                    "splink_random_match_prior": RANDOM_MATCH_PRIOR,
+                    "splink_training_record_count": splink_training_count,
+                    "splink_training_record_limit": MAX_SPLINK_TRAINING_RECORDS,
+                    "splink_direct_scoring_pair_limit": MAX_DIRECT_SCORING_PAIRS,
+                    "splink_scored_sample_pairs": sum(
+                        int(pair in probabilities) for pair in requested_pairs
+                    ),
                     "splink_status": "local" if not probability_warning else "unavailable",
                     "splink_warning": probability_warning,
                 }
@@ -372,6 +645,133 @@ def run_evaluation(run_name: str) -> None:
         run.db_set("error_summary", safe_message, update_modified=False)
         frappe.log_error(traceback.format_exc(), "CCD Match Evaluation Failure")
         frappe.db.commit()
+
+
+def repair_run_probabilistic_scores(run_name: str) -> None:
+    """Recompute only optional local-model scores for an existing review set.
+
+    This operational repair deliberately preserves the snapshot, sampled pairs,
+    deterministic scores, and review assignments. It is useful after fixing an
+    adapter/runtime problem and never touches the production matching table.
+    """
+    run = frappe.get_doc("CCD Match Evaluation Run", run_name)
+    try:
+        if run.status not in {"Scoring", "Reviewing"}:
+            frappe.throw("Probability repair is only allowed before evaluation finalization")
+        policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
+        sources = policy.sources()
+        placeholders = ", ".join(["%s"] * len(sources))
+        raw_rows = frappe.db.sql(
+            f"""SELECT * FROM `tabCCD Master`
+                WHERE modified <= %s AND ccd_reg_source IN ({placeholders})""",
+            (run.snapshot_at, *sources),
+            as_dict=True,
+        )
+        records = [_canonical_record(dict(row), policy) for row in raw_rows]
+        pairs = frappe.get_all(
+            "CCD Match Evaluation Pair",
+            filters={"evaluation_run": run.name},
+            fields=["name", "left_record", "right_record"],
+        )
+        required_ids = {
+            record_id
+            for pair in pairs
+            for record_id in (str(pair.left_record), str(pair.right_record))
+        }
+        requested_pairs = {
+            tuple(sorted((str(pair.left_record), str(pair.right_record))))
+            for pair in pairs
+        }
+        probabilities, probability_warning, splink_training_count = _probability_map(
+            records,
+            policy,
+            required_ids,
+            requested_pairs,
+        )
+        scored_count = 0
+        for pair in pairs:
+            key = tuple(sorted((str(pair.left_record), str(pair.right_record))))
+            probability = probabilities.get(key)
+            if probability is not None:
+                scored_count += 1
+            frappe.db.set_value(
+                "CCD Match Evaluation Pair",
+                pair.name,
+                {
+                    "probabilistic_score": probability if probability is not None else 0,
+                    "probabilistic_available": int(probability is not None),
+                },
+                update_modified=False,
+            )
+
+        versions = json.loads(run.model_versions_json or "{}")
+        versions.update(
+            {
+                "splink": dependency_versions(),
+                "splink_random_match_prior": RANDOM_MATCH_PRIOR,
+                "splink_training_record_count": splink_training_count,
+                "splink_training_record_limit": MAX_SPLINK_TRAINING_RECORDS,
+                "splink_direct_scoring_pair_limit": MAX_DIRECT_SCORING_PAIRS,
+                "splink_status": "local" if not probability_warning else "unavailable",
+                "splink_warning": probability_warning,
+                "splink_scored_sample_pairs": scored_count,
+            }
+        )
+        run.db_set("model_versions_json", _json(versions), update_modified=False)
+        run.db_set("status", "Reviewing", update_modified=False)
+        frappe.db.commit()
+    except Exception as exc:
+        frappe.db.rollback()
+        run = frappe.get_doc("CCD Match Evaluation Run", run_name)
+        try:
+            versions = json.loads(run.model_versions_json or "{}")
+        except (TypeError, ValueError):
+            versions = {}
+        versions.update(
+            {
+                "splink_status": "unavailable",
+                "splink_warning": f"probability_repair_failed:{type(exc).__name__}",
+            }
+        )
+        run.db_set("model_versions_json", _json(versions), update_modified=False)
+        run.db_set("status", "Reviewing", update_modified=False)
+        frappe.log_error(traceback.format_exc(), "CCD Match Probability Repair Failure")
+        frappe.db.commit()
+
+
+def install_probability_repair(
+    run_name: str,
+    recover_stalled: bool = False,
+) -> dict[str, str]:
+    """Bench-only launcher for repairing optional scores on the long queue.
+
+    ``recover_stalled`` is an explicit operator override for a run left in
+    Scoring after its worker was externally terminated. Confirm that no job is
+    active before using it; normal retries require the Reviewing state.
+    """
+    run = frappe.get_doc("CCD Match Evaluation Run", run_name)
+    recovering = run.status == "Scoring" and bool(frappe.utils.cint(recover_stalled))
+    if run.status != "Reviewing" and not recovering:
+        frappe.throw("Only a run awaiting human review may be repaired")
+    if recovering:
+        versions = json.loads(run.model_versions_json or "{}")
+        versions.update(
+            {
+                "splink_status": "unavailable",
+                "splink_warning": "previous_probability_repair_worker_terminated",
+            }
+        )
+        run.db_set("model_versions_json", _json(versions), update_modified=False)
+    run.db_set("status", "Scoring", update_modified=False)
+    frappe.db.commit()
+    frappe.enqueue(
+        "db_connector.api_fuzzy_evaluation.repair_run_probabilistic_scores",
+        queue="long",
+        timeout=14_400,
+        enqueue_after_commit=True,
+        run_name=run.name,
+    )
+    return {"run": run.name, "status": "Scoring"}
 
 
 @frappe.whitelist()
@@ -475,7 +875,9 @@ def _calibrate_scores(
     held_out: list[tuple[bool, float]] = []
     for pair in pairs:
         score = pair.get(score_field)
-        if score is None:
+        if score is None or (
+            score_field == "probabilistic_score" and not pair.get("probabilistic_available")
+        ):
             continue
         target = calibration if _stable_partition(pair.name) == "calibration" else held_out
         target.append((pair.final_label == "Same", float(score)))
@@ -576,6 +978,7 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
             "tiered_tier",
             "recoverable_tier",
             "probabilistic_score",
+            "probabilistic_available",
         ],
     )
     pairs = []
@@ -600,7 +1003,7 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
     for pair in pairs:
         pair.hybrid_tier = _hybrid_tier(
             pair.tiered_tier,
-            pair.probabilistic_score,
+            pair.probabilistic_score if pair.probabilistic_available else None,
             high_threshold,
             review_threshold,
         )

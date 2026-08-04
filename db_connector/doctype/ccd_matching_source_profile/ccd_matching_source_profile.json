@@ -6,7 +6,7 @@
  "field_order": ["ccd_registration", "canonical_attribute", "fieldname", "comparator", "identifier_scope", "reliability_status", "enabled"],
  "fields": [
   {"fieldname": "ccd_registration", "fieldtype": "Link", "in_list_view": 1, "label": "CCD Registration", "options": "CCD Registration", "reqd": 1},
-  {"fieldname": "canonical_attribute", "fieldtype": "Data", "in_list_view": 1, "label": "Canonical Attribute", "reqd": 1},
+  {"fieldname": "canonical_attribute", "fieldtype": "Select", "in_list_view": 1, "label": "Canonical Attribute", "options": "chi_surname\nchi_firstname\neng_surname\neng_firstname\nphone\nemail\nbirthday\nhksr_num\nhkid", "reqd": 1},
   {"fieldname": "fieldname", "fieldtype": "Data", "in_list_view": 1, "label": "CCD Master Fieldname", "reqd": 1},
   {"fieldname": "comparator", "fieldtype": "Select", "label": "Comparator", "options": "Chinese Name\nEnglish Name\nPhone Exact\nEmail Exact\nBirthday Exact\nIdentifier Exact"},
   {"default": "Unknown", "fieldname": "identifier_scope", "fieldtype": "Select", "label": "Identifier Scope", "options": "Unknown\nLocal\nGlobal"},

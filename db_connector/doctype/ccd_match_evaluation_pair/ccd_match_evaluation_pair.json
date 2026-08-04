@@ -7,7 +7,7 @@
   "evaluation_run", "source_pair", "left_record", "right_record", "left_source",
   "right_source", "left_modified_at", "right_modified_at", "blocking_routes",
   "scores_section", "baseline_score", "baseline_tier", "tiered_score", "tiered_tier",
-  "recoverable_tier", "probabilistic_score", "hybrid_tier", "reason_codes_json",
+  "recoverable_tier", "probabilistic_score", "probabilistic_available", "hybrid_tier", "reason_codes_json",
   "review_section", "needs_double_review", "review_status", "final_label", "stale",
   "cluster_conflict", "review_labels", "evidence_html"
  ],
@@ -28,6 +28,7 @@
   {"fieldname": "tiered_tier", "fieldtype": "Data", "in_list_view": 1, "label": "Tiered Tier", "permlevel": 2, "read_only": 1},
   {"fieldname": "recoverable_tier", "fieldtype": "Data", "label": "Recoverable-Conflict Tier", "permlevel": 2, "read_only": 1},
   {"fieldname": "probabilistic_score", "fieldtype": "Float", "label": "Probabilistic Match Probability (0-1)", "permlevel": 2, "precision": "6", "read_only": 1},
+  {"default": "0", "fieldname": "probabilistic_available", "fieldtype": "Check", "label": "Probabilistic Score Available", "permlevel": 2, "read_only": 1},
   {"fieldname": "hybrid_tier", "fieldtype": "Data", "label": "Hybrid Tier", "permlevel": 2, "read_only": 1},
   {"fieldname": "reason_codes_json", "fieldtype": "Code", "label": "Reason Codes", "options": "JSON", "permlevel": 2, "read_only": 1},
   {"fieldname": "review_section", "fieldtype": "Section Break", "label": "Human Review"},
@@ -36,7 +37,7 @@
   {"fieldname": "final_label", "fieldtype": "Select", "in_list_view": 1, "label": "Final Label", "options": "\nSame\nDifferent", "read_only": 1},
   {"fieldname": "stale", "fieldtype": "Check", "label": "Stale", "read_only": 1},
   {"fieldname": "cluster_conflict", "fieldtype": "Check", "label": "Cluster Conflict", "permlevel": 2, "read_only": 1},
-  {"fieldname": "review_labels", "fieldtype": "Table", "hidden": 1, "label": "Review Labels", "options": "CCD Match Review Label", "read_only": 1},
+  {"fieldname": "review_labels", "fieldtype": "Table", "hidden": 1, "label": "Review Labels", "options": "CCD Match Review Label", "permlevel": 2, "read_only": 1},
   {"fieldname": "evidence_html", "fieldtype": "HTML", "label": "Protected Evidence"}
  ],
  "index_web_pages_for_search": 0,

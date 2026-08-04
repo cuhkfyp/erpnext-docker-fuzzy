@@ -33,12 +33,16 @@ def blocking_keys(record: dict[str, Any], policy: MatchingPolicy) -> set[str]:
     keys: set[str] = set()
     source = record_source(record)
 
-    for attribute in policy.trusted_global_identifiers:
-        if not policy.globally_comparable(source, attribute):
-            continue
+    for attribute in ("hkid", "hksr_num"):
         value = norm.identifier(policy.value(record, attribute))
-        if value:
+        if not value:
+            continue
+        if policy.globally_comparable(source, attribute):
             keys.add(f"global_id:{attribute}:{value}")
+        else:
+            # Unknown/local identifiers are useful for finding audit examples,
+            # but never become deterministic match evidence.
+            keys.add(f"unverified_id:{attribute}:{value}")
 
     phone = norm.phone(policy.value(record, "phone"))
     if phone:

@@ -1,6 +1,19 @@
 frappe.ui.form.on("CCD Matching Policy", {
 	refresh(frm) {
 		if (frm.is_new() || !["Draft", "Pilot"].includes(frm.doc.status)) return;
+		if (frm.doc.status === "Draft") {
+			frm.add_custom_button(__("Import Registration Mappings"), () => {
+				frappe.confirm(
+					__("Replace this Draft policy's source profiles from current CCD Registration field mappings?"),
+					() => frappe.call({
+						method: "db_connector.api_fuzzy_evaluation.sync_policy_source_profiles",
+						args: { policy_name: frm.doc.name },
+						freeze: true,
+						callback: () => frm.reload_doc(),
+					}),
+				);
+			});
+		}
 		frm.add_custom_button(__("Start Shadow Evaluation"), () => {
 			frappe.prompt(
 				[

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from collections import defaultdict, deque
 from collections.abc import Iterable
+import heapq
 
 from .types import EvaluationResult
 
@@ -44,27 +44,52 @@ def stratified_sample(
     *,
     seed: str,
 ) -> list[EvaluationResult]:
-    groups: dict[str, list[EvaluationResult]] = defaultdict(list)
+    if sample_size <= 0:
+        return []
+
+    # Retain one deterministic representative per observed stratum, plus one
+    # global hash reservoir used to fill the remaining slots. This bounds rich
+    # EvaluationResult objects to O(number_of_strata + sample_size) rather than
+    # materialising every candidate pair (up to hundreds of thousands).
+    representatives: dict[str, tuple[int, EvaluationResult]] = {}
+    reservoir: list[tuple[int, int, EvaluationResult]] = []
+    sequence = 0
     for result in results:
-        groups[stratum(result)].append(result)
-    queues: list[deque[EvaluationResult]] = []
-    for key in sorted(groups):
-        ranked = sorted(
-            groups[key],
-            key=lambda item: hashlib.sha256(
-                f"{seed}:{item.pair.left_id}:{item.pair.right_id}".encode()
+        digest = int(
+            hashlib.sha256(
+                f"{seed}:{result.pair.left_id}:{result.pair.right_id}".encode()
             ).hexdigest(),
+            16,
         )
-        queues.append(deque(ranked))
-    selected: list[EvaluationResult] = []
-    while queues and len(selected) < sample_size:
-        next_round: list[deque[EvaluationResult]] = []
-        for queue in queues:
-            if queue and len(selected) < sample_size:
-                selected.append(queue.popleft())
-            if queue:
-                next_round.append(queue)
-        queues = next_round
+        key = stratum(result)
+        current = representatives.get(key)
+        if current is None or digest < current[0]:
+            representatives[key] = (digest, result)
+
+        item = (-digest, sequence, result)
+        sequence += 1
+        if len(reservoir) < sample_size:
+            heapq.heappush(reservoir, item)
+        elif digest < -reservoir[0][0]:
+            heapq.heapreplace(reservoir, item)
+
+    representative_rows = sorted(representatives.values(), key=lambda item: item[0])
+    selected = [result for _, result in representative_rows[:sample_size]]
+    selected_ids = {
+        (result.pair.left_id, result.pair.right_id)
+        for result in selected
+    }
+    global_rows = sorted(
+        ((-negative_digest, result) for negative_digest, _, result in reservoir),
+        key=lambda item: item[0],
+    )
+    for _, result in global_rows:
+        pair_id = (result.pair.left_id, result.pair.right_id)
+        if len(selected) >= sample_size:
+            break
+        if pair_id not in selected_ids:
+            selected.append(result)
+            selected_ids.add(pair_id)
     return selected
 
 

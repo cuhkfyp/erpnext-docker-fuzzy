@@ -50,6 +50,10 @@ class MatchingPolicy:
     def profile(self, source: str) -> SourceProfile:
         return self.source_profiles.get(source, SourceProfile(source=source))
 
+    def sources(self) -> tuple[str, ...]:
+        """Return the explicitly governed CCD sources for this policy."""
+        return tuple(sorted(self.source_profiles))
+
     def value(self, record: dict[str, Any], attribute: str) -> Any:
         source = str(record.get("source") or record.get("ccd_reg_source") or "")
         profile = self.profile(source)

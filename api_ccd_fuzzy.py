@@ -26,6 +26,10 @@ from html import escape
 
 import frappe
 
+from db_connector.fuzzy_matching.vendor import activate_vendor
+
+activate_vendor()
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Low-level Match Functions
 # ─────────────────────────────────────────────────────────────────────────────

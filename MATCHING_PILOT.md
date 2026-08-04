@@ -65,9 +65,30 @@ model. It is free to run locally, requires no Ollama or GPU, makes no network
 calls, and does not upload CCD data. Its package versions are pinned in
 `requirements.txt` for reproducibility.
 
+The adapter explicitly starts with Splink's conservative default random-pair
+match prior (`0.0001`). It does not estimate that prior from exact-name blocks:
+common or incomplete CCD names are not a high-precision identity rule and can
+otherwise produce an implausibly large prior. The run records this setting;
+human labels still determine candidate High and Review thresholds.
+
+To stay within the ERPNext long worker's memory budget, training uses at most
+5,000 deterministic background records and always includes every record in the
+retained human-review pairs. Full-population blocking and the deterministic
+models remain governed by the policy candidate limits. The run records both
+the statistical training limit and actual training count.
+
+After bounded training, ordinary Splink predictions remain restricted to the
+safeguarded population blocking rules. The adapter then uses the same trained
+model to directly score only the already-selected review pairs that were not
+emitted by those rules (hard limit: 5,000). Direct scoring does not create a new
+candidate, production match, or cluster; it gives each governed label a
+comparable statistical score.
+
 If Splink is unavailable or cannot train on a sparse run, the run continues
 with the deterministic models and records a sanitized warning. The optional
 model must never prevent generation of the review sample.
+Pairs outside the statistical model's safeguarded prediction blocks may have
+no probability; this is missing model evidence, not a zero-probability match.
 
 ## Candidate generation
 
@@ -143,6 +164,12 @@ logic during the comparison.
 Each `CCD Matching Source Profile` row maps one canonical attribute to an actual
 `CCD Master` field and records identifier scope/reliability. Start all strong-ID
 scope values as `Unknown` until profiling and governance review are complete.
+The default installer derives these rows from each live
+`CCD Registration.fieldmatch` table. It accepts only explicitly allow-listed
+identity targets (names, phone, email, birthday, HKSR number, and HKID), so a
+centre may retain any additional operational fields without those fields
+unexpectedly influencing identity scores. Registrations missing from the live
+system are reported and skipped rather than guessed.
 
 ### `CCD Match Evaluation Run`
 
@@ -162,10 +189,11 @@ preferred over trying to reinterpret changed records.
 
 ### Cluster safety
 
-The pilot checks connected pair groups for contradictions. If A–B and B–C are
-links but A–C has a trusted identifier conflict, all affected evaluated edges
-are flagged for management attention. The pilot does not create or merge person
-clusters.
+The pilot checks connected groups within the retained review sample for
+contradictions. If A–B and B–C are links but A–C has a trusted identifier
+conflict, affected sampled edges are flagged for management attention. The
+pilot does not create or merge person clusters. Full-population cluster
+validation remains a separate prerequisite before production grouping.
 
 ## Operations
 
@@ -178,11 +206,12 @@ the API or long queue, migrate the site, then restart services:
 cd /home/frappe/frappe-bench
 ./env/bin/pip install -r apps/db_connector/db_connector/requirements.txt
 bench --site <site> migrate
-bench --site <site> execute db_connector.api_fuzzy_evaluation.ensure_matching_roles
+bench --site <site> execute db_connector.api_fuzzy_evaluation.install_matching_roles
+bench --site <site> execute db_connector.api_fuzzy_evaluation.install_default_pilot_policy
 ```
 
-Frappe creates the roles referenced by the DocTypes during migration; the last
-command is idempotent and verifies that both pilot roles exist.
+Both helper commands are idempotent. The second creates `pilot-1.0` only when
+missing and imports governed source mappings without promoting identifiers.
 
 ### 2. Profile and configure
 
@@ -194,8 +223,37 @@ governance action.
 ### 3. Queue a recommendation-only run
 
 ```bash
-bench --site <site> execute db_connector.api_fuzzy_evaluation.enqueue_evaluation \
-  --kwargs '{"policy_name":"1.0.0","sample_size":500,"double_review_count":100}'
+bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
+  --kwargs '{"policy_name":"pilot-1.0","sample_size":500,"double_review_count":100}'
+```
+
+`install_evaluation_run` is deliberately bench-only and avoids putting an
+ERPNext login password in shell history. Desk integrations must call the
+manager-protected whitelisted `enqueue_evaluation` method instead.
+
+### Docker persistence on the managed host
+
+The host's `backend` directory is an SSHFS view from the backend container; it
+is not a host bind mount into the containers. The deployment scripts therefore
+keep a separate full app copy at
+`/root/erpnext_docker_volume/persistent_apps/db_connector` and restore/overlay
+that copy into backend, scheduler, and both queue workers. The restart helper
+uses this deployment path and then remounts the backend view idempotently.
+
+This protects the `db_connector` fuzzy component through container recreation.
+Continue to use normal site/database backups, and separately persist any other
+private apps in the ERPNext stack.
+
+For Python-only changes, the deployment helper accepts `--code-only`; do not
+use that option for DocType, dependency, or asset changes.
+
+If a completed review set was created while only the optional statistical
+adapter was unavailable, an operator can repair that column without changing
+the snapshot, sampled pairs, or review assignments:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_evaluation.install_probability_repair \
+  --kwargs '{"run_name":"<evaluation-run>"}'
 ```
 
 ### 4. Review and adjudicate
