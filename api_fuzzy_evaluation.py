@@ -17,7 +17,7 @@ from typing import Any
 import frappe
 
 from db_connector.fuzzy_matching import normalization as norm
-from db_connector.fuzzy_matching.blocking import generate_candidate_pairs
+from db_connector.fuzzy_matching.blocking import BLOCKING_VERSION, generate_candidate_pairs
 from db_connector.fuzzy_matching.clusters import inconsistent_pairs
 from db_connector.fuzzy_matching.metrics import (
     binary_metrics,
@@ -51,7 +51,7 @@ SENSITIVE_ATTRIBUTES = {"hkid", "hksr_num"}
 MAX_SPLINK_TRAINING_RECORDS = 5_000
 THRESHOLD_EVALUATION = "Threshold Evaluation"
 POSITIVE_BENCHMARK = "Positive Benchmark"
-DEFAULT_PILOT_POLICY_VERSION = "pilot-1.3"
+DEFAULT_PILOT_POLICY_VERSION = "pilot-1.4"
 LEGACY_BENCHMARK_MIN_SCORE = 0.9
 POSITIVE_CONFIRMATION_REQUIRED = "Positive Confirmation Required"
 
@@ -832,6 +832,7 @@ def run_evaluation(run_name: str) -> None:
                         source: hashlib.sha256(formula.encode()).hexdigest()
                         for source, formula in sorted(formulas.items())
                     },
+                    "blocking": BLOCKING_VERSION,
                     "tiered": policy.version,
                     "splink": dependency_versions(),
                     "splink_random_match_prior": RANDOM_MATCH_PRIOR,
@@ -1000,25 +1001,27 @@ def submit_review(pair_name: str, label: str, notes: str = "") -> dict[str, str]
         pair.db_set("stale", 1, update_modified=False)
         frappe.throw("This pair is stale. Create a new evaluation run before reviewing it.")
     current_user = frappe.session.user
+    if pair.review_status in {"Agreed", "Needs Adjudication", "Adjudicated"}:
+        frappe.throw("This pair is already closed to ordinary review")
     existing = next(
         (row for row in pair.review_labels if row.reviewer == current_user and not row.is_adjudication),
         None,
     )
     if existing:
-        existing.label = label
-        existing.notes = notes
-        existing.submitted_at = frappe.utils.now_datetime()
-    else:
-        pair.append(
-            "review_labels",
-            {
-                "reviewer": current_user,
-                "label": label,
-                "notes": notes,
-                "submitted_at": frappe.utils.now_datetime(),
-                "is_adjudication": 0,
-            },
+        frappe.throw(
+            "Your review is already recorded and cannot be replaced; "
+            "disagreements must be resolved by adjudication"
         )
+    pair.append(
+        "review_labels",
+        {
+            "reviewer": current_user,
+            "label": label,
+            "notes": notes,
+            "submitted_at": frappe.utils.now_datetime(),
+            "is_adjudication": 0,
+        },
+    )
     if label == "Same" and not pair.needs_double_review:
         # Every observed positive requires independent confirmation, even when
         # it was not part of the pre-assigned double-review sample.  The reason
@@ -1034,6 +1037,12 @@ def submit_review(pair_name: str, label: str, notes: str = "") -> dict[str, str]
         if _positive_confirmation_complete(pair.review_labels):
             pair.review_status = "Adjudicated"
             pair.final_label = "Same"
+        elif label != "Same":
+            # A new independent reviewer who does not confirm the prior Same
+            # adjudication sends the pair back to management; otherwise the
+            # pair would remain stuck without an available adjudication path.
+            pair.review_status = "Needs Adjudication"
+            pair.final_label = ""
         else:
             pair.review_status = POSITIVE_CONFIRMATION_REQUIRED
             pair.final_label = ""

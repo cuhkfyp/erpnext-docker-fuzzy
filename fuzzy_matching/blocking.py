@@ -21,9 +21,13 @@ BLOCK_ROUTE_PRIORITY = {
     "unverified_id": 2,
     "dob_surname": 3,
     "chi_full": 4,
-    "eng_name": 5,
-    "chi_name_prefix": 6,
+    "chi_pinyin_full": 5,
+    "chi_given_sorted": 5,
+    "eng_name": 6,
+    "chi_name_prefix": 7,
 }
+
+BLOCKING_VERSION = "pilot-blocking-1.4"
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,15 @@ def blocking_keys(record: dict[str, Any], policy: MatchingPolicy) -> set[str]:
     if chi_full:
         keys.add(f"chi_full:{chi_full}")
     if chi_surname and chi_firstname:
+        # Recover bounded spelling variants without opening a surname-only
+        # block. Exact full-name pinyin covers homophones, while the sorted
+        # given-name key covers transpositions. Both retain the exact surname
+        # and are materially narrower than character n-gram routes.
+        chi_firstname_pinyin = norm.chinese_pinyin(chi_firstname).replace(" ", "")
+        if chi_firstname_pinyin:
+            keys.add(f"chi_pinyin_full:{chi_surname}:{chi_firstname_pinyin}")
+        if len(chi_firstname) >= 2:
+            keys.add(f"chi_given_sorted:{chi_surname}:{''.join(sorted(chi_firstname))}")
         # A surname initial alone creates enormous, low-value blocks and can
         # consume the global candidate cap before stronger evidence is seen.
         keys.add(f"chi_name_prefix:{chi_surname}:{chi_firstname[:1]}")

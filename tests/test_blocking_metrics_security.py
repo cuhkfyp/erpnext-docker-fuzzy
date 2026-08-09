@@ -86,6 +86,17 @@ class BlockingTests(unittest.TestCase):
         self.assertIn(("A", "B"), ids)
         self.assertNotIn(("A", "C"), ids)
 
+    def test_bounded_chinese_variant_routes_recover_homophone_and_transposition(self):
+        records = [
+            {"record_id": "A", "source": "A", "chi_surname": "王", "chi_firstname": "小明"},
+            {"record_id": "B", "source": "B", "chi_surname": "王", "chi_firstname": "小鸣"},
+            {"record_id": "C", "source": "B", "chi_surname": "王", "chi_firstname": "明小"},
+        ]
+        result = generate_candidate_pairs(records, MatchingPolicy())
+        by_pair = {(item.left_id, item.right_id): item.blocking_routes for item in result.pairs}
+        self.assertIn("chi_pinyin_full", by_pair[("A", "B")])
+        self.assertIn("chi_given_sorted", by_pair[("A", "C")])
+
     def test_oversized_block_metadata_does_not_expose_field_value(self):
         records = [
             {"record_id": "A", "source": "A", "phone_num": "11111111"},

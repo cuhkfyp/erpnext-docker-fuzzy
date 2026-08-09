@@ -65,14 +65,14 @@ and sends no client data to an external service.
    remain available in CCD but do not silently become matching evidence.
 3. Leave identifier scope as `Unknown` or `Local` unless governance has proven
    that the identifier uses one shared organization-wide namespace. In
-   `pilot-1.3`, HKID is the approved exception, but it is global evidence only
+   `pilot-1.4`, HKID is the approved exception, but it is global evidence only
    when both values are complete and pass the HKID check-digit validation.
    Partial, masked, and invalid values remain review-only evidence.
 4. Start a 500-pair run with 100 double-reviewed pairs:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
-  --kwargs '{"policy_name":"pilot-1.3","sample_size":500,"double_review_count":100}'
+  --kwargs '{"policy_name":"pilot-1.4","sample_size":500,"double_review_count":100}'
 ```
 
 5. Review the generated `CCD Match Evaluation Pair` documents as `Same`,

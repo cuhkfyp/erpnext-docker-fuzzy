@@ -2,7 +2,12 @@ frappe.ui.form.on("CCD Match Evaluation Pair", {
 	refresh(frm) {
 		if (frm.is_new()) return;
 		load_evidence(frm);
-		if (!frm.doc.stale) {
+		if (
+			!frm.doc.stale &&
+			["Unreviewed", "Partially Reviewed", "Positive Confirmation Required"].includes(
+				frm.doc.review_status,
+			)
+		) {
 			for (const label of ["Same", "Different", "Unsure"]) {
 				frm.add_custom_button(__(label), () => submit_label(frm, label), __("Review"));
 			}

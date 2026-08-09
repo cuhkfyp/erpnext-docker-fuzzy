@@ -98,6 +98,8 @@ of several blocking routes:
 - trusted global identifier, only for profiles that mark it global;
 - normalized exact phone or email;
 - normalized Chinese full name;
+- exact Chinese surname plus exact full given-name pinyin;
+- exact Chinese surname plus order-insensitive given-name characters;
 - normalized Chinese surname plus given-name prefix;
 - normalized English surname plus given-name prefix;
 - birthday plus normalized surname.
@@ -130,7 +132,9 @@ bias. `Unsure` and reviewer disagreement require management adjudication. Any
 first-pass `Same` label automatically requires a second independent reviewer,
 even when the pair was not in the original double-review subset. Cohen's kappa
 is reported only when label variation makes it estimable; raw agreement and
-label-pattern counts are always retained.
+label-pattern counts are always retained. An ordinary submission cannot be
+replaced after it is recorded; reconciliation is stored as a separate manager
+adjudication so the independent labels remain auditable.
 
 Standard reviewers see trusted strong identifiers in masked form. System
 Managers and users with `CCD Match Sensitive Reviewer` can see the full value.
@@ -179,7 +183,7 @@ logic during the comparison.
 Each `CCD Matching Source Profile` row maps one canonical attribute to an actual
 `CCD Master` field and records identifier scope/reliability. Start strong-ID
 scope values as `Unknown` until profiling and governance review are complete.
-The governed `pilot-1.3` exception is HKID: a mapped HKID field is global only
+The governed `pilot-1.4` exception is HKID: a mapped HKID field is global only
 for values that are structurally complete and pass the official check-digit
 calculation. Partial values, masks such as `*` or `X`, and invalid check digits
 remain unverified review-only evidence and never create a deterministic High
@@ -235,7 +239,7 @@ bench --site <site> execute db_connector.api_fuzzy_evaluation.install_matching_r
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_default_pilot_policy
 ```
 
-Both helper commands are idempotent. The second creates `pilot-1.3` only when
+Both helper commands are idempotent. The second creates `pilot-1.4` only when
 missing and imports governed source mappings. HKID is the only default trusted
 global identifier and is still gated per value by complete-format/check-digit
 validation.
@@ -252,7 +256,7 @@ identifiers remain unverified until separately approved.
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
-  --kwargs '{"policy_name":"pilot-1.3","sample_size":500,"double_review_count":100}'
+  --kwargs '{"policy_name":"pilot-1.4","sample_size":500,"double_review_count":100}'
 ```
 
 `install_evaluation_run` is deliberately bench-only and avoids putting an
@@ -263,7 +267,7 @@ For a separate positive-enriched blocking benchmark, use:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_positive_benchmark_run \
-  --kwargs '{"policy_name":"pilot-1.3","sample_size":100,"double_review_count":20}'
+  --kwargs '{"policy_name":"pilot-1.4","sample_size":100,"double_review_count":20}'
 ```
 
 This benchmark discovers unseen cross-source pairs from legacy score rows at or
