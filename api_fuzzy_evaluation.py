@@ -10,6 +10,7 @@ import hashlib
 import heapq
 import json
 import traceback
+from collections import Counter
 from dataclasses import replace
 from typing import Any
 
@@ -18,11 +19,20 @@ import frappe
 from db_connector.fuzzy_matching import normalization as norm
 from db_connector.fuzzy_matching.blocking import generate_candidate_pairs
 from db_connector.fuzzy_matching.clusters import inconsistent_pairs
-from db_connector.fuzzy_matching.metrics import binary_metrics, cohens_kappa, select_thresholds
+from db_connector.fuzzy_matching.metrics import (
+    binary_metrics,
+    cohens_kappa,
+    select_thresholds,
+    wilson_interval,
+)
 from db_connector.fuzzy_matching.models import compare_all_models
 from db_connector.fuzzy_matching.policy import MatchingPolicy
 from db_connector.fuzzy_matching.profiling import profile_attributes
-from db_connector.fuzzy_matching.sampling import double_review_ids, stratified_sample
+from db_connector.fuzzy_matching.sampling import (
+    balanced_quotas,
+    double_review_ids,
+    stratified_sample,
+)
 from db_connector.fuzzy_matching.security import mask_identifier
 from db_connector.fuzzy_matching.splink_adapter import (
     MAX_DIRECT_SCORING_PAIRS,
@@ -32,13 +42,17 @@ from db_connector.fuzzy_matching.splink_adapter import (
     dependency_versions,
     fit_predict,
 )
-from db_connector.fuzzy_matching.types import MatchTier, ModelResult
+from db_connector.fuzzy_matching.types import CandidatePair, MatchTier, ModelResult
 
 REVIEW_ROLE = "CCD Match Reviewer"
 SENSITIVE_ROLE = "CCD Match Sensitive Reviewer"
 ALLOWED_LABELS = {"Same", "Different", "Unsure"}
 SENSITIVE_ATTRIBUTES = {"hkid", "hksr_num"}
 MAX_SPLINK_TRAINING_RECORDS = 5_000
+THRESHOLD_EVALUATION = "Threshold Evaluation"
+POSITIVE_BENCHMARK = "Positive Benchmark"
+DEFAULT_PILOT_POLICY_VERSION = "pilot-1.3"
+LEGACY_BENCHMARK_MIN_SCORE = 0.9
 
 IDENTITY_ATTRIBUTES = (
     "chi_surname",
@@ -128,8 +142,12 @@ def _registration_profile_rows(registration: Any) -> list[dict[str, Any]]:
                     if configured
                     else FIELD_TO_IDENTITY_ATTRIBUTE[default_field][1]
                 ),
-                "identifier_scope": "Unknown",
-                "reliability_status": "Unverified",
+                "identifier_scope": (
+                    "Global" if attribute == "hkid" and configured is not None else "Unknown"
+                ),
+                "reliability_status": (
+                    "Approved" if attribute == "hkid" and configured is not None else "Unverified"
+                ),
                 "enabled": int(configured is not None),
             }
         )
@@ -160,6 +178,9 @@ def _policy_from_doc(doc: Any) -> MatchingPolicy:
             "trusted_global_identifiers": trusted,
             "high_precision_target": doc.high_precision_target or 0.95,
             "minimum_high_samples": doc.minimum_high_samples or 30,
+            "minimum_positive_labels_per_split": (
+                doc.minimum_positive_labels_per_split or 10
+            ),
             "max_block_size": doc.max_block_size or 10_000,
             "max_candidate_pairs": doc.max_candidate_pairs or 500_000,
         }
@@ -183,6 +204,7 @@ def _policy_snapshot(policy: MatchingPolicy) -> dict[str, Any]:
         "trusted_global_identifiers": sorted(policy.trusted_global_identifiers),
         "high_precision_target": policy.high_precision_target,
         "minimum_high_samples": policy.minimum_high_samples,
+        "minimum_positive_labels_per_split": policy.minimum_positive_labels_per_split,
         "max_block_size": policy.max_block_size,
         "max_candidate_pairs": policy.max_candidate_pairs,
     }
@@ -215,7 +237,10 @@ def _canonical_record(row: dict[str, Any], policy: MatchingPolicy) -> dict[str, 
     global_values = []
     for attribute in policy.trusted_global_identifiers:
         if policy.globally_comparable(source, attribute):
-            value = norm.identifier(record.get(attribute))
+            raw_value = record.get(attribute)
+            if attribute == "hkid" and not norm.valid_hkid(raw_value):
+                continue
+            value = norm.identifier(raw_value)
             if value:
                 global_values.append(f"{attribute}:{value}")
     record["global_id"] = "|".join(sorted(global_values))
@@ -243,6 +268,95 @@ def _bounded_probability_records(
             )
         )
     return selected
+
+
+def _select_positive_benchmark_rows(
+    rows: list[dict[str, Any]],
+    sample_size: int,
+    *,
+    seed: str,
+) -> list[dict[str, Any]]:
+    """Select unseen legacy-discovered pairs without using their score as a model feature."""
+    deduplicated: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = tuple(sorted((str(row["left_id"]), str(row["right_id"]))))
+        current = deduplicated.get(key)
+        if current is None or float(row.get("legacy_score") or 0) > float(
+            current.get("legacy_score") or 0
+        ):
+            item = dict(row)
+            item["left_id"], item["right_id"] = key
+            deduplicated[key] = item
+
+    grouped: dict[str, list[tuple[bytes, dict[str, Any]]]] = {}
+    for row in deduplicated.values():
+        digest = hashlib.sha256(
+            f"benchmark:{seed}:{row['left_id']}:{row['right_id']}".encode()
+        ).digest()
+        grouped.setdefault(str(row["source_pair"]), []).append((digest, row))
+    quotas = balanced_quotas(
+        {source_pair: len(items) for source_pair, items in grouped.items()},
+        sample_size,
+    )
+    selected = []
+    for source_pair, items in sorted(grouped.items()):
+        selected.extend(
+            row
+            for _, row in sorted(items, key=lambda item: item[0])[
+                : quotas.get(source_pair, 0)
+            ]
+        )
+    return sorted(
+        selected,
+        key=lambda row: hashlib.sha256(
+            f"benchmark-output:{seed}:{row['left_id']}:{row['right_id']}".encode()
+        ).digest(),
+    )
+
+
+def _positive_benchmark_rows(
+    policy: MatchingPolicy,
+    snapshot_at: Any,
+    sample_size: int,
+    *,
+    seed: str,
+) -> list[dict[str, Any]]:
+    sources = policy.sources()
+    placeholders = ", ".join(["%s"] * len(sources))
+    rows = frappe.db.sql(
+        f"""SELECT l.name AS left_id, r.name AS right_id,
+                   l.ccd_reg_source AS left_source,
+                   r.ccd_reg_source AS right_source,
+                   CONCAT(LEAST(l.ccd_reg_source, r.ccd_reg_source), '::',
+                          GREATEST(l.ccd_reg_source, r.ccd_reg_source)) AS source_pair,
+                   MAX(m.score) AS legacy_score
+              FROM `tabCCD Master matching` m
+              JOIN `tabCCD Master` l ON l.name = m.parent
+              JOIN `tabCCD Master` r
+                ON r.ccd_reg_source = m.client
+               AND r.ccd_source_key = m.client_id
+             WHERE l.modified <= %s AND r.modified <= %s
+               AND m.score >= %s
+               AND l.ccd_reg_source IN ({placeholders})
+               AND r.ccd_reg_source IN ({placeholders})
+               AND l.ccd_reg_source != r.ccd_reg_source
+          GROUP BY l.name, r.name, l.ccd_reg_source, r.ccd_reg_source""",
+        (snapshot_at, snapshot_at, LEGACY_BENCHMARK_MIN_SCORE, *sources, *sources),
+        as_dict=True,
+    )
+    prior_pair_keys = {
+        tuple(sorted((str(row.left_record), str(row.right_record))))
+        for row in frappe.get_all(
+            "CCD Match Evaluation Pair",
+            fields=["left_record", "right_record"],
+        )
+    }
+    unseen = [
+        dict(row)
+        for row in rows
+        if tuple(sorted((str(row.left_id), str(row.right_id)))) not in prior_pair_keys
+    ]
+    return _select_positive_benchmark_rows(unseen, sample_size, seed=seed)
 
 
 def _probability_map(
@@ -386,16 +500,21 @@ def _ensure_default_pilot_policy(policy_version: str) -> dict[str, Any]:
         {
             "doctype": "CCD Matching Policy",
             "policy_version": policy_version,
-            "title": "CCD Recommendation-Only Matching Pilot",
+            "title": f"CCD Recommendation-Only Matching Pilot {policy_version}",
             "status": "Draft",
-            "trusted_global_identifiers": "",
+            "trusted_global_identifiers": "hkid",
             "high_precision_target": 0.95,
             "minimum_high_samples": 30,
+            "minimum_positive_labels_per_split": 10,
             "max_block_size": 10_000,
             "max_candidate_pairs": 500_000,
             "notes": (
                 "Generated from CCD Registration mappings. Strong identifier scope "
-                "starts Unknown and must be approved before it can create a High match."
+                "starts Unknown and must be approved before it can create a High match. "
+                "Only structurally complete, check-digit-valid HKIDs may act as "
+                "global identifiers; partial, masked, and invalid values remain "
+                "review-only evidence. Source-balanced sampling, positive "
+                "confirmation, and split-level validation safeguards are enabled."
             ),
         }
     ).insert(ignore_permissions=True)
@@ -406,13 +525,17 @@ def _ensure_default_pilot_policy(policy_version: str) -> dict[str, Any]:
 
 
 @frappe.whitelist()
-def ensure_default_pilot_policy(policy_version: str = "pilot-1.0") -> dict[str, Any]:
+def ensure_default_pilot_policy(
+    policy_version: str = DEFAULT_PILOT_POLICY_VERSION,
+) -> dict[str, Any]:
     """Create the initial safe policy and import centre mappings idempotently."""
     _require_manager()
     return _ensure_default_pilot_policy(policy_version)
 
 
-def install_default_pilot_policy(policy_version: str = "pilot-1.0") -> dict[str, Any]:
+def install_default_pilot_policy(
+    policy_version: str = DEFAULT_PILOT_POLICY_VERSION,
+) -> dict[str, Any]:
     """Bench-only deployment helper; deliberately not whitelisted."""
     return _ensure_default_pilot_policy(policy_version)
 
@@ -421,12 +544,16 @@ def _enqueue_evaluation(
     policy_name: str,
     sample_size: int = 500,
     double_review_count: int = 100,
+    *,
+    run_purpose: str = THRESHOLD_EVALUATION,
 ) -> dict[str, str]:
     policy_doc = frappe.get_doc("CCD Matching Policy", policy_name)
     if policy_doc.status not in {"Draft", "Pilot"}:
         frappe.throw("Only Draft or Pilot policies may create shadow runs")
     sample_size = max(1, min(int(sample_size), 5_000))
     double_review_count = max(0, min(int(double_review_count), sample_size))
+    if run_purpose not in {THRESHOLD_EVALUATION, POSITIVE_BENCHMARK}:
+        frappe.throw("Unsupported evaluation run purpose")
     policy = _policy_from_doc(policy_doc)
     if not policy.sources():
         frappe.throw("The policy has no source profiles; import CCD Registration mappings first")
@@ -435,6 +562,7 @@ def _enqueue_evaluation(
             "doctype": "CCD Match Evaluation Run",
             "matching_policy": policy_name,
             "policy_version": policy_doc.policy_version,
+            "run_purpose": run_purpose,
             "policy_snapshot_json": _json(_policy_snapshot(policy)),
             "status": "Queued",
             "snapshot_at": frappe.utils.now_datetime(),
@@ -443,7 +571,6 @@ def _enqueue_evaluation(
             "approval_status": "Pending Management Review",
         }
     ).insert(ignore_permissions=True)
-    frappe.db.commit()
     frappe.enqueue(
         "db_connector.api_fuzzy_evaluation.run_evaluation",
         queue="long",
@@ -451,6 +578,10 @@ def _enqueue_evaluation(
         enqueue_after_commit=True,
         run_name=run.name,
     )
+    # Register the callback before committing so every caller, including a
+    # standalone deployment helper, durably creates the run before the worker
+    # can claim it and reliably fires the enqueue callback in this transaction.
+    frappe.db.commit()
     return {"run": run.name, "status": "Queued"}
 
 
@@ -466,7 +597,7 @@ def enqueue_evaluation(
 
 
 def install_evaluation_run(
-    policy_name: str = "pilot-1.0",
+    policy_name: str = DEFAULT_PILOT_POLICY_VERSION,
     sample_size: int = 500,
     double_review_count: int = 100,
 ) -> dict[str, str]:
@@ -476,6 +607,20 @@ def install_evaluation_run(
     password in shell history.  The public API above remains manager-only.
     """
     return _enqueue_evaluation(policy_name, sample_size, double_review_count)
+
+
+def install_positive_benchmark_run(
+    policy_name: str = DEFAULT_PILOT_POLICY_VERSION,
+    sample_size: int = 100,
+    double_review_count: int = 20,
+) -> dict[str, str]:
+    """Bench-only launcher for an unseen, positive-enriched blocking benchmark."""
+    return _enqueue_evaluation(
+        policy_name,
+        sample_size,
+        double_review_count,
+        run_purpose=POSITIVE_BENCHMARK,
+    )
 
 
 def run_evaluation(run_name: str) -> None:
@@ -527,11 +672,56 @@ def run_evaluation(run_name: str) -> None:
                     formulas.get(right["source"], ""),
                 )
 
-        sampled = stratified_sample(
-            evaluated_results(),
-            int(run.sample_size),
-            seed=run.name,
-        )
+        benchmark_metadata: dict[tuple[str, str], dict[str, Any]] = {}
+        if (run.run_purpose or THRESHOLD_EVALUATION) == POSITIVE_BENCHMARK:
+            benchmark_rows = _positive_benchmark_rows(
+                policy,
+                run.snapshot_at,
+                int(run.sample_size),
+                seed=run.name,
+            )
+            if not benchmark_rows:
+                frappe.throw("No unseen legacy-discovered pairs are available for benchmarking")
+            benchmark_keys = {
+                tuple(sorted((str(row["left_id"]), str(row["right_id"]))))
+                for row in benchmark_rows
+            }
+            recovered = {}
+            for pair in blocked.pairs:
+                key = tuple(sorted((pair.left_id, pair.right_id)))
+                if key in benchmark_keys:
+                    recovered[key] = pair
+            sampled = []
+            for row in benchmark_rows:
+                key = tuple(sorted((str(row["left_id"]), str(row["right_id"]))))
+                candidate = recovered.get(key) or CandidatePair(
+                    key[0],
+                    key[1],
+                    str(row["source_pair"]),
+                    ("legacy_benchmark_unrecovered",),
+                )
+                left = record_by_id[candidate.left_id]
+                right = record_by_id[candidate.right_id]
+                sampled.append(
+                    _formula_baseline(
+                        compare_all_models(candidate, left, right, policy),
+                        raw_by_id[candidate.left_id],
+                        raw_by_id[candidate.right_id],
+                        formulas.get(left["source"], ""),
+                        formulas.get(right["source"], ""),
+                    )
+                )
+                benchmark_metadata[key] = {
+                    "benchmark_origin": "legacy_score_gte_090_discovery_only",
+                    "candidate_recovered": int(key in recovered),
+                }
+        else:
+            sampled = stratified_sample(
+                evaluated_results(),
+                int(run.sample_size),
+                seed=run.name,
+                source_pair_counts=dict(Counter(pair.source_pair for pair in blocked.pairs)),
+            )
         required_ids = {
             record_id
             for result in sampled
@@ -567,6 +757,10 @@ def run_evaluation(run_name: str) -> None:
         doubles = double_review_ids(sampled, int(run.double_review_count), seed=run.name)
         for result in sampled:
             pair_key = f"{result.pair.left_id}::{result.pair.right_id}"
+            metadata = benchmark_metadata.get(
+                tuple(sorted((result.pair.left_id, result.pair.right_id))),
+                {},
+            )
             doc = frappe.get_doc(
                 {
                     "doctype": "CCD Match Evaluation Pair",
@@ -579,6 +773,8 @@ def run_evaluation(run_name: str) -> None:
                     "right_modified_at": record_by_id[result.pair.right_id]["source_modified"],
                     "source_pair": result.pair.source_pair,
                     "blocking_routes": ", ".join(result.pair.blocking_routes),
+                    "benchmark_origin": metadata.get("benchmark_origin", ""),
+                    "candidate_recovered": int(metadata.get("candidate_recovered", 0)),
                     "baseline_score": result.baseline.score,
                     "baseline_tier": result.baseline.tier.value,
                     "tiered_score": result.tiered_gated.score,
@@ -602,6 +798,7 @@ def run_evaluation(run_name: str) -> None:
                         }
                     ),
                     "needs_double_review": int(pair_key in doubles),
+                    "double_review_reason": "sampled" if pair_key in doubles else "",
                     "review_status": "Unreviewed",
                     "cluster_conflict": int(
                         tuple(sorted((result.pair.left_id, result.pair.right_id))) in cluster_conflicts
@@ -615,6 +812,7 @@ def run_evaluation(run_name: str) -> None:
             "model_versions_json",
             _json(
                 {
+                    "run_purpose": run.run_purpose or THRESHOLD_EVALUATION,
                     "baseline": "registration_fuzzymachingscript",
                     "baseline_formula_sha256": {
                         source: hashlib.sha256(formula.encode()).hexdigest()
@@ -631,6 +829,10 @@ def run_evaluation(run_name: str) -> None:
                     ),
                     "splink_status": "local" if not probability_warning else "unavailable",
                     "splink_warning": probability_warning,
+                    "benchmark_sample_pairs": len(benchmark_metadata),
+                    "benchmark_candidate_recovered": sum(
+                        item["candidate_recovered"] for item in benchmark_metadata.values()
+                    ),
                 }
             ),
             update_modified=False,
@@ -803,6 +1005,12 @@ def submit_review(pair_name: str, label: str, notes: str = "") -> dict[str, str]
                 "is_adjudication": 0,
             },
         )
+    if label == "Same" and not pair.needs_double_review:
+        # Every observed positive requires independent confirmation, even when
+        # it was not part of the pre-assigned double-review sample.  The reason
+        # is manager-only so the second reviewer remains blinded.
+        pair.needs_double_review = 1
+        pair.double_review_reason = "positive_confirmation"
     ordinary = [row.label for row in pair.review_labels if not row.is_adjudication]
     required = 2 if pair.needs_double_review else 1
     if "Unsure" in ordinary:
@@ -863,7 +1071,18 @@ def _pair_is_stale(pair: Any) -> bool:
 
 
 def _metrics_dict(value: Any) -> dict[str, Any] | None:
-    return value.__dict__ if value else None
+    if not value:
+        return None
+    output = dict(value.__dict__)
+    output["precision_wilson_95"] = wilson_interval(
+        value.true_positive,
+        value.true_positive + value.false_positive,
+    )
+    output["recall_wilson_95"] = wilson_interval(
+        value.true_positive,
+        value.true_positive + value.false_negative,
+    )
+    return output
 
 
 def _calibrate_scores(
@@ -902,17 +1121,35 @@ def _calibrate_scores(
         if held_out and selection.review_threshold is not None
         else None
     )
+    calibration_positives = sum(label for label, _ in calibration)
+    held_out_positives = sum(label for label, _ in held_out)
+    minimum_positives = policy.minimum_positive_labels_per_split
+    validation_ready = (
+        calibration_positives >= minimum_positives
+        and held_out_positives >= minimum_positives
+    )
+    review_threshold = selection.review_threshold if validation_ready else None
+    if not validation_ready:
+        high_threshold = None
+    warning = selection.warning if high_threshold is not None else "high_tier_disabled"
+    if not validation_ready:
+        warning = "insufficient_positive_labels_per_split"
     return {
         "available_pairs": len(calibration) + len(held_out),
         "calibration_pairs": len(calibration),
         "held_out_pairs": len(held_out),
+        "calibration_positives": calibration_positives,
+        "held_out_positives": held_out_positives,
+        "minimum_positive_labels_per_split": minimum_positives,
+        "validation_ready": validation_ready,
         "high_threshold": high_threshold,
-        "review_threshold": selection.review_threshold,
+        "review_threshold": review_threshold,
+        "candidate_review_threshold": selection.review_threshold,
         "calibration_high": _metrics_dict(selection.high_metrics),
         "calibration_review": _metrics_dict(selection.review_metrics),
         "held_out_high": _metrics_dict(held_high),
         "held_out_review": _metrics_dict(held_review),
-        "warning": selection.warning if high_threshold is not None else "high_tier_disabled",
+        "warning": warning,
     }
 
 
@@ -950,6 +1187,8 @@ def _hybrid_tier(
         and tiered_tier != MatchTier.LOW.value
     ):
         return MatchTier.HIGH.value
+    if tiered_tier in {MatchTier.HIGH.value, MatchTier.REVIEW.value}:
+        return MatchTier.REVIEW.value
     if review_threshold is not None and probability >= review_threshold:
         return MatchTier.REVIEW.value
     return MatchTier.LOW.value
@@ -979,6 +1218,9 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
             "recoverable_tier",
             "probabilistic_score",
             "probabilistic_available",
+            "double_review_reason",
+            "benchmark_origin",
+            "candidate_recovered",
         ],
     )
     pairs = []
@@ -996,10 +1238,42 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
     if not pairs:
         frappe.throw("No adjudicated, non-stale pairs are available for finalization")
 
+    positive_pair_names = [pair.name for pair in pairs if pair.final_label == "Same"]
+    positive_reviewers: dict[str, set[str]] = {name: set() for name in positive_pair_names}
+    if positive_pair_names:
+        for label in frappe.get_all(
+            "CCD Match Review Label",
+            filters={
+                "parent": ["in", positive_pair_names],
+                "label": "Same",
+            },
+            fields=["parent", "reviewer"],
+        ):
+            positive_reviewers[label.parent].add(label.reviewer)
+    unconfirmed_positives = [
+        name for name, reviewers in positive_reviewers.items() if len(reviewers) < 2
+    ]
+    if unconfirmed_positives:
+        frappe.throw(
+            f"{len(unconfirmed_positives)} Same pairs still require independent positive confirmation"
+        )
+
     baseline_calibration = _calibrate_scores(pairs, "baseline_score", policy)
     probabilistic_calibration = _calibrate_scores(pairs, "probabilistic_score", policy)
     high_threshold = probabilistic_calibration["high_threshold"]
     review_threshold = probabilistic_calibration["review_threshold"]
+    run_purpose = run.run_purpose or THRESHOLD_EVALUATION
+    if run_purpose == POSITIVE_BENCHMARK:
+        # Positive enrichment is useful for blocking recall and feature
+        # diagnosis, but its prevalence-dependent precision cannot calibrate a
+        # deployable threshold.
+        high_threshold = None
+        review_threshold = None
+        for calibration in (baseline_calibration, probabilistic_calibration):
+            calibration["high_threshold"] = None
+            calibration["review_threshold"] = None
+            calibration["validation_ready"] = False
+            calibration["warning"] = "positive_benchmark_nonrepresentative"
     for pair in pairs:
         pair.hybrid_tier = _hybrid_tier(
             pair.tiered_tier,
@@ -1015,25 +1289,84 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
             update_modified=False,
         )
 
-    double_labels = []
+    double_labels: list[tuple[str, str]] = []
+    double_patterns: dict[str, int] = {}
     double_pairs = frappe.get_all(
         "CCD Match Evaluation Pair",
         filters={"evaluation_run": run.name, "needs_double_review": 1},
-        pluck="name",
+        fields=["name", "final_label", "double_review_reason"],
     )
-    for pair_name in double_pairs:
+    for pair in double_pairs:
         labels = frappe.get_all(
             "CCD Match Review Label",
-            filters={"parent": pair_name, "is_adjudication": 0},
+            filters={"parent": pair.name, "is_adjudication": 0},
             pluck="label",
             order_by="idx asc",
         )
         if len(labels) >= 2:
             double_labels.append((labels[0], labels[1]))
+            pattern = f"{labels[0]} / {labels[1]}"
+            double_patterns[pattern] = double_patterns.get(pattern, 0) + 1
+
+    double_agreed = sum(left == right for left, right in double_labels)
+    agreement = {
+        "assigned_pairs": len(double_pairs),
+        "completed_pairs": len(double_labels),
+        "agreement_rate": double_agreed / len(double_labels) if double_labels else None,
+        "cohens_kappa": cohens_kappa(double_labels),
+        "label_patterns": dict(sorted(double_patterns.items())),
+        "positive_confirmation_pairs": sum(
+            pair.double_review_reason == "positive_confirmation" for pair in double_pairs
+        ),
+        "confirmed_same_pairs": sum(pair.final_label == "Same" for pair in double_pairs),
+    }
+
+    readiness_reasons = []
+    if run_purpose == POSITIVE_BENCHMARK:
+        readiness_reasons.append("positive_benchmark_nonrepresentative")
+    if run.candidate_truncated:
+        readiness_reasons.append("candidate_generation_truncated")
+    if json.loads(run.skipped_blocks_json or "[]"):
+        readiness_reasons.append("oversized_blocks_skipped")
+    if not probabilistic_calibration["validation_ready"]:
+        readiness_reasons.append("insufficient_positive_labels_per_split")
+    if probabilistic_calibration["high_threshold"] is None:
+        readiness_reasons.append("automatic_high_threshold_disabled")
+
+    benchmark_pairs = [pair for pair in pairs if pair.benchmark_origin]
+    confirmed_benchmark_same = [pair for pair in benchmark_pairs if pair.final_label == "Same"]
+    recovered_benchmark_same = sum(
+        bool(pair.candidate_recovered) for pair in confirmed_benchmark_same
+    )
+    blocking_benchmark = None
+    if benchmark_pairs:
+        blocking_benchmark = {
+            "discovery_only": True,
+            "labeled_pairs": len(benchmark_pairs),
+            "confirmed_same_pairs": len(confirmed_benchmark_same),
+            "recovered_same_pairs": recovered_benchmark_same,
+            "blocking_recall": (
+                recovered_benchmark_same / len(confirmed_benchmark_same)
+                if confirmed_benchmark_same
+                else None
+            ),
+            "blocking_recall_wilson_95": (
+                wilson_interval(recovered_benchmark_same, len(confirmed_benchmark_same))
+                if confirmed_benchmark_same
+                else None
+            ),
+        }
 
     metrics = {
+        "run_purpose": run_purpose,
         "labeled_pairs": len(pairs),
-        "reviewer_kappa": cohens_kappa(double_labels),
+        "reviewer_kappa": agreement["cohens_kappa"],
+        "reviewer_agreement": agreement,
+        "automatic_matching_readiness": {
+            "ready": not readiness_reasons,
+            "reasons": readiness_reasons,
+        },
+        "blocking_benchmark": blocking_benchmark,
         "models": {
             "baseline_score_calibration": baseline_calibration,
             "baseline_current_flag": _fixed_tier_metrics(pairs, "baseline_tier", {MatchTier.REVIEW.value}),

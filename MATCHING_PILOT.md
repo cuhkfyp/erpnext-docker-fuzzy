@@ -98,20 +98,25 @@ of several blocking routes:
 - trusted global identifier, only for profiles that mark it global;
 - normalized exact phone or email;
 - normalized Chinese full name;
-- Chinese surname pinyin initial;
+- normalized Chinese surname plus given-name prefix;
 - normalized English surname plus given-name prefix;
 - birthday plus normalized surname.
 
 Large blocks and the total candidate set have policy limits. Oversized block
 metadata stores only its route, a one-way digest, and count—not the underlying
 name, phone, email, or identifier. Candidate truncation is recorded on the run
-and must be treated as a recall warning.
+and must be treated as a recall warning. Within the cap, blocks are processed
+deterministically with exact identifiers and contacts first, followed by
+date/name and progressively broader name routes; smaller blocks win within a
+route. This prevents a broad name block from starving stronger evidence.
 
 ## Sampling and labels
 
 The initial recommendation is 500 stratified pairs, including 100 pairs assigned
 for two independent reviews. Sampling covers source pair, baseline score band,
-model agreement/disagreement, identifier conflicts, and blocking route.
+model agreement/disagreement, identifier conflicts, and blocking route. Pilot
+1.1 balances both the review sample and the pre-assigned double-review subset
+across source pairs so one high-volume integration cannot dominate either set.
 
 Reviewers label each pair:
 
@@ -121,8 +126,11 @@ Reviewers label each pair:
 
 Double-review labels are hidden from the other reviewer. Model scores and reason
 codes are restricted to System Managers during labeling to reduce anchoring
-bias. `Unsure` and reviewer disagreement require management adjudication. Cohen's
-kappa is reported for double-reviewed pairs.
+bias. `Unsure` and reviewer disagreement require management adjudication. Any
+first-pass `Same` label automatically requires a second independent reviewer,
+even when the pair was not in the original double-review subset. Cohen's kappa
+is reported only when label variation makes it estimable; raw agreement and
+label-pattern counts are always retained.
 
 Standard reviewers see trusted strong identifiers in masked form. System
 Managers and users with `CCD Match Sensitive Reviewer` can see the full value.
@@ -141,7 +149,14 @@ Finalization uses a stable 60/40 calibration/held-out split:
   predicted-high examples (default 30), then checked again on held-out data;
 - candidate **Review** threshold: calibration threshold with the best balanced
   F1 score, with held-out metrics reported;
+- neither threshold is marked validation-ready until both partitions contain
+  at least the policy's configured number of confirmed `Same` labels (default
+  10 per split);
 - if held-out precision or sample size fails, the High tier is disabled.
+
+The probabilistic model may add a pair to the review queue, but it cannot
+downgrade a deterministic Review signal. An uncalibrated deterministic High is
+also retained as review-only rather than automatic matching.
 
 These thresholds are evaluation output only. They do not change production
 records and do not approve a policy.
@@ -162,8 +177,13 @@ Policies remain centrally versioned instead of silently changing each centre's
 logic during the comparison.
 
 Each `CCD Matching Source Profile` row maps one canonical attribute to an actual
-`CCD Master` field and records identifier scope/reliability. Start all strong-ID
+`CCD Master` field and records identifier scope/reliability. Start strong-ID
 scope values as `Unknown` until profiling and governance review are complete.
+The governed `pilot-1.3` exception is HKID: a mapped HKID field is global only
+for values that are structurally complete and pass the official check-digit
+calculation. Partial values, masks such as `*` or `X`, and invalid check digits
+remain unverified review-only evidence and never create a deterministic High
+match or conflict.
 The default installer derives these rows from each live
 `CCD Registration.fieldmatch` table. It accepts only explicitly allow-listed
 identity targets (names, phone, email, birthday, HKSR number, and HKID), so a
@@ -210,26 +230,43 @@ bench --site <site> execute db_connector.api_fuzzy_evaluation.install_matching_r
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_default_pilot_policy
 ```
 
-Both helper commands are idempotent. The second creates `pilot-1.0` only when
-missing and imports governed source mappings without promoting identifiers.
+Both helper commands are idempotent. The second creates `pilot-1.3` only when
+missing and imports governed source mappings. HKID is the only default trusted
+global identifier and is still gated per value by complete-format/check-digit
+validation.
 
 ### 2. Profile and configure
 
 Create a Draft policy and its source mappings. Inspect the run's source profile
 for coverage, distinctness, duplicates, HKID validity, and cross-source overlap.
-Profiling never promotes an identifier automatically—scope approval is a data
-governance action.
+Profiling never promotes an identifier beyond the explicit policy. HKID's
+complete-value rule reflects the recorded governance decision; all other strong
+identifiers remain unverified until separately approved.
 
 ### 3. Queue a recommendation-only run
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
-  --kwargs '{"policy_name":"pilot-1.0","sample_size":500,"double_review_count":100}'
+  --kwargs '{"policy_name":"pilot-1.3","sample_size":500,"double_review_count":100}'
 ```
 
 `install_evaluation_run` is deliberately bench-only and avoids putting an
 ERPNext login password in shell history. Desk integrations must call the
 manager-protected whitelisted `enqueue_evaluation` method instead.
+
+For a separate positive-enriched blocking benchmark, use:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_evaluation.install_positive_benchmark_run \
+  --kwargs '{"policy_name":"pilot-1.3","sample_size":100,"double_review_count":20}'
+```
+
+This benchmark discovers unseen cross-source pairs from legacy score rows at or
+above 0.90, resolves both records against the current CCD snapshot, and hides
+the discovery score from reviewers. Legacy score is never treated as ground
+truth or as a model feature. Finalization reports recovery of human-confirmed
+matches by the current blocking rules, but marks the cohort non-representative
+and disables all deployable thresholds. Previously labeled pairs are excluded.
 
 ### Docker persistence on the managed host
 

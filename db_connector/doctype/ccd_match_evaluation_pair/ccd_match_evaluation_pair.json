@@ -5,10 +5,10 @@
  "engine": "InnoDB",
  "field_order": [
   "evaluation_run", "source_pair", "left_record", "right_record", "left_source",
-  "right_source", "left_modified_at", "right_modified_at", "blocking_routes",
+  "right_source", "left_modified_at", "right_modified_at", "blocking_routes", "benchmark_origin", "candidate_recovered",
   "scores_section", "baseline_score", "baseline_tier", "tiered_score", "tiered_tier",
   "recoverable_tier", "probabilistic_score", "probabilistic_available", "hybrid_tier", "reason_codes_json",
-  "review_section", "needs_double_review", "review_status", "final_label", "stale",
+  "review_section", "needs_double_review", "double_review_reason", "review_status", "final_label", "stale",
   "cluster_conflict", "review_labels", "evidence_html"
  ],
  "fields": [
@@ -21,6 +21,8 @@
   {"fieldname": "left_modified_at", "fieldtype": "Datetime", "hidden": 1, "label": "Left Modified At", "read_only": 1},
   {"fieldname": "right_modified_at", "fieldtype": "Datetime", "hidden": 1, "label": "Right Modified At", "read_only": 1},
   {"fieldname": "blocking_routes", "fieldtype": "Small Text", "label": "Blocking Routes", "permlevel": 2, "read_only": 1},
+  {"fieldname": "benchmark_origin", "fieldtype": "Data", "hidden": 1, "label": "Benchmark Origin", "permlevel": 2, "read_only": 1},
+  {"fieldname": "candidate_recovered", "fieldtype": "Check", "hidden": 1, "label": "Candidate Recovered", "permlevel": 2, "read_only": 1},
   {"fieldname": "scores_section", "fieldtype": "Section Break", "label": "Shadow Model Results"},
   {"fieldname": "baseline_score", "fieldtype": "Float", "in_list_view": 1, "label": "Baseline Score", "permlevel": 2, "read_only": 1},
   {"fieldname": "baseline_tier", "fieldtype": "Data", "label": "Baseline Tier", "permlevel": 2, "read_only": 1},
@@ -33,6 +35,7 @@
   {"fieldname": "reason_codes_json", "fieldtype": "Code", "label": "Reason Codes", "options": "JSON", "permlevel": 2, "read_only": 1},
   {"fieldname": "review_section", "fieldtype": "Section Break", "label": "Human Review"},
   {"fieldname": "needs_double_review", "fieldtype": "Check", "label": "Needs Double Review", "read_only": 1},
+  {"fieldname": "double_review_reason", "fieldtype": "Data", "hidden": 1, "label": "Double Review Reason", "permlevel": 2, "read_only": 1},
   {"default": "Unreviewed", "fieldname": "review_status", "fieldtype": "Select", "in_list_view": 1, "label": "Review Status", "options": "Unreviewed\nPartially Reviewed\nAgreed\nNeeds Adjudication\nAdjudicated", "read_only": 1},
   {"fieldname": "final_label", "fieldtype": "Select", "in_list_view": 1, "label": "Final Label", "options": "\nSame\nDifferent", "read_only": 1},
   {"fieldname": "stale", "fieldtype": "Check", "label": "Stale", "read_only": 1},

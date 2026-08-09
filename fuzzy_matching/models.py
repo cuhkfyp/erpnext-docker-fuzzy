@@ -13,6 +13,7 @@ from .comparators import (
     compare_identifier,
     compare_phone,
 )
+from . import normalization as norm
 from .policy import MatchingPolicy
 from .types import CandidatePair, EvaluationResult, Evidence, EvidenceLevel, MatchTier, ModelResult
 
@@ -189,6 +190,11 @@ def hybrid_result(
         tier = MatchTier.CONFLICT
     elif high_threshold is not None and probability >= high_threshold and tiered.tier != MatchTier.LOW:
         tier = MatchTier.HIGH
+    elif tiered.tier in {MatchTier.HIGH, MatchTier.REVIEW}:
+        # A statistical model may add review candidates, but it must never
+        # suppress independently sufficient deterministic review evidence.
+        # An uncalibrated deterministic High remains review-only.
+        tier = MatchTier.REVIEW
     elif review_threshold is not None and probability >= review_threshold:
         tier = MatchTier.REVIEW
     else:
@@ -221,6 +227,13 @@ def compare_all_models(
         for attribute in policy.trusted_global_identifiers
         if policy.globally_comparable(left_source, attribute)
         and policy.globally_comparable(right_source, attribute)
+        and (
+            attribute != "hkid"
+            or (
+                norm.valid_hkid(policy.value(left, attribute))
+                and norm.valid_hkid(policy.value(right, attribute))
+            )
+        )
     )
     baseline = baseline_result(evidence)
     gated = tiered_result(

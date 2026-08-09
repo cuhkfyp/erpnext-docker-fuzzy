@@ -30,13 +30,30 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertTrue(restored.globally_comparable("A", "hkid"))
         self.assertEqual(restored.profile("A").field_for("hkid"), "hkid_num")
 
+    def test_canonical_record_value_does_not_repeat_source_field_lookup(self):
+        policy = MatchingPolicy(
+            source_profiles={
+                "A": SourceProfile("A", {"phone": "mobile"})
+            }
+        )
+        canonical = {"record_id": "R1", "source": "A", "phone": "91234567"}
+        self.assertEqual(policy.value(canonical, "phone"), "91234567")
+
     def test_hybrid_keeps_conflict_gate_and_requires_calibrated_high(self):
         conflict = self.module._hybrid_tier(MatchTier.CONFLICT.value, 0.999, 0.9, 0.6)
         high = self.module._hybrid_tier(MatchTier.REVIEW.value, 0.95, 0.9, 0.6)
         low = self.module._hybrid_tier(MatchTier.LOW.value, 0.95, 0.9, 0.6)
+        preserved_review = self.module._hybrid_tier(
+            MatchTier.REVIEW.value, 0.0, None, 0.6
+        )
+        uncalibrated_high = self.module._hybrid_tier(
+            MatchTier.HIGH.value, 0.0, None, None
+        )
         self.assertEqual(conflict, MatchTier.CONFLICT.value)
         self.assertEqual(high, MatchTier.HIGH.value)
         self.assertEqual(low, MatchTier.REVIEW.value)
+        self.assertEqual(preserved_review, MatchTier.REVIEW.value)
+        self.assertEqual(uncalibrated_high, MatchTier.REVIEW.value)
 
     def test_registration_mapping_imports_identity_targets_only(self):
         class Registration:
@@ -49,6 +66,7 @@ class EvaluationHelperTests(unittest.TestCase):
                     types.SimpleNamespace(sys_fieldname="res_addr1: Address 1"),
                     types.SimpleNamespace(sys_fieldname="chi_firstname: Chinese Firstname"),
                     types.SimpleNamespace(sys_fieldname="birthday_key: Birthday Key"),
+                    types.SimpleNamespace(sys_fieldname="hkid: HKID Number"),
                 ]
 
         rows = self.module._registration_profile_rows(Registration())
@@ -57,6 +75,9 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertEqual(by_attribute["phone"]["fieldname"], "mobile")
         self.assertTrue(by_attribute["chi_firstname"]["enabled"])
         self.assertFalse(by_attribute["birthday"]["enabled"])
+        self.assertTrue(by_attribute["hkid"]["enabled"])
+        self.assertEqual(by_attribute["hkid"]["identifier_scope"], "Global")
+        self.assertEqual(by_attribute["hkid"]["reliability_status"], "Approved")
         self.assertNotIn("res_addr1", {row["fieldname"] for row in rows})
 
     def test_probability_training_sample_is_bounded_and_keeps_review_records(self):
@@ -75,6 +96,38 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertEqual(len(first), 10)
         self.assertTrue({"R95", "R96"}.issubset(first_ids))
         self.assertEqual(first_ids, {row["record_id"] for row in second})
+
+    def test_positive_benchmark_selection_is_deterministic_balanced_and_deduplicated(self):
+        rows = [
+            {
+                "left_id": f"A{index}",
+                "right_id": f"B{index}",
+                "source_pair": "A::B",
+                "legacy_score": 0.95,
+            }
+            for index in range(90)
+        ]
+        rows.extend(
+            {
+                "left_id": f"C{index}",
+                "right_id": f"D{index}",
+                "source_pair": "C::D",
+                "legacy_score": 0.95,
+            }
+            for index in range(10)
+        )
+        rows.append(dict(rows[0], legacy_score=0.99))
+        first = self.module._select_positive_benchmark_rows(rows, 20, seed="benchmark")
+        second = self.module._select_positive_benchmark_rows(
+            list(reversed(rows)), 20, seed="benchmark"
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 20)
+        self.assertEqual(
+            {source: sum(row["source_pair"] == source for row in first) for source in ("A::B", "C::D")},
+            {"A::B": 10, "C::D": 10},
+        )
+        self.assertEqual(len({(row["left_id"], row["right_id"]) for row in first}), 20)
 
     def test_probability_calibration_distinguishes_missing_from_real_zero(self):
         class Pair(dict):
@@ -100,6 +153,38 @@ class EvaluationHelperTests(unittest.TestCase):
             MatchingPolicy(minimum_high_samples=30),
         )
         self.assertEqual(result["available_pairs"], 1)
+        self.assertFalse(result["validation_ready"])
+        self.assertIsNone(result["review_threshold"])
+        self.assertEqual(result["warning"], "insufficient_positive_labels_per_split")
+
+    def test_calibration_requires_positive_labels_in_both_partitions(self):
+        class Pair(dict):
+            __getattr__ = dict.get
+
+        calibration = []
+        held_out = []
+        index = 0
+        while len(calibration) < 2 or len(held_out) < 2:
+            pair = Pair(name=f"pair-{index}", final_label="Same", score=0.9)
+            target = (
+                calibration
+                if self.module._stable_partition(pair.name) == "calibration"
+                else held_out
+            )
+            if len(target) < 2:
+                target.append(pair)
+            index += 1
+        rows = calibration + held_out
+        ready = self.module._calibrate_scores(
+            rows,
+            "score",
+            MatchingPolicy(
+                minimum_high_samples=1,
+                minimum_positive_labels_per_split=2,
+            ),
+        )
+        self.assertTrue(ready["validation_ready"])
+        self.assertIsNotNone(ready["review_threshold"])
 
 
 if __name__ == "__main__":

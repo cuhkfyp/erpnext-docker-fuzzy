@@ -37,6 +37,16 @@ class BossExamplesTests(unittest.TestCase):
         self.assertIn("insufficient_independent_evidence", result.tiered_gated.reasons)
         self.assertEqual(result.tiered_gated.evidence["phone"].level, EvidenceLevel.MISSING)
 
+        rescored = compare_all_models(
+            pair(),
+            left,
+            right,
+            self.policy,
+            probability=0.0,
+            review_threshold=0.5,
+        )
+        self.assertEqual(rescored.hybrid.tier, MatchTier.REVIEW)
+
     def test_different_similar_person_cannot_reach_high(self):
         left = {
             "record_id": "L",
@@ -128,6 +138,19 @@ class IdentifierPolicyTests(unittest.TestCase):
         result = compare_all_models(pair(), left, right, policy)
         self.assertEqual(result.tiered_gated.tier, MatchTier.CONFLICT)
         self.assertEqual(result.tiered_recoverable.tier, MatchTier.REVIEW)
+
+    def test_partial_or_masked_hkid_is_never_trusted_as_global(self):
+        policy = self.global_policy()
+        for value in ("A123", "A123***/X", "A123456(4)"):
+            with self.subTest(value=value):
+                left = {"record_id": "L", "source": "A", "hkid": value}
+                right = {"record_id": "R", "source": "B", "hkid": value}
+                result = compare_all_models(pair(), left, right, policy)
+                self.assertEqual(result.tiered_gated.tier, MatchTier.REVIEW)
+                self.assertIn(
+                    "unverified_identifier_exact:hkid",
+                    result.tiered_gated.reasons,
+                )
 
     def test_unknown_local_id_is_not_trusted(self):
         policy = MatchingPolicy(trusted_global_identifiers=frozenset({"hkid"}))

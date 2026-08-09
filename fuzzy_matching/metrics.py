@@ -97,4 +97,8 @@ def cohens_kappa(labels: Iterable[tuple[str, str]]) -> float | None:
         left_rate = sum(a == category for a, _ in rows) / len(rows)
         right_rate = sum(b == category for _, b in rows) / len(rows)
         expected += left_rate * right_rate
-    return (observed - expected) / (1 - expected) if expected < 1 else 1.0
+    # When both reviewers use only one category, expected agreement is 100% and
+    # kappa's denominator is zero.  Reporting 1.0 in that case overstates the
+    # evidence: raw agreement is perfect, but agreement beyond chance is not
+    # estimable without label variation.
+    return (observed - expected) / (1 - expected) if expected < 1 else None

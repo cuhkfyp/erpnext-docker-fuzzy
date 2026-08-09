@@ -6,16 +6,17 @@
  "engine": "InnoDB",
  "field_order": [
   "policy_version", "title", "status", "trusted_global_identifiers",
-  "high_precision_target", "minimum_high_samples", "max_block_size",
+  "high_precision_target", "minimum_high_samples", "minimum_positive_labels_per_split", "max_block_size",
   "max_candidate_pairs", "source_profiles", "notes"
  ],
  "fields": [
   {"fieldname": "policy_version", "fieldtype": "Data", "in_list_view": 1, "label": "Policy Version", "reqd": 1, "unique": 1},
   {"fieldname": "title", "fieldtype": "Data", "label": "Title", "reqd": 1},
   {"default": "Draft", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Draft\nPilot\nApproved\nArchived", "reqd": 1},
-  {"description": "Comma-separated canonical identifiers. They remain inactive unless the source profile marks them global.", "fieldname": "trusted_global_identifiers", "fieldtype": "Small Text", "label": "Trusted Global Identifiers"},
+  {"description": "Comma-separated canonical identifiers. They remain inactive unless the source profile marks them global. HKID is trusted only when both values are structurally complete and pass the check-digit validation; partial, masked, and invalid values remain review-only.", "fieldname": "trusted_global_identifiers", "fieldtype": "Small Text", "label": "Trusted Global Identifiers"},
   {"default": "0.95", "fieldname": "high_precision_target", "fieldtype": "Float", "label": "High Precision Target", "reqd": 1},
   {"default": "30", "fieldname": "minimum_high_samples", "fieldtype": "Int", "label": "Minimum High Samples", "reqd": 1},
+  {"default": "10", "description": "Minimum confirmed Same labels required independently in both calibration and held-out partitions before candidate thresholds are considered validation-ready.", "fieldname": "minimum_positive_labels_per_split", "fieldtype": "Int", "label": "Minimum Positive Labels per Split", "reqd": 1},
   {"default": "10000", "fieldname": "max_block_size", "fieldtype": "Int", "label": "Maximum Block Size", "reqd": 1},
   {"default": "500000", "fieldname": "max_candidate_pairs", "fieldtype": "Int", "label": "Maximum Candidate Pairs", "reqd": 1},
   {"fieldname": "source_profiles", "fieldtype": "Table", "label": "Source Profiles", "options": "CCD Matching Source Profile"},

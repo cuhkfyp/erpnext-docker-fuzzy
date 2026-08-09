@@ -14,6 +14,18 @@ from .policy import MatchingPolicy
 from .types import CandidatePair
 
 
+BLOCK_ROUTE_PRIORITY = {
+    "global_id": 0,
+    "phone": 1,
+    "email": 1,
+    "unverified_id": 2,
+    "dob_surname": 3,
+    "chi_full": 4,
+    "eng_name": 5,
+    "chi_name_prefix": 6,
+}
+
+
 @dataclass(frozen=True)
 class BlockingResult:
     pairs: tuple[CandidatePair, ...]
@@ -34,14 +46,19 @@ def blocking_keys(record: dict[str, Any], policy: MatchingPolicy) -> set[str]:
     source = record_source(record)
 
     for attribute in ("hkid", "hksr_num"):
-        value = norm.identifier(policy.value(record, attribute))
+        raw_value = policy.value(record, attribute)
+        value = norm.identifier(raw_value)
         if not value:
             continue
-        if policy.globally_comparable(source, attribute):
+        globally_usable = policy.globally_comparable(source, attribute) and (
+            attribute != "hkid" or norm.valid_hkid(raw_value)
+        )
+        if globally_usable:
             keys.add(f"global_id:{attribute}:{value}")
         else:
-            # Unknown/local identifiers are useful for finding audit examples,
-            # but never become deterministic match evidence.
+            # Unknown/local identifiers and incomplete, masked, or invalid
+            # HKIDs are useful for finding audit examples, but never become
+            # deterministic global-identifier evidence.
             keys.add(f"unverified_id:{attribute}:{value}")
 
     phone = norm.phone(policy.value(record, "phone"))
@@ -56,9 +73,10 @@ def blocking_keys(record: dict[str, Any], policy: MatchingPolicy) -> set[str]:
     chi_full = f"{chi_surname}{chi_firstname}"
     if chi_full:
         keys.add(f"chi_full:{chi_full}")
-    pinyin = norm.chinese_pinyin(chi_surname)
-    if pinyin:
-        keys.add(f"chi_surname_initial:{pinyin[0]}")
+    if chi_surname and chi_firstname:
+        # A surname initial alone creates enormous, low-value blocks and can
+        # consume the global candidate cap before stronger evidence is seen.
+        keys.add(f"chi_name_prefix:{chi_surname}:{chi_firstname[:1]}")
 
     eng_surname = norm.english_compact(policy.value(record, "eng_surname"))
     eng_firstname = norm.english_compact(policy.value(record, "eng_firstname"))
@@ -85,14 +103,29 @@ def generate_candidate_pairs(
 
     routes_by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
     skipped: list[str] = []
-    truncated = False
-    for key, ids in index.items():
+    retained_blocks: list[tuple[str, tuple[str, ...]]] = []
+    for key, raw_ids in index.items():
+        ids = tuple(sorted(set(raw_ids)))
         if len(ids) > policy.max_block_size:
             route = key.split(":", 1)[0]
             digest = hashlib.sha256(key.encode()).hexdigest()[:12]
             skipped.append(f"{route}:{digest} ({len(ids)} records)")
             continue
-        for left_id, right_id in combinations(sorted(set(ids)), 2):
+        retained_blocks.append((key, ids))
+
+    # Stronger and smaller blocks are processed first. This makes a bounded
+    # candidate set deterministic and prevents broad name blocks from starving
+    # exact identifiers, contacts, or date/name combinations.
+    retained_blocks.sort(
+        key=lambda item: (
+            BLOCK_ROUTE_PRIORITY.get(item[0].split(":", 1)[0], 99),
+            len(item[1]),
+            hashlib.sha256(item[0].encode()).digest(),
+        )
+    )
+    truncated = False
+    for key, ids in retained_blocks:
+        for left_id, right_id in combinations(ids, 2):
             left, right = by_id[left_id], by_id[right_id]
             left_source, right_source = record_source(left), record_source(right)
             if not left_source or not right_source or left_source == right_source:
@@ -109,4 +142,4 @@ def generate_candidate_pairs(
     for (left_id, right_id), routes in sorted(routes_by_pair.items()):
         source_pair = "::".join(sorted((record_source(by_id[left_id]), record_source(by_id[right_id]))))
         pairs.append(CandidatePair(left_id, right_id, source_pair, tuple(sorted(routes))))
-    return BlockingResult(tuple(pairs), tuple(skipped), truncated)
+    return BlockingResult(tuple(pairs), tuple(sorted(skipped)), truncated)

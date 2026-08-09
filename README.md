@@ -30,7 +30,10 @@ services:
 `/root/erpnext_docker_volume/erpnext_restart.sh` calls the same deployment
 helper after the stack starts. This protects the fuzzy changes when existing
 containers restart and restores them if those containers are recreated. It is
-not a backup strategy for unrelated private apps or the database.
+not a backup strategy for unrelated private apps or the database. Because the
+site also installs the private `hksr` app, deployment mirrors that app from the
+existing backend container and registers its path in the scheduler and workers
+before restart; the backend copy remains its source of truth.
 
 For a Python-only revision that changes no DocType, dependency, or asset, use
 `deploy_db_connector.sh --code-only`. It still refreshes the persistent copy
@@ -61,16 +64,20 @@ and sends no client data to an external service.
    approved identity targets are imported; arbitrary centre-specific fields
    remain available in CCD but do not silently become matching evidence.
 3. Leave identifier scope as `Unknown` or `Local` unless governance has proven
-   that the identifier uses one shared organization-wide namespace.
+   that the identifier uses one shared organization-wide namespace. In
+   `pilot-1.3`, HKID is the approved exception, but it is global evidence only
+   when both values are complete and pass the HKID check-digit validation.
+   Partial, masked, and invalid values remain review-only evidence.
 4. Start a 500-pair run with 100 double-reviewed pairs:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
-  --kwargs '{"policy_name":"pilot-1.0","sample_size":500,"double_review_count":100}'
+  --kwargs '{"policy_name":"pilot-1.3","sample_size":500,"double_review_count":100}'
 ```
 
 5. Review the generated `CCD Match Evaluation Pair` documents as `Same`,
-   `Different`, or `Unsure`. Resolve disagreements through adjudication.
+   `Different`, or `Unsure`. Resolve disagreements through adjudication. Every
+   observed `Same` automatically requires a second independent confirmation.
 6. Finalize only after all intended labels are complete:
 
 ```bash
@@ -78,9 +85,18 @@ bench --site <site> execute db_connector.api_fuzzy_evaluation.finalize_evaluatio
   --kwargs '{"run_name":"<evaluation-run>"}'
 ```
 
-Finalization reports held-out performance and candidate thresholds; it does not
-approve or deploy a policy. Production activation remains a separate management
-decision.
+Finalization reports held-out performance, Wilson confidence intervals, and
+candidate thresholds. Thresholds remain disabled when either the calibration
+or held-out partition has fewer than 10 confirmed matches. Finalization does
+not approve or deploy a policy; production activation remains a separate
+management decision.
+
+When random candidate review yields too few confirmed matches, create a
+separate 100-pair positive benchmark with
+`install_positive_benchmark_run`. It uses unseen legacy high-score links only
+to discover records for blinded relabeling and reports blocking recall. Because
+that cohort is deliberately enriched, its precision is not production
+precision and its thresholds are always disabled.
 
 ## Development validation
 

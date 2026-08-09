@@ -38,6 +38,54 @@ class BlockingTests(unittest.TestCase):
         self.assertEqual(len(result.pairs), 1)
         self.assertIn("unverified_id", result.pairs[0].blocking_routes)
 
+    def test_only_complete_valid_hkid_uses_global_identifier_block(self):
+        profiles = {
+            source: SourceProfile(source, {"hkid": "hkid"}, {"hkid": "global"})
+            for source in ("A", "B")
+        }
+        policy = MatchingPolicy(
+            source_profiles=profiles,
+            trusted_global_identifiers=frozenset({"hkid"}),
+        )
+        complete = [
+            {"record_id": "A", "source": "A", "hkid": "A123456(3)"},
+            {"record_id": "B", "source": "B", "hkid": "A1234563"},
+        ]
+        partial = [
+            {"record_id": "C", "source": "A", "hkid": "A123***/X"},
+            {"record_id": "D", "source": "B", "hkid": "A123***/X"},
+        ]
+        complete_result = generate_candidate_pairs(complete, policy)
+        partial_result = generate_candidate_pairs(partial, policy)
+        self.assertIn("global_id", complete_result.pairs[0].blocking_routes)
+        self.assertNotIn("global_id", partial_result.pairs[0].blocking_routes)
+        self.assertIn("unverified_id", partial_result.pairs[0].blocking_routes)
+
+    def test_candidate_cap_prioritizes_exact_contact_over_name_block(self):
+        records = [
+            {"record_id": "N1", "source": "A", "eng_surname": "Example", "eng_firstname": "Alpha"},
+            {"record_id": "N2", "source": "B", "eng_surname": "Example", "eng_firstname": "Alfred"},
+            {"record_id": "P1", "source": "A", "phone_num": "11111111"},
+            {"record_id": "P2", "source": "B", "phone_num": "11111111"},
+        ]
+        policy = MatchingPolicy(max_candidate_pairs=1)
+        first = generate_candidate_pairs(records, policy)
+        second = generate_candidate_pairs(list(reversed(records)), policy)
+        self.assertEqual(first.pairs, second.pairs)
+        self.assertEqual((first.pairs[0].left_id, first.pairs[0].right_id), ("P1", "P2"))
+        self.assertIn("phone", first.pairs[0].blocking_routes)
+
+    def test_chinese_name_prefix_is_narrower_than_surname_initial(self):
+        records = [
+            {"record_id": "A", "source": "A", "chi_surname": "陳", "chi_firstname": "大文"},
+            {"record_id": "B", "source": "B", "chi_surname": "陳", "chi_firstname": "大明"},
+            {"record_id": "C", "source": "B", "chi_surname": "陳", "chi_firstname": "小文"},
+        ]
+        result = generate_candidate_pairs(records, MatchingPolicy())
+        ids = {(item.left_id, item.right_id) for item in result.pairs}
+        self.assertIn(("A", "B"), ids)
+        self.assertNotIn(("A", "C"), ids)
+
     def test_oversized_block_metadata_does_not_expose_field_value(self):
         records = [
             {"record_id": "A", "source": "A", "phone_num": "11111111"},
@@ -58,6 +106,7 @@ class MetricsTests(unittest.TestCase):
 
     def test_reviewer_agreement(self):
         self.assertEqual(cohens_kappa([("Same", "Same"), ("Different", "Different")]), 1.0)
+        self.assertIsNone(cohens_kappa([("Different", "Different")] * 100))
         lower, upper = wilson_interval(95, 100)
         self.assertLess(lower, 0.95)
         self.assertGreater(upper, 0.95)

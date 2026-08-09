@@ -77,6 +77,31 @@ for container in "${containers[@]}"; do
 	docker exec -u root "$container" chown -R frappe:frappe "$APP_IN_CONTAINER"
 done
 
+# The private hksr app is installed on the site but is not part of the stock
+# ERPNext image.  Backend is its existing source of truth; workers must have
+# the same Python package before a restart or Frappe cannot build its module
+# map and enters a crash loop with ModuleNotFoundError.
+HKSR_IN_CONTAINER="/home/frappe/frappe-bench/apps/hksr"
+if docker exec frappe_docker-backend-1 test -f "$HKSR_IN_CONTAINER/pyproject.toml"; then
+	runtime_app_stage="$(mktemp -d "$ROOT_DIR/.db-connector-runtime.XXXXXX")"
+	trap 'rm -rf -- "$runtime_app_stage"' EXIT
+	mkdir -p "$runtime_app_stage/hksr"
+	docker cp "frappe_docker-backend-1:$HKSR_IN_CONTAINER/." "$runtime_app_stage/hksr/"
+	printf '%s\n' "$HKSR_IN_CONTAINER" > "$runtime_app_stage/hksr.pth"
+	for container in \
+		frappe_docker-scheduler-1 \
+		frappe_docker-queue-long-1 \
+		frappe_docker-queue-short-1; do
+		docker exec -u root "$container" mkdir -p "$HKSR_IN_CONTAINER"
+		docker cp "$runtime_app_stage/hksr/." "$container:$HKSR_IN_CONTAINER/"
+		docker cp "$runtime_app_stage/hksr.pth" \
+			"$container:/home/frappe/frappe-bench/env/lib/python3.11/site-packages/hksr.pth"
+		docker exec -u root "$container" chown -R frappe:frappe "$HKSR_IN_CONTAINER"
+	done
+	rm -rf -- "$runtime_app_stage"
+	trap - EXIT
+fi
+
 if (( ! CODE_ONLY )); then
 	docker exec frappe_docker-backend-1 \
 		bash "$APP_IN_CONTAINER/db_connector/deployment/install_fuzzy_dependencies.sh"
@@ -90,15 +115,17 @@ fi
 docker exec frappe_docker-backend-1 bench --site "$SITE" clear-cache
 
 if (( ! CODE_ONLY )); then
-	asset_stage="$(mktemp -d)"
+	asset_stage="$(mktemp -d "$ROOT_DIR/.db-connector-assets.XXXXXX")"
 	trap 'rm -rf -- "$asset_stage"' EXIT
 	if docker cp \
 		frappe_docker-backend-1:/home/frappe/frappe-bench/sites/assets/db_connector \
 		"$asset_stage/" 2>/dev/null; then
-		docker exec frappe_docker-frontend-1 mkdir -p \
-			/home/frappe/frappe-bench/sites/assets/db_connector
-		docker cp "$asset_stage/db_connector/." \
-			frappe_docker-frontend-1:/home/frappe/frappe-bench/sites/assets/db_connector/
+		if ! docker exec frappe_docker-frontend-1 mkdir -p \
+				/home/frappe/frappe-bench/sites/assets/db_connector \
+			|| ! docker cp "$asset_stage/db_connector/." \
+				frappe_docker-frontend-1:/home/frappe/frappe-bench/sites/assets/db_connector/; then
+			echo "Warning: optional db_connector frontend asset copy failed." >&2
+		fi
 	fi
 	rm -rf -- "$asset_stage"
 	trap - EXIT

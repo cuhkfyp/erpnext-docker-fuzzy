@@ -4,7 +4,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "matching_policy", "policy_version", "policy_snapshot_json", "status", "approval_status", "snapshot_at",
+  "matching_policy", "policy_version", "run_purpose", "policy_snapshot_json", "status", "approval_status", "snapshot_at",
   "sample_size", "double_review_count", "record_count", "profile_json", "candidate_count",
   "candidate_truncated", "sampled_pair_count", "model_versions_json",
   "skipped_blocks_json", "metrics_json", "error_summary"
@@ -12,6 +12,7 @@
  "fields": [
   {"fieldname": "matching_policy", "fieldtype": "Link", "in_list_view": 1, "label": "Matching Policy", "options": "CCD Matching Policy", "reqd": 1},
   {"fieldname": "policy_version", "fieldtype": "Data", "label": "Policy Version", "read_only": 1},
+  {"default": "Threshold Evaluation", "fieldname": "run_purpose", "fieldtype": "Select", "in_list_view": 1, "label": "Run Purpose", "options": "Threshold Evaluation\nPositive Benchmark", "read_only": 1, "reqd": 1},
   {"fieldname": "policy_snapshot_json", "fieldtype": "Code", "hidden": 1, "label": "Policy Snapshot", "options": "JSON", "read_only": 1, "reqd": 1},
   {"default": "Queued", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Queued\nProfiling\nGenerating Candidates\nScoring\nReviewing\nAwaiting Management Approval\nCompleted\nFailed", "read_only": 1},
   {"default": "Pending Management Review", "fieldname": "approval_status", "fieldtype": "Select", "label": "Approval Status", "options": "Pending Management Review\nApproved\nRejected", "read_only": 1},

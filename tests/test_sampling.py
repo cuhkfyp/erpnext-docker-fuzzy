@@ -1,6 +1,6 @@
 import unittest
 
-from fuzzy_matching.sampling import stratified_sample, stratum
+from fuzzy_matching.sampling import balanced_quotas, double_review_ids, stratified_sample, stratum
 from fuzzy_matching.types import CandidatePair, EvaluationResult, MatchTier, ModelResult
 
 
@@ -38,6 +38,34 @@ class StreamingSamplingTests(unittest.TestCase):
 
         self.assertEqual(stratified_sample(rows(), 0, seed="run-2"), [])
         self.assertFalse(consumed)
+
+    def test_sample_and_double_review_are_balanced_across_source_pairs(self):
+        rows = [result(index, "A::B", 0.8) for index in range(900)]
+        rows.extend(result(1_000 + index, "C::D", 0.8) for index in range(100))
+        counts = {"A::B": 900, "C::D": 100}
+        self.assertEqual(balanced_quotas(counts, 100), {"A::B": 50, "C::D": 50})
+        sampled = stratified_sample(
+            rows,
+            100,
+            seed="balanced-run",
+            source_pair_counts=counts,
+        )
+        sample_counts = {
+            source_pair: sum(item.pair.source_pair == source_pair for item in sampled)
+            for source_pair in {item.pair.source_pair for item in sampled}
+        }
+        self.assertEqual(sample_counts, {"A::B": 50, "C::D": 50})
+
+        doubles = double_review_ids(sampled, 20, seed="balanced-run")
+        double_counts = {
+            source_pair: sum(
+                f"{item.pair.left_id}::{item.pair.right_id}" in doubles
+                and item.pair.source_pair == source_pair
+                for item in sampled
+            )
+            for source_pair in sample_counts
+        }
+        self.assertEqual(double_counts, {"A::B": 10, "C::D": 10})
 
 
 if __name__ == "__main__":

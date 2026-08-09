@@ -44,6 +44,7 @@ class MatchingPolicy:
     trusted_global_identifiers: frozenset[str] = frozenset()
     high_precision_target: float = 0.95
     minimum_high_samples: int = 30
+    minimum_positive_labels_per_split: int = 10
     max_block_size: int = 10_000
     max_candidate_pairs: int = 500_000
 
@@ -57,6 +58,10 @@ class MatchingPolicy:
     def value(self, record: dict[str, Any], attribute: str) -> Any:
         source = str(record.get("source") or record.get("ccd_reg_source") or "")
         profile = self.profile(source)
+        # Evaluation records are already projected into canonical attribute
+        # names. Do not look up their original source fieldname a second time.
+        if record.get("record_id") and attribute in record:
+            return record.get(attribute)
         explicit = profile.field_for(attribute)
         if explicit:
             return record.get(explicit)
@@ -97,6 +102,9 @@ class MatchingPolicy:
             trusted_global_identifiers=frozenset(value.get("trusted_global_identifiers") or ()),
             high_precision_target=float(value.get("high_precision_target", 0.95)),
             minimum_high_samples=int(value.get("minimum_high_samples", 30)),
+            minimum_positive_labels_per_split=int(
+                value.get("minimum_positive_labels_per_split", 10)
+            ),
             max_block_size=int(value.get("max_block_size", 10_000)),
             max_candidate_pairs=int(value.get("max_candidate_pairs", 500_000)),
         )
