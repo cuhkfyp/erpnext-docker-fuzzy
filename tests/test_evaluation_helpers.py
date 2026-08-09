@@ -39,6 +39,16 @@ class EvaluationHelperTests(unittest.TestCase):
         canonical = {"record_id": "R1", "source": "A", "phone": "91234567"}
         self.assertEqual(policy.value(canonical, "phone"), "91234567")
 
+    def test_positive_confirmation_requires_two_distinct_same_reviewers(self):
+        rows = [
+            types.SimpleNamespace(reviewer="reviewer-a", label="Same"),
+            types.SimpleNamespace(reviewer="reviewer-a", label="Same"),
+            types.SimpleNamespace(reviewer="reviewer-b", label="Unsure"),
+        ]
+        self.assertFalse(self.module._positive_confirmation_complete(rows))
+        rows.append(types.SimpleNamespace(reviewer="reviewer-b", label="Same"))
+        self.assertTrue(self.module._positive_confirmation_complete(rows))
+
     def test_hybrid_keeps_conflict_gate_and_requires_calibrated_high(self):
         conflict = self.module._hybrid_tier(MatchTier.CONFLICT.value, 0.999, 0.9, 0.6)
         high = self.module._hybrid_tier(MatchTier.REVIEW.value, 0.95, 0.9, 0.6)

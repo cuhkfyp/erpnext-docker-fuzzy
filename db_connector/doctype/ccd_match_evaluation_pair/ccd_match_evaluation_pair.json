@@ -36,7 +36,7 @@
   {"fieldname": "review_section", "fieldtype": "Section Break", "label": "Human Review"},
   {"fieldname": "needs_double_review", "fieldtype": "Check", "label": "Needs Double Review", "read_only": 1},
   {"fieldname": "double_review_reason", "fieldtype": "Data", "hidden": 1, "label": "Double Review Reason", "permlevel": 2, "read_only": 1},
-  {"default": "Unreviewed", "fieldname": "review_status", "fieldtype": "Select", "in_list_view": 1, "label": "Review Status", "options": "Unreviewed\nPartially Reviewed\nAgreed\nNeeds Adjudication\nAdjudicated", "read_only": 1},
+  {"default": "Unreviewed", "fieldname": "review_status", "fieldtype": "Select", "in_list_view": 1, "label": "Review Status", "options": "Unreviewed\nPartially Reviewed\nAgreed\nNeeds Adjudication\nPositive Confirmation Required\nAdjudicated", "read_only": 1},
   {"fieldname": "final_label", "fieldtype": "Select", "in_list_view": 1, "label": "Final Label", "options": "\nSame\nDifferent", "read_only": 1},
   {"fieldname": "stale", "fieldtype": "Check", "label": "Stale", "read_only": 1},
   {"fieldname": "cluster_conflict", "fieldtype": "Check", "label": "Cluster Conflict", "permlevel": 2, "read_only": 1},

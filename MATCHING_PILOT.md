@@ -207,6 +207,11 @@ If either CCD Master record changes after the run snapshot, opening the pair
 marks it stale. Stale pairs are excluded from final calibration. A new run is
 preferred over trying to reinterpret changed records.
 
+An adjudicated `Same` still requires two distinct people to have submitted
+`Same`. Until that independent confirmation exists, the pair is shown as
+`Positive Confirmation Required` and has no final label. Adjudication authority
+does not replace independent positive evidence.
+
 ### Cluster safety
 
 The pilot checks connected groups within the retained review sample for

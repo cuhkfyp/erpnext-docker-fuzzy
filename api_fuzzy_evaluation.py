@@ -53,6 +53,7 @@ THRESHOLD_EVALUATION = "Threshold Evaluation"
 POSITIVE_BENCHMARK = "Positive Benchmark"
 DEFAULT_PILOT_POLICY_VERSION = "pilot-1.3"
 LEGACY_BENCHMARK_MIN_SCORE = 0.9
+POSITIVE_CONFIRMATION_REQUIRED = "Positive Confirmation Required"
 
 IDENTITY_ATTRIBUTES = (
     "chi_surname",
@@ -109,6 +110,19 @@ def _require_manager() -> None:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _label_reviewers(review_labels: list[Any], label: str) -> set[str]:
+    """Return distinct human identities supporting a label, including adjudicators."""
+    return {
+        str(row.reviewer)
+        for row in review_labels
+        if row.label == label and str(row.reviewer or "")
+    }
+
+
+def _positive_confirmation_complete(review_labels: list[Any]) -> bool:
+    return len(_label_reviewers(review_labels, "Same")) >= 2
 
 
 def _fieldname_from_registration(value: Any) -> str:
@@ -1011,6 +1025,21 @@ def submit_review(pair_name: str, label: str, notes: str = "") -> dict[str, str]
         # is manager-only so the second reviewer remains blinded.
         pair.needs_double_review = 1
         pair.double_review_reason = "positive_confirmation"
+    adjudicated_same = any(
+        row.is_adjudication and row.label == "Same" for row in pair.review_labels
+    )
+    if adjudicated_same:
+        pair.needs_double_review = 1
+        pair.double_review_reason = "positive_confirmation"
+        if _positive_confirmation_complete(pair.review_labels):
+            pair.review_status = "Adjudicated"
+            pair.final_label = "Same"
+        else:
+            pair.review_status = POSITIVE_CONFIRMATION_REQUIRED
+            pair.final_label = ""
+        pair.save(ignore_permissions=True)
+        frappe.db.commit()
+        return {"pair": pair.name, "status": pair.review_status}
     ordinary = [row.label for row in pair.review_labels if not row.is_adjudication]
     required = 2 if pair.needs_double_review else 1
     if "Unsure" in ordinary:
@@ -1048,11 +1077,25 @@ def adjudicate_review(pair_name: str, label: str, notes: str = "") -> dict[str, 
             "is_adjudication": 1,
         },
     )
-    pair.final_label = label
-    pair.review_status = "Adjudicated"
+    if label == "Same":
+        pair.needs_double_review = 1
+        pair.double_review_reason = "positive_confirmation"
+        if _positive_confirmation_complete(pair.review_labels):
+            pair.final_label = "Same"
+            pair.review_status = "Adjudicated"
+        else:
+            pair.final_label = ""
+            pair.review_status = POSITIVE_CONFIRMATION_REQUIRED
+    else:
+        pair.final_label = "Different"
+        pair.review_status = "Adjudicated"
     pair.save(ignore_permissions=True)
     frappe.db.commit()
-    return {"pair": pair.name, "status": pair.review_status, "final_label": label}
+    return {
+        "pair": pair.name,
+        "status": pair.review_status,
+        "final_label": pair.final_label or "",
+    }
 
 
 def _stable_partition(name: str) -> str:

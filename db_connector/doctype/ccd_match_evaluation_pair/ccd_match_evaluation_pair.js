@@ -7,6 +7,12 @@ frappe.ui.form.on("CCD Match Evaluation Pair", {
 				frm.add_custom_button(__(label), () => submit_label(frm, label), __("Review"));
 			}
 		}
+		if (frm.doc.review_status === "Positive Confirmation Required") {
+			frm.dashboard.set_headline_alert(
+				__("A second independent Same confirmation is required before finalization."),
+				"orange",
+			);
+		}
 		if (
 			!frm.doc.stale &&
 			frm.doc.review_status === "Needs Adjudication" &&
