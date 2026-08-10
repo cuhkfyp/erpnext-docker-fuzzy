@@ -112,6 +112,46 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
+def _ordered_pair_key(left_id: Any, right_id: Any) -> tuple[str, str]:
+    """Return an orientation-independent record-pair key."""
+    return tuple(sorted((str(left_id), str(right_id))))
+
+
+def _historical_evaluation_pair_keys(run_name: str) -> set[tuple[str, str]]:
+    """Return every pair previously placed in a human evaluation set.
+
+    Threshold evaluations must remain genuinely held out.  Excluding all prior
+    evaluation pairs also prevents reviewers from being asked to label the same
+    records again, regardless of whether the older run was approved or rejected.
+    """
+    rows = frappe.db.sql(
+        """SELECT left_record, right_record
+           FROM `tabCCD Match Evaluation Pair`
+           WHERE evaluation_run != %s""",
+        run_name,
+        as_dict=True,
+    )
+    return {
+        _ordered_pair_key(row.left_record, row.right_record)
+        for row in rows
+    }
+
+
+def _eligible_source_pair_counts(
+    pairs: list[CandidatePair],
+    excluded_pair_keys: set[tuple[str, str]],
+) -> tuple[Counter, int]:
+    """Count eligible candidates by source pair and report exclusions."""
+    counts: Counter = Counter()
+    excluded_count = 0
+    for pair in pairs:
+        if _ordered_pair_key(pair.left_id, pair.right_id) in excluded_pair_keys:
+            excluded_count += 1
+            continue
+        counts[pair.source_pair] += 1
+    return counts, excluded_count
+
+
 def _label_reviewers(review_labels: list[Any], label: str) -> set[str]:
     """Return distinct human identities supporting a label, including adjudicators."""
     return {
@@ -673,8 +713,19 @@ def run_evaluation(run_name: str) -> None:
                 fields=["name", "fuzzymachingscript"],
             )
         }
+        historical_pair_keys: set[tuple[str, str]] = set()
+        historical_candidate_exclusions = 0
+        eligible_source_pair_counts = Counter(pair.source_pair for pair in blocked.pairs)
+        if (run.run_purpose or THRESHOLD_EVALUATION) == THRESHOLD_EVALUATION:
+            historical_pair_keys = _historical_evaluation_pair_keys(run.name)
+            eligible_source_pair_counts, historical_candidate_exclusions = (
+                _eligible_source_pair_counts(blocked.pairs, historical_pair_keys)
+            )
+
         def evaluated_results():
             for pair in blocked.pairs:
+                if _ordered_pair_key(pair.left_id, pair.right_id) in historical_pair_keys:
+                    continue
                 left = record_by_id[pair.left_id]
                 right = record_by_id[pair.right_id]
                 result = compare_all_models(pair, left, right, policy)
@@ -734,7 +785,7 @@ def run_evaluation(run_name: str) -> None:
                 evaluated_results(),
                 int(run.sample_size),
                 seed=run.name,
-                source_pair_counts=dict(Counter(pair.source_pair for pair in blocked.pairs)),
+                source_pair_counts=dict(eligible_source_pair_counts),
             )
         required_ids = {
             record_id
@@ -848,6 +899,9 @@ def run_evaluation(run_name: str) -> None:
                     "benchmark_candidate_recovered": sum(
                         item["candidate_recovered"] for item in benchmark_metadata.values()
                     ),
+                    "historical_evaluation_pair_keys": len(historical_pair_keys),
+                    "historical_candidate_pairs_excluded": historical_candidate_exclusions,
+                    "eligible_candidate_pairs": sum(eligible_source_pair_counts.values()),
                 }
             ),
             update_modified=False,

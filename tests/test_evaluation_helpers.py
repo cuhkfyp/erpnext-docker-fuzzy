@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from fuzzy_matching.policy import MatchingPolicy, SourceProfile
-from fuzzy_matching.types import MatchTier
+from fuzzy_matching.types import CandidatePair, MatchTier
 
 
 class EvaluationHelperTests(unittest.TestCase):
@@ -48,6 +48,19 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertFalse(self.module._positive_confirmation_complete(rows))
         rows.append(types.SimpleNamespace(reviewer="reviewer-b", label="Same"))
         self.assertTrue(self.module._positive_confirmation_complete(rows))
+
+    def test_historical_pair_exclusion_is_orientation_independent(self):
+        pairs = [
+            CandidatePair("A1", "B1", "A::B", ("chi_full",)),
+            CandidatePair("A2", "B2", "A::B", ("eng_name",)),
+            CandidatePair("C1", "D1", "C::D", ("phone",)),
+        ]
+        counts, excluded = self.module._eligible_source_pair_counts(
+            pairs,
+            {self.module._ordered_pair_key("B1", "A1")},
+        )
+        self.assertEqual(excluded, 1)
+        self.assertEqual(counts, {"A::B": 1, "C::D": 1})
 
     def test_hybrid_keeps_conflict_gate_and_requires_calibrated_high(self):
         conflict = self.module._hybrid_tier(MatchTier.CONFLICT.value, 0.999, 0.9, 0.6)
