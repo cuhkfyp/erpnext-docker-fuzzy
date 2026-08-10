@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from itertools import combinations
 from typing import Any
 
@@ -27,7 +28,8 @@ BLOCK_ROUTE_PRIORITY = {
     "chi_name_prefix": 7,
 }
 
-BLOCKING_VERSION = "pilot-blocking-1.4"
+BLOCKING_VERSION = "pilot-blocking-1.5"
+BROAD_NAME_ROUTES = frozenset({"chi_name_prefix", "eng_name"})
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,95 @@ def record_id(record: dict[str, Any]) -> str:
 
 def record_source(record: dict[str, Any]) -> str:
     return str(record.get("source") or record.get("ccd_reg_source") or "")
+
+
+def _ratio(left: str, right: str) -> float:
+    try:
+        from rapidfuzz import fuzz
+
+        return fuzz.ratio(left, right) / 100.0
+    except Exception:
+        return SequenceMatcher(None, left, right).ratio()
+
+
+def _token_ratio(left: str, right: str) -> float:
+    try:
+        from rapidfuzz import fuzz
+
+        return fuzz.token_set_ratio(left, right) / 100.0
+    except Exception:
+        return _ratio(" ".join(sorted(left.split())), " ".join(sorted(right.split())))
+
+
+def _broad_name_values(
+    route: str,
+    by_id: dict[str, dict[str, Any]],
+    policy: MatchingPolicy,
+) -> tuple[dict[str, str], dict[str, str]]:
+    if route == "chi_name_prefix":
+        primary = {
+            item: norm.chinese_compact(policy.value(record, "chi_firstname"))
+            for item, record in by_id.items()
+        }
+        secondary = {item: norm.chinese_pinyin(value) for item, value in primary.items()}
+        return primary, secondary
+    primary = {
+        item: norm.english_words(policy.value(record, "eng_firstname"))
+        for item, record in by_id.items()
+    }
+    return primary, {}
+
+
+def _ranked_broad_candidates(
+    route: str,
+    blocks: list[tuple[str, ...]],
+    by_id: dict[str, dict[str, Any]],
+    policy: MatchingPolicy,
+    existing_pairs: set[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Return deterministic nearest-name pairs, sparse endpoints first.
+
+    Each record nominates its closest name within every other source represented
+    in its block. Ranking the nominated pairs by the smaller endpoint choice set
+    prevents large integrations from starving records that have only one or a
+    few possible cross-source counterparts.
+    """
+    primary, secondary = _broad_name_values(route, by_id, policy)
+    selector_counts: Counter[tuple[str, str]] = Counter()
+    best: dict[tuple[str, str], tuple[float, bytes, tuple[str, str]]] = {}
+    for ids in blocks:
+        for left_id, right_id in combinations(ids, 2):
+            left_source = record_source(by_id[left_id])
+            right_source = record_source(by_id[right_id])
+            pair = (left_id, right_id)
+            if (
+                not left_source
+                or not right_source
+                or left_source == right_source
+                or pair in existing_pairs
+            ):
+                continue
+            selectors = ((left_id, right_source), (right_id, left_source))
+            selector_counts.update(selectors)
+            score = _ratio(primary[left_id], primary[right_id])
+            if secondary:
+                score = max(score, _token_ratio(secondary[left_id], secondary[right_id]))
+            digest = hashlib.sha256(f"{route}:{left_id}:{right_id}".encode()).digest()
+            for selector in selectors:
+                current = best.get(selector)
+                if current is None or score > current[0] or (
+                    score == current[0] and digest < current[1]
+                ):
+                    best[selector] = (score, digest, pair)
+
+    ranked: dict[tuple[str, str], tuple[int, float, bytes]] = {}
+    for selector, (score, digest, pair) in best.items():
+        scarcity = selector_counts[selector]
+        current = ranked.get(pair)
+        metadata = (scarcity, -score, digest)
+        if current is None or metadata < current:
+            ranked[pair] = metadata
+    return sorted(ranked, key=ranked.__getitem__)
 
 
 def blocking_keys(record: dict[str, Any], policy: MatchingPolicy) -> set[str]:
@@ -116,7 +207,8 @@ def generate_candidate_pairs(
 
     routes_by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
     skipped: list[str] = []
-    retained_blocks: list[tuple[str, tuple[str, ...]]] = []
+    strong_blocks: list[tuple[str, tuple[str, ...]]] = []
+    broad_blocks: dict[str, list[tuple[str, ...]]] = defaultdict(list)
     for key, raw_ids in index.items():
         ids = tuple(sorted(set(raw_ids)))
         if len(ids) > policy.max_block_size:
@@ -124,12 +216,14 @@ def generate_candidate_pairs(
             digest = hashlib.sha256(key.encode()).hexdigest()[:12]
             skipped.append(f"{route}:{digest} ({len(ids)} records)")
             continue
-        retained_blocks.append((key, ids))
+        route = key.split(":", 1)[0]
+        if route in BROAD_NAME_ROUTES:
+            broad_blocks[route].append(ids)
+        else:
+            strong_blocks.append((key, ids))
 
-    # Stronger and smaller blocks are processed first. This makes a bounded
-    # candidate set deterministic and prevents broad name blocks from starving
-    # exact identifiers, contacts, or date/name combinations.
-    retained_blocks.sort(
+    # Retain every stronger exact candidate before the bounded name fallbacks.
+    strong_blocks.sort(
         key=lambda item: (
             BLOCK_ROUTE_PRIORITY.get(item[0].split(":", 1)[0], 99),
             len(item[1]),
@@ -137,7 +231,7 @@ def generate_candidate_pairs(
         )
     )
     truncated = False
-    for key, ids in retained_blocks:
+    for key, ids in strong_blocks:
         for left_id, right_id in combinations(ids, 2):
             left, right = by_id[left_id], by_id[right_id]
             left_source, right_source = record_source(left), record_source(right)
@@ -150,6 +244,51 @@ def generate_candidate_pairs(
                 break
         if truncated:
             break
+
+    # Broad prefix blocks can contain millions of cross-products. Instead of
+    # exhausting them in block order, each endpoint nominates its closest name
+    # per other source. Routes then round-robin those nominations, prioritizing
+    # sparse endpoints, until the shared policy budget is full.
+    if not truncated and broad_blocks:
+        existing_pairs = set(routes_by_pair)
+        ranked_by_route = {
+            route: _ranked_broad_candidates(
+                route,
+                blocks,
+                by_id,
+                policy,
+                existing_pairs,
+            )
+            for route, blocks in sorted(broad_blocks.items())
+        }
+        offsets = {route: 0 for route in ranked_by_route}
+        active = list(sorted(ranked_by_route))
+        while active and len(routes_by_pair) < policy.max_candidate_pairs:
+            next_active = []
+            for route in active:
+                ranked = ranked_by_route[route]
+                offset = offsets[route]
+                added = False
+                while offset < len(ranked):
+                    pair_key = ranked[offset]
+                    offset += 1
+                    was_present = pair_key in routes_by_pair
+                    routes_by_pair[pair_key].add(route)
+                    if not was_present:
+                        added = True
+                        break
+                offsets[route] = offset
+                if offset < len(ranked):
+                    next_active.append(route)
+                if len(routes_by_pair) >= policy.max_candidate_pairs:
+                    break
+                if not added and offset >= len(ranked):
+                    continue
+            active = next_active
+        truncated = any(
+            offsets[route] < len(ranked)
+            for route, ranked in ranked_by_route.items()
+        )
 
     pairs = []
     for (left_id, right_id), routes in sorted(routes_by_pair.items()):

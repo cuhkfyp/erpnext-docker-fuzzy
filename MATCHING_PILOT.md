@@ -107,10 +107,13 @@ of several blocking routes:
 Large blocks and the total candidate set have policy limits. Oversized block
 metadata stores only its route, a one-way digest, and count—not the underlying
 name, phone, email, or identifier. Candidate truncation is recorded on the run
-and must be treated as a recall warning. Within the cap, blocks are processed
-deterministically with exact identifiers and contacts first, followed by
-date/name and progressively broader name routes; smaller blocks win within a
-route. This prevents a broad name block from starving stronger evidence.
+and must be treated as a recall warning. Exact identifiers, contacts, dates,
+and bounded exact-name variants are retained first. For broad Chinese and
+English prefix blocks, each record nominates its closest name per other source;
+the remaining budget round-robins across routes with sparse endpoints first.
+This prevents high-volume integrations and common-name blocks from starving
+records that have only a few possible cross-source counterparts. Pilot 1.5 uses
+a 1,000,000-pair safety ceiling.
 
 ## Sampling and labels
 
@@ -183,7 +186,7 @@ logic during the comparison.
 Each `CCD Matching Source Profile` row maps one canonical attribute to an actual
 `CCD Master` field and records identifier scope/reliability. Start strong-ID
 scope values as `Unknown` until profiling and governance review are complete.
-The governed `pilot-1.4` exception is HKID: a mapped HKID field is global only
+The governed `pilot-1.5` exception is HKID: a mapped HKID field is global only
 for values that are structurally complete and pass the official check-digit
 calculation. Partial values, masks such as `*` or `X`, and invalid check digits
 remain unverified review-only evidence and never create a deterministic High
@@ -239,7 +242,7 @@ bench --site <site> execute db_connector.api_fuzzy_evaluation.install_matching_r
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_default_pilot_policy
 ```
 
-Both helper commands are idempotent. The second creates `pilot-1.4` only when
+Both helper commands are idempotent. The second creates `pilot-1.5` only when
 missing and imports governed source mappings. HKID is the only default trusted
 global identifier and is still gated per value by complete-format/check-digit
 validation.
@@ -256,7 +259,7 @@ identifiers remain unverified until separately approved.
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
-  --kwargs '{"policy_name":"pilot-1.4","sample_size":500,"double_review_count":100}'
+  --kwargs '{"policy_name":"pilot-1.5","sample_size":500,"double_review_count":100}'
 ```
 
 `install_evaluation_run` is deliberately bench-only and avoids putting an
@@ -267,7 +270,7 @@ For a separate positive-enriched blocking benchmark, use:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_positive_benchmark_run \
-  --kwargs '{"policy_name":"pilot-1.4","sample_size":100,"double_review_count":20}'
+  --kwargs '{"policy_name":"pilot-1.5","sample_size":100,"double_review_count":20}'
 ```
 
 This benchmark discovers unseen cross-source pairs from legacy score rows at or

@@ -97,6 +97,21 @@ class BlockingTests(unittest.TestCase):
         self.assertIn("chi_pinyin_full", by_pair[("A", "B")])
         self.assertIn("chi_given_sorted", by_pair[("A", "C")])
 
+    def test_broad_name_cap_prioritizes_best_match_for_sparse_endpoint(self):
+        records = [
+            {"record_id": "A1", "source": "A", "chi_surname": "陳", "chi_firstname": "大文強"},
+            {"record_id": "A2", "source": "A", "chi_surname": "陳", "chi_firstname": "大東海"},
+            {"record_id": "B1", "source": "B", "chi_surname": "陳", "chi_firstname": "大文康"},
+        ]
+        result = generate_candidate_pairs(records, MatchingPolicy(max_candidate_pairs=1))
+        reversed_result = generate_candidate_pairs(
+            list(reversed(records)), MatchingPolicy(max_candidate_pairs=1)
+        )
+        self.assertEqual(result.pairs, reversed_result.pairs)
+        self.assertTrue(result.truncated)
+        self.assertEqual((result.pairs[0].left_id, result.pairs[0].right_id), ("A1", "B1"))
+        self.assertIn("chi_name_prefix", result.pairs[0].blocking_routes)
+
     def test_oversized_block_metadata_does_not_expose_field_value(self):
         records = [
             {"record_id": "A", "source": "A", "phone_num": "11111111"},

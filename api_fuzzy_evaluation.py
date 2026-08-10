@@ -51,7 +51,7 @@ SENSITIVE_ATTRIBUTES = {"hkid", "hksr_num"}
 MAX_SPLINK_TRAINING_RECORDS = 5_000
 THRESHOLD_EVALUATION = "Threshold Evaluation"
 POSITIVE_BENCHMARK = "Positive Benchmark"
-DEFAULT_PILOT_POLICY_VERSION = "pilot-1.4"
+DEFAULT_PILOT_POLICY_VERSION = "pilot-1.5"
 LEGACY_BENCHMARK_MIN_SCORE = 0.9
 POSITIVE_CONFIRMATION_REQUIRED = "Positive Confirmation Required"
 
@@ -521,7 +521,7 @@ def _ensure_default_pilot_policy(policy_version: str) -> dict[str, Any]:
             "minimum_high_samples": 30,
             "minimum_positive_labels_per_split": 10,
             "max_block_size": 10_000,
-            "max_candidate_pairs": 500_000,
+            "max_candidate_pairs": 1_000_000,
             "notes": (
                 "Generated from CCD Registration mappings. Strong identifier scope "
                 "starts Unknown and must be approved before it can create a High match. "
