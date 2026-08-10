@@ -118,16 +118,33 @@ def _ordered_pair_key(left_id: Any, right_id: Any) -> tuple[str, str]:
 
 
 def _historical_evaluation_pair_keys(run_name: str) -> set[tuple[str, str]]:
-    """Return every pair previously placed in a human evaluation set.
+    """Return pairs from prior valid or human-used evaluation sets.
 
     Threshold evaluations must remain genuinely held out.  Excluding all prior
-    evaluation pairs also prevents reviewers from being asked to label the same
-    records again, regardless of whether the older run was approved or rejected.
+    usable evaluation pairs also prevents reviewers from being asked to label
+    the same records again, regardless of whether the older run was approved or
+    rejected.  A Failed run with no labels is only a discarded quality-control
+    artifact; retaining it here could exhaust a sparse source pair even though
+    no human ever reviewed its sample.
     """
     rows = frappe.db.sql(
-        """SELECT left_record, right_record
-           FROM `tabCCD Match Evaluation Pair`
-           WHERE evaluation_run != %s""",
+        """SELECT pair.left_record, pair.right_record
+           FROM `tabCCD Match Evaluation Pair` pair
+           INNER JOIN `tabCCD Match Evaluation Run` run
+                   ON run.name = pair.evaluation_run
+           WHERE pair.evaluation_run != %s
+             AND (
+                 run.status != 'Failed'
+                 OR pair.evaluation_run IN (
+                     SELECT reviewed_pair.evaluation_run
+                     FROM `tabCCD Match Evaluation Pair` reviewed_pair
+                     LEFT JOIN `tabCCD Match Review Label` review_label
+                            ON review_label.parent = reviewed_pair.name
+                     WHERE COALESCE(reviewed_pair.final_label, '') != ''
+                        OR review_label.name IS NOT NULL
+                     GROUP BY reviewed_pair.evaluation_run
+                 )
+             )""",
         run_name,
         as_dict=True,
     )
