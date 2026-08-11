@@ -49,6 +49,22 @@ class EvaluationHelperTests(unittest.TestCase):
         rows.append(types.SimpleNamespace(reviewer="reviewer-b", label="Same"))
         self.assertTrue(self.module._positive_confirmation_complete(rows))
 
+    def test_positive_confirmation_preserves_randomized_assignment_reason(self):
+        sampled = types.SimpleNamespace(
+            needs_double_review=1,
+            double_review_reason="sampled",
+        )
+        self.module._mark_positive_confirmation_required(sampled)
+        self.assertEqual(sampled.double_review_reason, "sampled")
+
+        newly_positive = types.SimpleNamespace(
+            needs_double_review=0,
+            double_review_reason="",
+        )
+        self.module._mark_positive_confirmation_required(newly_positive)
+        self.assertEqual(newly_positive.needs_double_review, 1)
+        self.assertEqual(newly_positive.double_review_reason, "positive_confirmation")
+
     def test_historical_pair_exclusion_is_orientation_independent(self):
         pairs = [
             CandidatePair("A1", "B1", "A::B", ("chi_full",)),

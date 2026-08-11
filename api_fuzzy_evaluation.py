@@ -12,6 +12,7 @@ import json
 import traceback
 from collections import Counter
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 import frappe
@@ -180,6 +181,13 @@ def _label_reviewers(review_labels: list[Any], label: str) -> set[str]:
 
 def _positive_confirmation_complete(review_labels: list[Any]) -> bool:
     return len(_label_reviewers(review_labels, "Same")) >= 2
+
+
+def _mark_positive_confirmation_required(pair: Any) -> None:
+    """Require a second Same without erasing a randomized-review assignment."""
+    pair.needs_double_review = 1
+    if not pair.double_review_reason:
+        pair.double_review_reason = "positive_confirmation"
 
 
 def _fieldname_from_registration(value: Any) -> str:
@@ -1093,18 +1101,16 @@ def submit_review(pair_name: str, label: str, notes: str = "") -> dict[str, str]
             "is_adjudication": 0,
         },
     )
-    if label == "Same" and not pair.needs_double_review:
+    if label == "Same":
         # Every observed positive requires independent confirmation, even when
         # it was not part of the pre-assigned double-review sample.  The reason
         # is manager-only so the second reviewer remains blinded.
-        pair.needs_double_review = 1
-        pair.double_review_reason = "positive_confirmation"
+        _mark_positive_confirmation_required(pair)
     adjudicated_same = any(
         row.is_adjudication and row.label == "Same" for row in pair.review_labels
     )
     if adjudicated_same:
-        pair.needs_double_review = 1
-        pair.double_review_reason = "positive_confirmation"
+        _mark_positive_confirmation_required(pair)
         if _positive_confirmation_complete(pair.review_labels):
             pair.review_status = "Adjudicated"
             pair.final_label = "Same"
@@ -1158,8 +1164,7 @@ def adjudicate_review(pair_name: str, label: str, notes: str = "") -> dict[str, 
         },
     )
     if label == "Same":
-        pair.needs_double_review = 1
-        pair.double_review_reason = "positive_confirmation"
+        _mark_positive_confirmation_required(pair)
         if _positive_confirmation_complete(pair.review_labels):
             pair.final_label = "Same"
             pair.review_status = "Adjudicated"
@@ -1191,6 +1196,79 @@ def _pair_is_stale(pair: Any) -> bool:
         or frappe.utils.get_datetime(left_modified) != frappe.utils.get_datetime(pair.left_modified_at)
         or frappe.utils.get_datetime(right_modified) != frappe.utils.get_datetime(pair.right_modified_at)
     )
+
+
+def install_review_reason_repair(run_name: str) -> dict[str, int | str]:
+    """Restore deterministic randomized-review reasons before finalization.
+
+    This bench-only repair changes no human label or final decision. It is
+    needed for runs created before Same adjudication stopped overwriting the
+    original ``sampled`` assignment reason.
+    """
+    run = frappe.get_doc("CCD Match Evaluation Run", run_name)
+    if run.status != "Reviewing":
+        frappe.throw("Review-reason repair requires a run in Reviewing status")
+    pairs = frappe.get_all(
+        "CCD Match Evaluation Pair",
+        filters={"evaluation_run": run.name},
+        fields=[
+            "name",
+            "left_record",
+            "right_record",
+            "source_pair",
+            "needs_double_review",
+            "double_review_reason",
+        ],
+    )
+    pair_by_key = {
+        f"{pair.left_record}::{pair.right_record}": pair
+        for pair in pairs
+    }
+    sampled_keys = double_review_ids(
+        [
+            SimpleNamespace(
+                pair=CandidatePair(
+                    str(pair.left_record),
+                    str(pair.right_record),
+                    str(pair.source_pair),
+                    (),
+                )
+            )
+            for pair in pairs
+        ],
+        int(run.double_review_count),
+        seed=run.name,
+    )
+    restored = 0
+    for key in sampled_keys:
+        pair = pair_by_key.get(key)
+        if not pair:
+            frappe.throw("The randomized double-review assignment cannot be reconstructed")
+        if pair.needs_double_review and pair.double_review_reason == "sampled":
+            continue
+        frappe.db.set_value(
+            "CCD Match Evaluation Pair",
+            pair.name,
+            {
+                "needs_double_review": 1,
+                "double_review_reason": "sampled",
+            },
+            update_modified=False,
+        )
+        restored += 1
+
+    versions = json.loads(run.model_versions_json or "{}")
+    versions["sampled_double_review_reason_repair"] = {
+        "assigned_pairs": len(sampled_keys),
+        "restored_pairs": restored,
+    }
+    run.db_set("model_versions_json", _json(versions), update_modified=False)
+    frappe.db.commit()
+    return {
+        "run": run.name,
+        "assigned_pairs": len(sampled_keys),
+        "restored_pairs": restored,
+    }
 
 
 def _metrics_dict(value: Any) -> dict[str, Any] | None:
@@ -1419,7 +1497,15 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
         filters={"evaluation_run": run.name, "needs_double_review": 1},
         fields=["name", "final_label", "double_review_reason"],
     )
-    for pair in double_pairs:
+    randomized_double_pairs = [
+        pair for pair in double_pairs if pair.double_review_reason == "sampled"
+    ]
+    if len(randomized_double_pairs) != int(run.double_review_count):
+        frappe.throw(
+            "The randomized double-review assignment is incomplete; "
+            "repair its reason metadata before finalization"
+        )
+    for pair in randomized_double_pairs:
         labels = frappe.get_all(
             "CCD Match Review Label",
             filters={"parent": pair.name, "is_adjudication": 0},
@@ -1433,13 +1519,17 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
 
     double_agreed = sum(left == right for left, right in double_labels)
     agreement = {
-        "assigned_pairs": len(double_pairs),
+        "assigned_pairs": len(randomized_double_pairs),
         "completed_pairs": len(double_labels),
         "agreement_rate": double_agreed / len(double_labels) if double_labels else None,
         "cohens_kappa": cohens_kappa(double_labels),
         "label_patterns": dict(sorted(double_patterns.items())),
+        "total_double_review_pairs": len(double_pairs),
         "positive_confirmation_pairs": sum(
             pair.double_review_reason == "positive_confirmation" for pair in double_pairs
+        ),
+        "sampled_same_pairs": sum(
+            pair.final_label == "Same" for pair in randomized_double_pairs
         ),
         "confirmed_same_pairs": sum(pair.final_label == "Same" for pair in double_pairs),
     }
