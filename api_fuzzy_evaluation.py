@@ -1654,10 +1654,11 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
         readiness_reasons.append("candidate_generation_truncated")
     if json.loads(run.skipped_blocks_json or "[]"):
         readiness_reasons.append("oversized_blocks_skipped")
-    if not probabilistic_calibration["validation_ready"]:
-        readiness_reasons.append("insufficient_positive_labels_per_split")
-    if probabilistic_calibration["high_threshold"] is None:
-        readiness_reasons.append("automatic_high_threshold_disabled")
+    if run_purpose == THRESHOLD_EVALUATION:
+        if not probabilistic_calibration["validation_ready"]:
+            readiness_reasons.append("insufficient_positive_labels_per_split")
+        if probabilistic_calibration["high_threshold"] is None:
+            readiness_reasons.append("automatic_high_threshold_disabled")
 
     benchmark_pairs = [pair for pair in pairs if pair.benchmark_origin]
     confirmed_benchmark_same = [pair for pair in benchmark_pairs if pair.final_label == "Same"]
@@ -1686,14 +1687,21 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
     high_validation = None
     if run_purpose == HIGH_TIER_VALIDATION:
         versions = json.loads(run.model_versions_json or "{}")
+        fixed_high = _fixed_tier_metrics(
+            pairs, "tiered_tier", {MatchTier.HIGH.value}
+        )["all_labeled"]
         high_validation = {
             "selection_population": versions.get("high_tier_validation_population") or {},
             "all_sampled_pairs_were_high": all(
                 pair.tiered_tier == MatchTier.HIGH.value for pair in pairs
             ),
-            "precision": _fixed_tier_metrics(
-                pairs, "tiered_tier", {MatchTier.HIGH.value}
-            )["all_labeled"],
+            "sampled_predictions": fixed_high["true_positive"]
+            + fixed_high["false_positive"],
+            "confirmed_same": fixed_high["true_positive"],
+            "confirmed_different": fixed_high["false_positive"],
+            "precision": fixed_high["precision"],
+            "precision_wilson_95": fixed_high["precision_wilson_95"],
+            "recall_estimated": False,
         }
 
     metrics = {

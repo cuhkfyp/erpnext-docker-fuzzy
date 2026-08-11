@@ -301,6 +301,9 @@ to two independent reviewers. Finalization reports conditional High precision
 with a Wilson 95% interval. Because the cohort contains only model-predicted
 High pairs, it cannot estimate recall or calibrate a general score threshold;
 those outputs remain disabled and production matching remains unchanged.
+The dedicated High-validation metric therefore reports precision and its
+confidence interval only; recall/F1 values from a High-only cohort are not
+presented as deployable evidence.
 
 ### Docker persistence on the managed host
 
