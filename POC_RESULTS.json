@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-08-11",
+  "privacy": "sanitized aggregate results only; no client or source-system identifiers",
+  "poc_status": "completed",
+  "approved_scope": "pilot-1.6 deterministic exact-name-plus-independent-evidence High validation",
+  "management_decision": "approved",
+  "production_matching_changed": false,
+  "data_profile": {
+    "governed_record_count": 251520,
+    "governed_source_count": 10,
+    "candidate_pair_count": 821592,
+    "eligible_unseen_candidate_pair_count": 820886,
+    "eligible_unseen_deterministic_high_count": 3950,
+    "high_population_in_sampled_source_groups": 3933,
+    "sparse_group_high_exceptions": 17
+  },
+  "representative_evaluation": {
+    "labeled_pairs": 500,
+    "same": 98,
+    "different": 402,
+    "randomized_double_review_pairs": 100,
+    "total_double_review_pairs": 190,
+    "randomized_raw_agreement": 0.96,
+    "randomized_cohens_kappa": 0.8338870431893687,
+    "adjudicated_pairs": 16,
+    "stale_pairs": 0
+  },
+  "high_validation": {
+    "eligible_population": 3950,
+    "sampling_method": "uniform deterministic bottom-k over unseen deterministic High predictions",
+    "sampled_pairs": 100,
+    "double_reviewed_pairs": 100,
+    "confirmed_same": 100,
+    "confirmed_different": 0,
+    "raw_reviewer_agreement": 0.98,
+    "adjudicated_pairs": 2,
+    "precision": 1.0,
+    "precision_wilson_95": [
+      0.9630051925239981,
+      0.9999999999999999
+    ],
+    "recall_estimated": false
+  },
+  "models": {
+    "baseline_current_flag": {
+      "all_labeled_precision": 0.3333333333333333,
+      "all_labeled_recall": 0.5306122448979592,
+      "held_out_precision": 0.3472222222222222,
+      "held_out_recall": 0.6578947368421053,
+      "automatic_high_approved": false,
+      "role": "existing control/current path"
+    },
+    "tiered_evidence_gated": {
+      "representative_all_high_predictions": 13,
+      "representative_all_high_precision": 1.0,
+      "representative_all_high_precision_wilson_lower": 0.7718981569447083,
+      "targeted_high_predictions": 100,
+      "targeted_high_precision": 1.0,
+      "targeted_high_precision_wilson_lower": 0.9630051925239981,
+      "approved_scope": "reversible recommendation canary subject to safety gates"
+    },
+    "recoverable_conflict": {
+      "automatic_conflict_high_allowed": false,
+      "role": "human exception routing"
+    },
+    "splink": {
+      "adapter_version": "pilot-splink-1.1",
+      "representative_available_pairs": 482,
+      "calibration_review_precision": 0.4491525423728814,
+      "calibration_review_recall": 0.8833333333333333,
+      "held_out_review_precision": 0.4461538461538462,
+      "held_out_review_recall": 0.7631578947368421,
+      "automatic_high_threshold": null,
+      "role": "review ranking and future recalibration"
+    },
+    "hybrid": {
+      "automatic_high_threshold": null,
+      "role": "shadow and review prioritization"
+    }
+  },
+  "next_authorization": "build a reversible recommendation-only canary; no automatic merge or Is Matched mutation"
+}

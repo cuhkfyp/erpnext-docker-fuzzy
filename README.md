@@ -15,6 +15,21 @@ This repository contains two deliberately separate paths:
   They never set `Is Matched?` and never modify the production match table. See
   [`MATCHING_PILOT.md`](MATCHING_PILOT.md).
 
+## Management POC
+
+The completed, sanitized proof-of-concept package is available in:
+
+- [`POC_REPORT.md`](POC_REPORT.md) — executive case, five-model evaluation,
+  aggregate evidence, controls, limitations, and rollout proposal;
+- [`POC_DEMO.md`](POC_DEMO.md) — a 12–15 minute presentation and live-demo
+  guide for management; and
+- [`POC_RESULTS.json`](POC_RESULTS.json) — machine-readable, non-identifying
+  aggregate results.
+
+The POC approves evidence for a narrow deterministic High recommendation rule.
+It does not authorize automatic record merging, `Is Matched?` changes, or a
+general Splink probability threshold.
+
 ## Install the pilot
 
 On the managed Docker host, use the checked-in deployment helper. It captures

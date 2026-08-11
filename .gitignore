@@ -20,6 +20,9 @@
 !tests/
 !tests/**
 !MATCHING_PILOT.md
+!POC_REPORT.md
+!POC_DEMO.md
+!POC_RESULTS.json
 !deployment/
 !deployment/**
 
