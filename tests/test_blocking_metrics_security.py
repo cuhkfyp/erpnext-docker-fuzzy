@@ -9,9 +9,9 @@ from fuzzy_matching.security import mask_identifier, redact, safe_html
 class BlockingTests(unittest.TestCase):
     def test_phone_block_recovers_cross_centre_pair_with_different_names(self):
         records = [
-            {"record_id": "A", "source": "A", "eng_surname": "Example", "phone_num": "(+852) 1111 1111"},
-            {"record_id": "B", "source": "B", "eng_surname": "Different", "phone_num": "11111111"},
-            {"record_id": "C", "source": "A", "eng_surname": "Different", "phone_num": "11111111"},
+            {"record_id": "A", "source": "A", "eng_surname": "Example", "phone_num": "(+852) 6123 4567"},
+            {"record_id": "B", "source": "B", "eng_surname": "Different", "phone_num": "61234567"},
+            {"record_id": "C", "source": "A", "eng_surname": "Different", "phone_num": "61234567"},
         ]
         result = generate_candidate_pairs(records, MatchingPolicy())
         ids = {(item.left_id, item.right_id) for item in result.pairs}
@@ -20,8 +20,8 @@ class BlockingTests(unittest.TestCase):
 
     def test_same_source_pair_is_excluded(self):
         records = [
-            {"record_id": "A", "source": "A", "phone_num": "11111111"},
-            {"record_id": "B", "source": "A", "phone_num": "11111111"},
+            {"record_id": "A", "source": "A", "phone_num": "61234567"},
+            {"record_id": "B", "source": "A", "phone_num": "61234567"},
         ]
         self.assertFalse(generate_candidate_pairs(records, MatchingPolicy()).pairs)
 
@@ -65,8 +65,8 @@ class BlockingTests(unittest.TestCase):
         records = [
             {"record_id": "N1", "source": "A", "eng_surname": "Example", "eng_firstname": "Alpha"},
             {"record_id": "N2", "source": "B", "eng_surname": "Example", "eng_firstname": "Alfred"},
-            {"record_id": "P1", "source": "A", "phone_num": "11111111"},
-            {"record_id": "P2", "source": "B", "phone_num": "11111111"},
+            {"record_id": "P1", "source": "A", "phone_num": "61234567"},
+            {"record_id": "P2", "source": "B", "phone_num": "61234567"},
         ]
         policy = MatchingPolicy(max_candidate_pairs=1)
         first = generate_candidate_pairs(records, policy)
@@ -114,13 +114,13 @@ class BlockingTests(unittest.TestCase):
 
     def test_oversized_block_metadata_does_not_expose_field_value(self):
         records = [
-            {"record_id": "A", "source": "A", "phone_num": "11111111"},
-            {"record_id": "B", "source": "B", "phone_num": "11111111"},
+            {"record_id": "A", "source": "A", "phone_num": "61234567"},
+            {"record_id": "B", "source": "B", "phone_num": "61234567"},
         ]
         policy = MatchingPolicy(max_block_size=1)
         result = generate_candidate_pairs(records, policy)
         self.assertTrue(result.skipped_blocks)
-        self.assertNotIn("11111111", " ".join(result.skipped_blocks))
+        self.assertNotIn("61234567", " ".join(result.skipped_blocks))
 
 
 class MetricsTests(unittest.TestCase):

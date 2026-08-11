@@ -11,6 +11,7 @@ import heapq
 import json
 import traceback
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
@@ -43,7 +44,12 @@ from db_connector.fuzzy_matching.splink_adapter import (
     dependency_versions,
     fit_predict,
 )
-from db_connector.fuzzy_matching.types import CandidatePair, MatchTier, ModelResult
+from db_connector.fuzzy_matching.types import (
+    CandidatePair,
+    EvaluationResult,
+    MatchTier,
+    ModelResult,
+)
 
 REVIEW_ROLE = "CCD Match Reviewer"
 SENSITIVE_ROLE = "CCD Match Sensitive Reviewer"
@@ -52,7 +58,8 @@ SENSITIVE_ATTRIBUTES = {"hkid", "hksr_num"}
 MAX_SPLINK_TRAINING_RECORDS = 5_000
 THRESHOLD_EVALUATION = "Threshold Evaluation"
 POSITIVE_BENCHMARK = "Positive Benchmark"
-DEFAULT_PILOT_POLICY_VERSION = "pilot-1.5"
+HIGH_TIER_VALIDATION = "High Tier Validation"
+DEFAULT_PILOT_POLICY_VERSION = "pilot-1.6"
 LEGACY_BENCHMARK_MIN_SCORE = 0.9
 POSITIVE_CONFIRMATION_REQUIRED = "Positive Confirmation Required"
 
@@ -393,6 +400,52 @@ def _select_positive_benchmark_rows(
     )
 
 
+def _select_high_tier_validation_results(
+    results: Iterable[EvaluationResult],
+    sample_size: int,
+    *,
+    seed: str,
+) -> tuple[list[EvaluationResult], dict[str, Any]]:
+    """Uniformly sample unseen deterministic-High predictions with bounded memory."""
+    reservoir: list[tuple[int, int, EvaluationResult]] = []
+    source_pair_counts: Counter = Counter()
+    blocking_route_counts: Counter = Counter()
+    high_candidate_count = 0
+    sequence = 0
+    for result in results:
+        if result.tiered_gated.tier != MatchTier.HIGH:
+            continue
+        high_candidate_count += 1
+        source_pair_counts[result.pair.source_pair] += 1
+        blocking_route_counts["+".join(sorted(result.pair.blocking_routes))] += 1
+        digest = int(
+            hashlib.sha256(
+                f"high-validation:{seed}:{result.pair.left_id}:{result.pair.right_id}".encode()
+            ).hexdigest(),
+            16,
+        )
+        item = (-digest, sequence, result)
+        sequence += 1
+        if len(reservoir) < sample_size:
+            heapq.heappush(reservoir, item)
+        elif digest < -reservoir[0][0]:
+            heapq.heapreplace(reservoir, item)
+
+    sampled = [
+        result
+        for _, _, result in sorted(
+            reservoir,
+            key=lambda item: (-item[0], item[1]),
+        )
+    ]
+    return sampled, {
+        "eligible_high_candidates": high_candidate_count,
+        "source_pair_counts": dict(sorted(source_pair_counts.items())),
+        "blocking_route_counts": dict(sorted(blocking_route_counts.items())),
+        "sampling_method": "uniform_deterministic_bottom_k",
+    }
+
+
 def _positive_benchmark_rows(
     policy: MatchingPolicy,
     snapshot_at: Any,
@@ -631,8 +684,14 @@ def _enqueue_evaluation(
         frappe.throw("Only Draft or Pilot policies may create shadow runs")
     sample_size = max(1, min(int(sample_size), 5_000))
     double_review_count = max(0, min(int(double_review_count), sample_size))
-    if run_purpose not in {THRESHOLD_EVALUATION, POSITIVE_BENCHMARK}:
+    if run_purpose not in {
+        THRESHOLD_EVALUATION,
+        POSITIVE_BENCHMARK,
+        HIGH_TIER_VALIDATION,
+    }:
         frappe.throw("Unsupported evaluation run purpose")
+    if run_purpose == HIGH_TIER_VALIDATION:
+        double_review_count = sample_size
     policy = _policy_from_doc(policy_doc)
     if not policy.sources():
         frappe.throw("The policy has no source profiles; import CCD Registration mappings first")
@@ -702,6 +761,19 @@ def install_positive_benchmark_run(
     )
 
 
+def install_high_tier_validation_run(
+    policy_name: str = DEFAULT_PILOT_POLICY_VERSION,
+    sample_size: int = 100,
+) -> dict[str, str]:
+    """Bench-only launcher for an unseen, fully double-reviewed High sample."""
+    return _enqueue_evaluation(
+        policy_name,
+        sample_size,
+        sample_size,
+        run_purpose=HIGH_TIER_VALIDATION,
+    )
+
+
 def run_evaluation(run_name: str) -> None:
     run = frappe.get_doc("CCD Match Evaluation Run", run_name)
     run.db_set("status", "Profiling")
@@ -741,28 +813,34 @@ def run_evaluation(run_name: str) -> None:
         historical_pair_keys: set[tuple[str, str]] = set()
         historical_candidate_exclusions = 0
         eligible_source_pair_counts = Counter(pair.source_pair for pair in blocked.pairs)
-        if (run.run_purpose or THRESHOLD_EVALUATION) == THRESHOLD_EVALUATION:
+        if (run.run_purpose or THRESHOLD_EVALUATION) in {
+            THRESHOLD_EVALUATION,
+            HIGH_TIER_VALIDATION,
+        }:
             historical_pair_keys = _historical_evaluation_pair_keys(run.name)
             eligible_source_pair_counts, historical_candidate_exclusions = (
                 _eligible_source_pair_counts(blocked.pairs, historical_pair_keys)
             )
 
-        def evaluated_results():
+        def evaluated_results(*, apply_formula: bool = True):
             for pair in blocked.pairs:
                 if _ordered_pair_key(pair.left_id, pair.right_id) in historical_pair_keys:
                     continue
                 left = record_by_id[pair.left_id]
                 right = record_by_id[pair.right_id]
                 result = compare_all_models(pair, left, right, policy)
-                yield _formula_baseline(
-                    result,
-                    raw_by_id[pair.left_id],
-                    raw_by_id[pair.right_id],
-                    formulas.get(left["source"], ""),
-                    formulas.get(right["source"], ""),
-                )
+                if apply_formula:
+                    result = _formula_baseline(
+                        result,
+                        raw_by_id[pair.left_id],
+                        raw_by_id[pair.right_id],
+                        formulas.get(left["source"], ""),
+                        formulas.get(right["source"], ""),
+                    )
+                yield result
 
         benchmark_metadata: dict[tuple[str, str], dict[str, Any]] = {}
+        high_validation_metadata: dict[str, Any] = {}
         if (run.run_purpose or THRESHOLD_EVALUATION) == POSITIVE_BENCHMARK:
             benchmark_rows = _positive_benchmark_rows(
                 policy,
@@ -805,6 +883,26 @@ def run_evaluation(run_name: str) -> None:
                     "benchmark_origin": "legacy_score_gte_090_discovery_only",
                     "candidate_recovered": int(key in recovered),
                 }
+        elif (run.run_purpose or THRESHOLD_EVALUATION) == HIGH_TIER_VALIDATION:
+            sampled, high_validation_metadata = _select_high_tier_validation_results(
+                evaluated_results(apply_formula=False),
+                int(run.sample_size),
+                seed=run.name,
+            )
+            if len(sampled) != int(run.sample_size):
+                frappe.throw(
+                    "Fewer unseen deterministic-High pairs are available than requested"
+                )
+            sampled = [
+                _formula_baseline(
+                    result,
+                    raw_by_id[result.pair.left_id],
+                    raw_by_id[result.pair.right_id],
+                    formulas.get(record_by_id[result.pair.left_id]["source"], ""),
+                    formulas.get(record_by_id[result.pair.right_id]["source"], ""),
+                )
+                for result in sampled
+            ]
         else:
             sampled = stratified_sample(
                 evaluated_results(),
@@ -885,6 +983,12 @@ def run_evaluation(run_name: str) -> None:
                             "tiered_gated": result.tiered_gated.reasons,
                             "tiered_recoverable": result.tiered_recoverable.reasons,
                             "hybrid": result.hybrid.reasons if result.hybrid else (),
+                            "selection": (
+                                {"origin": "unseen_tiered_gated_high"}
+                                if (run.run_purpose or THRESHOLD_EVALUATION)
+                                == HIGH_TIER_VALIDATION
+                                else {}
+                            ),
                         }
                     ),
                     "needs_double_review": int(pair_key in doubles),
@@ -924,6 +1028,7 @@ def run_evaluation(run_name: str) -> None:
                     "benchmark_candidate_recovered": sum(
                         item["candidate_recovered"] for item in benchmark_metadata.values()
                     ),
+                    "high_tier_validation_population": high_validation_metadata,
                     "historical_evaluation_pair_keys": len(historical_pair_keys),
                     "historical_candidate_pairs_excluded": historical_candidate_exclusions,
                     "eligible_candidate_pairs": sum(eligible_source_pair_counts.values()),
@@ -1464,17 +1569,20 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
     high_threshold = probabilistic_calibration["high_threshold"]
     review_threshold = probabilistic_calibration["review_threshold"]
     run_purpose = run.run_purpose or THRESHOLD_EVALUATION
-    if run_purpose == POSITIVE_BENCHMARK:
-        # Positive enrichment is useful for blocking recall and feature
-        # diagnosis, but its prevalence-dependent precision cannot calibrate a
-        # deployable threshold.
+    if run_purpose in {POSITIVE_BENCHMARK, HIGH_TIER_VALIDATION}:
+        # Targeted cohorts are useful for a specific conditional question, but
+        # cannot calibrate a prevalence-dependent deployable threshold.
         high_threshold = None
         review_threshold = None
         for calibration in (baseline_calibration, probabilistic_calibration):
             calibration["high_threshold"] = None
             calibration["review_threshold"] = None
             calibration["validation_ready"] = False
-            calibration["warning"] = "positive_benchmark_nonrepresentative"
+            calibration["warning"] = (
+                "positive_benchmark_nonrepresentative"
+                if run_purpose == POSITIVE_BENCHMARK
+                else "high_tier_validation_nonrepresentative"
+            )
     for pair in pairs:
         pair.hybrid_tier = _hybrid_tier(
             pair.tiered_tier,
@@ -1537,6 +1645,8 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
     readiness_reasons = []
     if run_purpose == POSITIVE_BENCHMARK:
         readiness_reasons.append("positive_benchmark_nonrepresentative")
+    if run_purpose == HIGH_TIER_VALIDATION:
+        readiness_reasons.append("high_tier_validation_nonrepresentative")
     if run.candidate_truncated:
         readiness_reasons.append("candidate_generation_truncated")
     if json.loads(run.skipped_blocks_json or "[]"):
@@ -1570,6 +1680,19 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
             ),
         }
 
+    high_validation = None
+    if run_purpose == HIGH_TIER_VALIDATION:
+        versions = json.loads(run.model_versions_json or "{}")
+        high_validation = {
+            "selection_population": versions.get("high_tier_validation_population") or {},
+            "all_sampled_pairs_were_high": all(
+                pair.tiered_tier == MatchTier.HIGH.value for pair in pairs
+            ),
+            "precision": _fixed_tier_metrics(
+                pairs, "tiered_tier", {MatchTier.HIGH.value}
+            )["all_labeled"],
+        }
+
     metrics = {
         "run_purpose": run_purpose,
         "labeled_pairs": len(pairs),
@@ -1580,6 +1703,7 @@ def finalize_evaluation(run_name: str) -> dict[str, Any]:
             "reasons": readiness_reasons,
         },
         "blocking_benchmark": blocking_benchmark,
+        "high_tier_validation": high_validation,
         "models": {
             "baseline_score_calibration": baseline_calibration,
             "baseline_current_flag": _fixed_tier_metrics(pairs, "baseline_tier", {MatchTier.REVIEW.value}),

@@ -112,8 +112,11 @@ and bounded exact-name variants are retained first. For broad Chinese and
 English prefix blocks, each record nominates its closest name per other source;
 the remaining budget round-robins across routes with sparse endpoints first.
 This prevents high-volume integrations and common-name blocks from starving
-records that have only a few possible cross-source counterparts. Pilot 1.5 uses
-a 1,000,000-pair safety ceiling.
+records that have only a few possible cross-source counterparts. Pilot 1.6 uses
+a 1,000,000-pair safety ceiling. Phone evidence is limited to normalized
+eight-digit Hong Kong subscriber numbers with an allocated initial digit;
+obvious full ascending or descending sequences are treated as missing
+placeholders rather than identity evidence.
 
 ## Sampling and labels
 
@@ -186,7 +189,7 @@ logic during the comparison.
 Each `CCD Matching Source Profile` row maps one canonical attribute to an actual
 `CCD Master` field and records identifier scope/reliability. Start strong-ID
 scope values as `Unknown` until profiling and governance review are complete.
-The governed `pilot-1.5` exception is HKID: a mapped HKID field is global only
+The governed `pilot-1.6` exception is HKID: a mapped HKID field is global only
 for values that are structurally complete and pass the official check-digit
 calculation. Partial values, masks such as `*` or `X`, and invalid check digits
 remain unverified review-only evidence and never create a deterministic High
@@ -242,7 +245,7 @@ bench --site <site> execute db_connector.api_fuzzy_evaluation.install_matching_r
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_default_pilot_policy
 ```
 
-Both helper commands are idempotent. The second creates `pilot-1.5` only when
+Both helper commands are idempotent. The second creates `pilot-1.6` only when
 missing and imports governed source mappings. HKID is the only default trusted
 global identifier and is still gated per value by complete-format/check-digit
 validation.
@@ -259,7 +262,7 @@ identifiers remain unverified until separately approved.
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
-  --kwargs '{"policy_name":"pilot-1.5","sample_size":500,"double_review_count":100}'
+  --kwargs '{"policy_name":"pilot-1.6","sample_size":500,"double_review_count":100}'
 ```
 
 `install_evaluation_run` is deliberately bench-only and avoids putting an
@@ -270,7 +273,7 @@ For a separate positive-enriched blocking benchmark, use:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_positive_benchmark_run \
-  --kwargs '{"policy_name":"pilot-1.5","sample_size":100,"double_review_count":20}'
+  --kwargs '{"policy_name":"pilot-1.6","sample_size":100,"double_review_count":20}'
 ```
 
 This benchmark discovers unseen cross-source pairs from legacy score rows at or
@@ -279,6 +282,22 @@ the discovery score from reviewers. Legacy score is never treated as ground
 truth or as a model feature. Finalization reports recovery of human-confirmed
 matches by the current blocking rules, but marks the cohort non-representative
 and disables all deployable thresholds. Previously labeled pairs are excluded.
+
+After the representative evaluation, validate the narrow deterministic High
+tier on fresh predictions with:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_evaluation.install_high_tier_validation_run \
+  --kwargs '{"policy_name":"pilot-1.6","sample_size":100}'
+```
+
+This run selects a reproducible uniform bottom-k sample from all previously
+unseen High predictions at the locked snapshot. It records the full eligible
+High population and source/route distributions, and assigns every sampled pair
+to two independent reviewers. Finalization reports conditional High precision
+with a Wilson 95% interval. Because the cohort contains only model-predicted
+High pairs, it cannot estimate recall or calibrate a general score threshold;
+those outputs remain disabled and production matching remains unchanged.
 
 ### Docker persistence on the managed host
 

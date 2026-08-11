@@ -65,14 +65,14 @@ and sends no client data to an external service.
    remain available in CCD but do not silently become matching evidence.
 3. Leave identifier scope as `Unknown` or `Local` unless governance has proven
    that the identifier uses one shared organization-wide namespace. In
-   `pilot-1.5`, HKID is the approved exception, but it is global evidence only
+   `pilot-1.6`, HKID is the approved exception, but it is global evidence only
    when both values are complete and pass the HKID check-digit validation.
    Partial, masked, and invalid values remain review-only evidence.
 4. Start a 500-pair run with 100 double-reviewed pairs:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
-  --kwargs '{"policy_name":"pilot-1.5","sample_size":500,"double_review_count":100}'
+  --kwargs '{"policy_name":"pilot-1.6","sample_size":500,"double_review_count":100}'
 ```
 
 5. Review the generated `CCD Match Evaluation Pair` documents as `Same`,
@@ -97,6 +97,20 @@ separate 100-pair positive benchmark with
 to discover records for blinded relabeling and reports blocking recall. Because
 that cohort is deliberately enriched, its precision is not production
 precision and its thresholds are always disabled.
+
+After a representative run has measured the deterministic High tier, validate
+that tier on a fresh uniform sample of unseen High predictions:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_evaluation.install_high_tier_validation_run \
+  --kwargs '{"policy_name":"pilot-1.6","sample_size":100}'
+```
+
+All 100 pairs are assigned for two independent reviews. The run reports High
+precision and its Wilson 95% confidence interval, but does not recalibrate
+score thresholds or alter production matching. Pilot 1.6 also discards
+malformed and obvious sequential Hong Kong phone placeholders before blocking
+or scoring.
 
 ## Development validation
 

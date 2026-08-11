@@ -28,7 +28,7 @@ BLOCK_ROUTE_PRIORITY = {
     "chi_name_prefix": 7,
 }
 
-BLOCKING_VERSION = "pilot-blocking-1.5"
+BLOCKING_VERSION = "pilot-blocking-1.6"
 BROAD_NAME_ROUTES = frozenset({"chi_name_prefix", "eng_name"})
 
 

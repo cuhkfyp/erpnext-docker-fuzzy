@@ -13,6 +13,8 @@ from typing import Any
 
 _NON_ALNUM = re.compile(r"[^0-9a-z]+")
 _NON_ID = re.compile(r"[^0-9A-Z]+")
+_HK_PHONE_INITIAL_DIGITS = frozenset("23456789")
+_SEQUENTIAL_DIGIT_RUNS = ("0123456789", "9876543210")
 
 
 def text(value: Any) -> str:
@@ -73,6 +75,13 @@ def phone(value: Any) -> str:
         digits = digits[5:]
     elif digits.startswith("852") and len(digits) > 8:
         digits = digits[3:]
+    # CCD centres record Hong Kong subscriber numbers. Reject incomplete,
+    # foreign, and obvious sequential placeholder values before they can form
+    # a large exact-phone block or act as independent identity evidence.
+    if len(digits) != 8 or digits[0] not in _HK_PHONE_INITIAL_DIGITS:
+        return ""
+    if any(digits in run for run in _SEQUENTIAL_DIGIT_RUNS):
+        return ""
     return digits
 
 

@@ -168,6 +168,37 @@ class EvaluationHelperTests(unittest.TestCase):
         )
         self.assertEqual(len({(row["left_id"], row["right_id"]) for row in first}), 20)
 
+    def test_high_tier_validation_is_uniform_deterministic_and_high_only(self):
+        def result(index, source_pair, tier):
+            pair = CandidatePair(
+                f"L{index}",
+                f"R{index}",
+                source_pair,
+                ("phone",),
+            )
+            model = types.SimpleNamespace(tier=tier)
+            return types.SimpleNamespace(pair=pair, tiered_gated=model)
+
+        rows = [
+            result(index, "A::B" if index < 15 else "C::D", MatchTier.HIGH)
+            for index in range(20)
+        ]
+        rows.append(result(100, "A::B", MatchTier.REVIEW))
+        first, metadata = self.module._select_high_tier_validation_results(
+            rows, 7, seed="high"
+        )
+        second, _ = self.module._select_high_tier_validation_results(
+            reversed(rows), 7, seed="high"
+        )
+        self.assertEqual(
+            [(item.pair.left_id, item.pair.right_id) for item in first],
+            [(item.pair.left_id, item.pair.right_id) for item in second],
+        )
+        self.assertEqual(len(first), 7)
+        self.assertTrue(all(item.tiered_gated.tier == MatchTier.HIGH for item in first))
+        self.assertEqual(metadata["eligible_high_candidates"], 20)
+        self.assertEqual(metadata["source_pair_counts"], {"A::B": 15, "C::D": 5})
+
     def test_probability_calibration_distinguishes_missing_from_real_zero(self):
         class Pair(dict):
             __getattr__ = dict.get
