@@ -18,6 +18,8 @@ class SplinkUnavailable(RuntimeError):
 
 RANDOM_MATCH_PRIOR = 0.0001
 MAX_DIRECT_SCORING_PAIRS = 5_000
+SPLINK_ADAPTER_VERSION = "pilot-splink-1.1"
+COMPARISON_FIELDS = ("chi_full", "eng_full", "birthday", "phone", "email")
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,20 @@ class ProbabilityPrediction:
     right_id: str
     probability: float
     match_weight: float | None = None
+
+
+def _null_missing_comparison_values(
+    records: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Represent missing comparison evidence as null, never as exact empty text."""
+    output = []
+    for record in records:
+        row = dict(record)
+        for fieldname in COMPARISON_FIELDS:
+            if row.get(fieldname) == "":
+                row[fieldname] = None
+        output.append(row)
+    return output
 
 
 def available() -> bool:
@@ -69,7 +85,11 @@ def fit_predict(
             "Install the pinned splink and duckdb dependencies in the ERPNext worker environment"
         ) from exc
 
-    rows = list(records)
+    # Canonical normalization uses an empty string to mean unavailable
+    # evidence. Splink comparison levels require a real null for that state;
+    # leaving empty strings in place makes two missing values look like an
+    # exact agreement and corrupts the learned m/u probabilities.
+    rows = _null_missing_comparison_values(records)
     if not rows:
         return []
     frame = pd.DataFrame(rows)

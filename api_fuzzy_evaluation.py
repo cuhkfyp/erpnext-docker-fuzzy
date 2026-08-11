@@ -39,6 +39,7 @@ from db_connector.fuzzy_matching.security import mask_identifier
 from db_connector.fuzzy_matching.splink_adapter import (
     MAX_DIRECT_SCORING_PAIRS,
     RANDOM_MATCH_PRIOR,
+    SPLINK_ADAPTER_VERSION,
     SplinkUnavailable,
     available,
     dependency_versions,
@@ -1015,6 +1016,7 @@ def run_evaluation(run_name: str) -> None:
                     "blocking": BLOCKING_VERSION,
                     "tiered": policy.version,
                     "splink": dependency_versions(),
+                    "splink_adapter": SPLINK_ADAPTER_VERSION,
                     "splink_random_match_prior": RANDOM_MATCH_PRIOR,
                     "splink_training_record_count": splink_training_count,
                     "splink_training_record_limit": MAX_SPLINK_TRAINING_RECORDS,
@@ -1109,6 +1111,7 @@ def repair_run_probabilistic_scores(run_name: str) -> None:
         versions.update(
             {
                 "splink": dependency_versions(),
+                "splink_adapter": SPLINK_ADAPTER_VERSION,
                 "splink_random_match_prior": RANDOM_MATCH_PRIOR,
                 "splink_training_record_count": splink_training_count,
                 "splink_training_record_limit": MAX_SPLINK_TRAINING_RECORDS,

@@ -29,7 +29,7 @@
   {"fieldname": "tiered_score", "fieldtype": "Float", "label": "Tiered Evidence Score", "permlevel": 2, "read_only": 1},
   {"fieldname": "tiered_tier", "fieldtype": "Data", "in_list_view": 1, "label": "Tiered Tier", "permlevel": 2, "read_only": 1},
   {"fieldname": "recoverable_tier", "fieldtype": "Data", "label": "Recoverable-Conflict Tier", "permlevel": 2, "read_only": 1},
-  {"fieldname": "probabilistic_score", "fieldtype": "Float", "label": "Probabilistic Match Probability (0-1)", "permlevel": 2, "precision": "6", "read_only": 1},
+  {"description": "Local Splink probability. Missing comparison fields are null evidence, not exact empty-string agreements.", "fieldname": "probabilistic_score", "fieldtype": "Float", "label": "Probabilistic Match Probability (0-1)", "permlevel": 2, "precision": "12", "read_only": 1},
   {"default": "0", "fieldname": "probabilistic_available", "fieldtype": "Check", "label": "Probabilistic Score Available", "permlevel": 2, "read_only": 1},
   {"fieldname": "hybrid_tier", "fieldtype": "Data", "label": "Hybrid Tier", "permlevel": 2, "read_only": 1},
   {"fieldname": "reason_codes_json", "fieldtype": "Code", "label": "Reason Codes", "options": "JSON", "permlevel": 2, "read_only": 1},

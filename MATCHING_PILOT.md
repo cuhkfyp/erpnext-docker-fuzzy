@@ -89,6 +89,9 @@ with the deterministic models and records a sanitized warning. The optional
 model must never prevent generation of the review sample.
 Pairs outside the statistical model's safeguarded prediction blocks may have
 no probability; this is missing model evidence, not a zero-probability match.
+Canonical missing values are converted to SQL nulls before Splink training and
+scoring. They therefore use Splink's null level and can never be learned as an
+exact empty-string agreement.
 
 ## Candidate generation
 
