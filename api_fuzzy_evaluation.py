@@ -1143,9 +1143,25 @@ def repair_run_probabilistic_scores(run_name: str) -> None:
         frappe.db.commit()
 
 
+def _probability_repair_mode(
+    status: str,
+    *,
+    recover_stalled: bool = False,
+    reopen_finalized: bool = False,
+) -> str | None:
+    if status == "Reviewing":
+        return "normal"
+    if status == "Scoring" and recover_stalled:
+        return "recover_stalled"
+    if status in {"Awaiting Management Approval", "Completed"} and reopen_finalized:
+        return "reopen_finalized"
+    return None
+
+
 def install_probability_repair(
     run_name: str,
     recover_stalled: bool = False,
+    reopen_finalized: bool = False,
 ) -> dict[str, str]:
     """Bench-only launcher for repairing optional scores on the long queue.
 
@@ -1154,10 +1170,17 @@ def install_probability_repair(
     active before using it; normal retries require the Reviewing state.
     """
     run = frappe.get_doc("CCD Match Evaluation Run", run_name)
-    recovering = run.status == "Scoring" and bool(frappe.utils.cint(recover_stalled))
-    if run.status != "Reviewing" and not recovering:
-        frappe.throw("Only a run awaiting human review may be repaired")
-    if recovering:
+    mode = _probability_repair_mode(
+        run.status,
+        recover_stalled=bool(frappe.utils.cint(recover_stalled)),
+        reopen_finalized=bool(frappe.utils.cint(reopen_finalized)),
+    )
+    if not mode:
+        frappe.throw(
+            "Probability repair requires a Reviewing run, an explicit stalled-worker "
+            "recovery, or an explicit finalized-run reopening"
+        )
+    if mode == "recover_stalled":
         versions = json.loads(run.model_versions_json or "{}")
         versions.update(
             {
@@ -1166,6 +1189,21 @@ def install_probability_repair(
             }
         )
         run.db_set("model_versions_json", _json(versions), update_modified=False)
+    elif mode == "reopen_finalized":
+        versions = json.loads(run.model_versions_json or "{}")
+        versions["probability_repair_reopened_finalized_run"] = {
+            "previous_status": run.status,
+            "previous_approval_status": run.approval_status,
+            "reopened_at": frappe.utils.now_datetime(),
+            "target_splink_adapter": SPLINK_ADAPTER_VERSION,
+        }
+        run.db_set("model_versions_json", _json(versions), update_modified=False)
+        run.db_set("metrics_json", "", update_modified=False)
+        run.db_set(
+            "approval_status",
+            "Pending Management Review",
+            update_modified=False,
+        )
     run.db_set("status", "Scoring", update_modified=False)
     frappe.db.commit()
     frappe.enqueue(

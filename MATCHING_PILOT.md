@@ -330,6 +330,19 @@ bench --site <site> execute db_connector.api_fuzzy_evaluation.install_probabilit
   --kwargs '{"run_name":"<evaluation-run>"}'
 ```
 
+If a repaired adapter invalidates only the optional probability column of an
+already finalized run, an operator may explicitly reopen that locked run:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_evaluation.install_probability_repair \
+  --kwargs '{"run_name":"<evaluation-run>","reopen_finalized":true}'
+```
+
+This records the previous status/decision and adapter version, clears the stale
+metrics, resets management approval to pending, and recomputes only the
+probability column. The snapshot, sampled pairs, human labels, and deterministic
+scores remain unchanged before the run is finalized again.
+
 ### 4. Review and adjudicate
 
 Assign `CCD Match Reviewer` to ordinary reviewers and `CCD Match Sensitive

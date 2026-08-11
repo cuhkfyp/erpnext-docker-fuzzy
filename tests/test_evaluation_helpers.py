@@ -227,6 +227,20 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertIsNone(result["review_threshold"])
         self.assertEqual(result["warning"], "insufficient_positive_labels_per_split")
 
+    def test_probability_repair_requires_explicit_finalized_reopening(self):
+        mode = self.module._probability_repair_mode
+        self.assertEqual(mode("Reviewing"), "normal")
+        self.assertIsNone(mode("Scoring"))
+        self.assertEqual(
+            mode("Scoring", recover_stalled=True),
+            "recover_stalled",
+        )
+        self.assertIsNone(mode("Completed"))
+        self.assertEqual(
+            mode("Completed", reopen_finalized=True),
+            "reopen_finalized",
+        )
+
     def test_calibration_requires_positive_labels_in_both_partitions(self):
         class Pair(dict):
             __getattr__ = dict.get
