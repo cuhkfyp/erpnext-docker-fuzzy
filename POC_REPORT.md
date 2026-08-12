@@ -2,8 +2,14 @@
 
 ## Executive decision
 
-**POC status:** Completed and management-approved for the deterministic High
-recommendation rule in `pilot-1.6`.
+**POC status:** Completed. The High Tier Validation evidence was
+management-approved for the deterministic High recommendation rule evaluated
+from `pilot-1.6`.
+
+The `pilot-1.6` policy document itself remained in `Draft` at the POC date.
+Approval of an evaluation run does not promote the policy lifecycle status;
+moving it to `Pilot` or `Approved` requires the separate controlled-rollout
+decision described below.
 
 The existing fuzzy-score baseline was not accepted as sufficient proof that two
 records represent the same person. This POC therefore compared five approaches

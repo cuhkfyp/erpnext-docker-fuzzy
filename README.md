@@ -22,7 +22,9 @@ The completed, sanitized proof-of-concept package is available in:
 - [`POC_REPORT.md`](POC_REPORT.md) — executive case, five-model evaluation,
   aggregate evidence, controls, limitations, and rollout proposal;
 - [`POC_DEMO.md`](POC_DEMO.md) — a 12–15 minute presentation and live-demo
-  guide for management; and
+  guide for management;
+- [`POC_SYNTHETIC_EXAMPLES.md`](POC_SYNTHETIC_EXAMPLES.md) — presentation-safe
+  fictional pair cards showing model tiers versus human decisions; and
 - [`POC_RESULTS.json`](POC_RESULTS.json) — machine-readable, non-identifying
   aggregate results.
 

@@ -3,8 +3,9 @@
   "as_of": "2026-08-11",
   "privacy": "sanitized aggregate results only; no client or source-system identifiers",
   "poc_status": "completed",
+  "policy_lifecycle_status_at_poc": "Draft",
   "approved_scope": "pilot-1.6 deterministic exact-name-plus-independent-evidence High validation",
-  "management_decision": "approved",
+  "management_decision": "High Tier Validation evidence approved; policy promotion not implied",
   "production_matching_changed": false,
   "data_profile": {
     "governed_record_count": 251520,

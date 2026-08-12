@@ -98,18 +98,66 @@ Ask management to authorize only:
 > A reversible recommendation-only canary for the approved Tiered High rule,
 > with exception-only human review and no automatic merge or `Is Matched?`.
 
-## Live ERPNext demo checklist
+## Presentation and live-demo checklist
 
-1. Open the approved matching policy and show its version/status.
-2. Open the completed High validation run and show aggregate metrics only.
-3. Show that all 100 pairs were double reviewed and finalized.
-4. On a prepared non-sensitive/synthetic example, show masked evidence and the
-   difference between model tier and human final label.
-5. Show the audit trail for two ordinary reviews plus adjudication.
-6. Show candidate truncation/skipped-block fields are clear on the corrected
-   High run.
-7. Show that production match fields were not modified by the shadow run.
-8. End with the recommendation-only canary diagram.
+The policy document and its evaluation run have separate lifecycles. At the
+time this POC was prepared, `pilot-1.6` remained **Draft**, while its High Tier
+Validation run was **Completed / Approved**. Do not describe the Draft policy
+itself as approved. Promoting it to `Pilot` or `Approved` is a separate rollout
+decision.
+
+1. In ERPNext, open `pilot-1.6` and identify it as the **Draft policy whose
+   frozen snapshot was evaluated**.
+2. In ERPNext, open the approved High Tier Validation run and show its header:
+   purpose `High Tier Validation`, status `Completed`, approval status
+   `Approved`, sampled pairs `100`, and double-review count `100`. Keep its
+   internal document ID out of public slides and recordings.
+3. Use the sanitized [`POC_RESULTS.json`](POC_RESULTS.json) or the Results
+   section of [`POC_REPORT.md`](POC_REPORT.md) for management metrics. Do not
+   screen-share the complete raw `Metrics` JSON field: it contains internal
+   source-pair labels as well as technical diagnostics.
+4. Explain the decisive High-validation metrics: 100 predictions sampled, 100
+   confirmed Same, 0 confirmed Different, precision 100%, Wilson 95% interval
+   96.30%–100%, and recall not estimated.
+5. Show [`POC_SYNTHETIC_EXAMPLES.md`](POC_SYNTHETIC_EXAMPLES.md), particularly
+   Example B, to demonstrate that `Model Review` can become `Human Confirmed
+   Same` without changing the recorded model tier.
+6. If audit workflow must be demonstrated, use only the synthetic sequence in
+   that file. Do not open real pair records in a recorded presentation.
+7. State the run diagnostics rather than exposing internal labels: candidate
+   generation was not truncated and no oversized block was skipped in the
+   corrected High run.
+8. Show that the shadow run did not modify production match fields, then end
+   with the recommendation-only canary diagram.
+
+### What the ERPNext `Metrics` field means
+
+`Metrics` is read-only JSON generated when an evaluation run is finalized. It
+is the full technical result, not a single score and not a management approval.
+Its main sections are:
+
+| JSON section | Meaning |
+| --- | --- |
+| `run_purpose`, `labeled_pairs` | What question the run tested and how many finalized pairs were usable |
+| `reviewer_agreement` | Double-review completion, label patterns, raw agreement, and kappa |
+| `automatic_matching_readiness` | Whether this run alone can produce a general deployable threshold |
+| `high_tier_validation` | The decisive conditional-precision result for a High-only validation run |
+| `models` | Confusion-matrix and calibration diagnostics for the five shadow outputs |
+
+For the approved High run, `automatic_matching_readiness.ready` is `false` with reason
+`high_tier_validation_nonrepresentative`. This is expected: the run sampled
+only predictions already classified High. It validates precision conditional
+on that narrow rule, but cannot estimate population recall or calibrate a
+general score threshold.
+
+Two technical values should not be presented without that context:
+
+- The generic model block can display recall `1.0` because all sampled rows
+  were predicted High. The authoritative `high_tier_validation` block correctly
+  says `recall_estimated: false`.
+- Cohen's kappa is unstable in this all-positive cohort even though raw reviewer
+  agreement was 98%. Use the representative random double-review cohort for
+  inter-reviewer reliability, and use 98% only as the High run's raw agreement.
 
 Do not open arbitrary real pair records during a recorded presentation. If a
 real example is operationally required, restrict the audience, do not record
