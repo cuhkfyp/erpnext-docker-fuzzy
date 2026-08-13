@@ -39,6 +39,13 @@ general Splink probability threshold. The package also includes the latest
 management-approved review-priority operating point, but still has no validated
 automatic High threshold.
 
+The separately authorized recommendation-canary preview is now `Ready`. On the
+same 251,520-record governed snapshot, 3,528 of 3,961 Tiered High candidates
+passed all gates as `Proposed`; 433 were isolated as one-to-many source
+conflicts. No recommendation is `Active`, and no production match field or CCD
+record was changed. See the sanitized aggregate result in
+[`POC_RESULTS.json`](POC_RESULTS.json).
+
 ## Install the pilot
 
 On the managed Docker host, use the checked-in deployment helper. It captures

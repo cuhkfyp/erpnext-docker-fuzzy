@@ -6,10 +6,10 @@
 management-approved for the deterministic High recommendation rule evaluated
 from `pilot-1.6`.
 
-The `pilot-1.6` policy document itself remained in `Draft` at the POC date.
-Approval of an evaluation run does not promote the policy lifecycle status;
-moving it to `Pilot` or `Approved` requires the separate controlled-rollout
-decision described below.
+The `pilot-1.6` policy document itself remained in `Draft` when its evidence was
+evaluated. Approval of an evaluation run did not promote the policy. It was
+subsequently and separately promoted to `Pilot` for a recommendation-only
+canary preview; it has not been promoted to `Approved`.
 
 The existing fuzzy-score baseline was not accepted as sufficient proof that two
 records represent the same person. This POC therefore compared five approaches
@@ -28,8 +28,8 @@ sampled unseen High predictions. Estimated precision is 100%, with a Wilson
 95% at the lower confidence bound.
 
 Approval does **not** authorize record merging, automatic `Is Matched?`
-updates, or a general probability threshold. Those actions require a separate
-controlled rollout and management decision.
+updates, or a general probability threshold. The completed preview has also
+not been activated. Those actions remain separate management decisions.
 
 The latest `pilot-1.6` representative recalibration was finalized on
 2026-08-13. It improved Splink's usefulness for prioritizing human review but
@@ -217,6 +217,34 @@ every ordinary label was `Same`, and the two `Different` labels occurred on
 opposite disagreement pairs. Raw agreement and adjudicated precision are more
 informative for this deliberately enriched cohort.
 
+### Recommendation-only canary preview
+
+After the approved policy snapshot was promoted to `Pilot`, the full preview
+completed on the latest governed snapshot:
+
+| Measure | Preview result |
+| --- | ---: |
+| Governed records | 251,520 |
+| Candidate pairs | 821,592 |
+| Candidate generation truncated / skipped blocks | No / 0 |
+| Tiered High candidates | 3,961 |
+| Passed all gates (`Proposed`) | 3,528 |
+| Safety exceptions | 433 |
+| Active recommendations | 0 |
+| Recommendation records / immutable creation events | 3,961 / 3,961 |
+| High components / largest component | 3,711 / 7 |
+| Stale High records | 0 |
+
+Every current exception has reason `one_to_many_source_conflict`; the whole
+affected component stays inactive rather than selecting one convenient edge.
+No current High candidate failed source-coverage validation, although future
+unvalidated source-pair candidates will still fail closed. The audit found no
+CCD Master modification after the frozen snapshot, no duplicate recommendation
+key, and no recommendation missing its creation event.
+
+`Proposed` means eligible for a separately authorized recommendation-status
+activation. It does not mean merged, matched in production, or human-confirmed.
+
 ## Important quality findings during the POC
 
 The POC tested the surrounding workflow as well as the matching rules. It found
@@ -267,6 +295,7 @@ prioritization.
 | No truncation or oversized block in corrected High run | Passed |
 | Valid general probabilistic High threshold | Not met; Splink remains review-ranking only |
 | Management approval of deterministic High evidence | Passed |
+| Reversible recommendation-only preview | Passed: 3,528 Proposed, 433 Exception, 0 Active |
 | Production automation approval | Not part of this POC |
 
 ## Recommended operating model
@@ -278,7 +307,7 @@ separate rollout authorization:
 2. Emit passing pairs as reversible model-High recommendations.
 3. Apply trusted-ID conflict, one-to-many, transitive-cluster, stale-record,
    source-coverage, and data-quality gates.
-4. Retain safe High recommendations automatically.
+4. Activate safe High recommendation records only after aggregate approval.
 5. Route only exceptions and a periodic random QC sample to humans.
 6. Use Splink to rank optional/on-demand Review work. Treat `0.938995074` as a
    proposed first-priority band, not a Same/Different boundary, and do not make
@@ -298,13 +327,14 @@ flowchart LR
 
 ## Next-phase rollout proposal
 
-### Phase 1: recommendation-only engineering
+### Phase 1: recommendation-only engineering — completed
 
-- Create a versioned recommendation record with model version, evidence reason,
-  snapshot time, source scope, status, and reversal history.
-- Generate safe High recommendations without modifying existing match flags.
-- Keep the 17 sparse-group candidates and all safety failures as exceptions.
-- Produce aggregate counts and conflict/cluster reports before release.
+- Versioned recommendations now store model version, evidence reason, snapshot
+  time, source scope, status, and immutable reversal history.
+- The preview generated safe High recommendations without modifying existing
+  match flags.
+- Source-coverage and all other safety failures fail closed as exceptions.
+- Aggregate conflict/cluster counts are available without opening client data.
 
 ### Phase 2: controlled canary
 
@@ -331,8 +361,10 @@ The POC recommends starting with option 1 or 2. Record merging and automatic
   recall or total duplicate prevalence.
 - A 100/100 result does not guarantee zero future errors; the 95% lower bound
   is 96.30%.
-- Three sparse source-pair groups representing 17 High candidates were not
-  selected by the uniform sample and remain exception-only.
+- Three sparse source-pair groups representing 17 historical High candidates
+  were outside the targeted sample. None appeared as a High source-coverage
+  exception in the current preview; future candidates in unvalidated groups
+  remain exception-only.
 - New centres, mapping changes, and data drift require monitoring and may need
   fresh validation.
 - Pair-level High edges cannot be treated as a person cluster until transitive
@@ -353,6 +385,7 @@ probabilistic score can replace governance and human exception handling.
 
 The next requested authorization should therefore be:
 
-> Build and demonstrate a reversible recommendation-only canary for the
-> approved deterministic High rule, with exception-only human review and no
-> production merge or `Is Matched?` mutation.
+> Activate the 3,528 safety-gated `Proposed` records as reversible
+> recommendations, leave all 433 exceptions inactive, sample the active cohort
+> for drift/QC, and continue to prohibit production merge or `Is Matched?`
+> mutation.

@@ -1,11 +1,12 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "as_of": "2026-08-13",
   "privacy": "sanitized aggregate results only; no client or source-system identifiers",
-  "poc_status": "completed",
-  "policy_lifecycle_status_at_poc": "Draft",
+  "poc_status": "completed; recommendation-only canary preview ready",
+  "policy_lifecycle_status_at_poc_evaluation": "Draft",
+  "current_policy_lifecycle_status": "Pilot",
   "approved_scope": "pilot-1.6 deterministic exact-name-plus-independent-evidence High validation",
-  "management_decision": "High Tier Validation evidence approved; policy promotion not implied",
+  "management_decision": "High Tier Validation evidence approved; policy separately promoted to Pilot for a reversible recommendation-only canary",
   "production_matching_changed": false,
   "data_profile": {
     "governed_record_count": 251520,
@@ -47,6 +48,30 @@
       0.9999999999999999
     ],
     "recall_estimated": false
+  },
+  "recommendation_canary_preview": {
+    "status": "Ready",
+    "policy_version": "pilot-1.6",
+    "record_count": 251520,
+    "candidate_pair_count": 821592,
+    "candidate_truncated": false,
+    "skipped_block_count": 0,
+    "validated_source_pair_count": 6,
+    "tiered_high_candidate_count": 3961,
+    "proposed_count": 3528,
+    "exception_count": 433,
+    "active_count": 0,
+    "exception_reason_counts": {
+      "one_to_many_source_conflict": 433
+    },
+    "high_component_count": 3711,
+    "largest_component_size": 7,
+    "stale_record_count": 0,
+    "recommendation_record_count": 3961,
+    "immutable_creation_event_count": 3961,
+    "post_snapshot_ccd_master_modification_count": 0,
+    "production_matching_changed": false,
+    "activation_approved": false
   },
   "models": {
     "baseline_current_flag": {
@@ -111,6 +136,6 @@
     }
   },
   "next_authorizations": [
-    "build a reversible Tiered Evidence recommendation-only canary; no automatic merge or Is Matched mutation"
+    "inspect the aggregate canary preview and separately approve activation of Proposed recommendation records; activation remains reversible and does not merge records or mutate Is Matched"
   ]
 }

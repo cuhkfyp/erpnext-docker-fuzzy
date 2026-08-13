@@ -102,19 +102,20 @@ formula:
 
 Ask management to authorize only:
 
-> A reversible recommendation-only canary for the approved Tiered High rule,
-> with exception-only human review and no automatic merge or `Is Matched?`.
+> Activation of the 3,528 safety-gated `Proposed` records inside the reversible
+> recommendation register. This does not merge records, set `Is Matched?`, or
+> populate the production matching table; the 433 exceptions remain inactive.
 
 ## Presentation and live-demo checklist
 
 The policy document and its evaluation run have separate lifecycles. At the
-time this POC was prepared, `pilot-1.6` remained **Draft**, while its High Tier
-Validation run was **Completed / Approved**. Do not describe the Draft policy
-itself as approved. Promoting it to `Pilot` or `Approved` is a separate rollout
-decision.
+time the evaluation evidence was prepared, `pilot-1.6` was **Draft**, while its
+High Tier Validation run was **Completed / Approved**. It was subsequently and
+separately promoted to **Pilot** to create the recommendation-only preview. It
+has not been promoted to `Approved`, and the preview has not been activated.
 
-1. In ERPNext, open `pilot-1.6` and identify it as the **Draft policy whose
-   frozen snapshot was evaluated**.
+1. In ERPNext, open `pilot-1.6` and identify it as the **Pilot policy whose
+   unchanged frozen snapshot was evaluated before promotion**.
 2. In ERPNext, open the approved High Tier Validation run and show its header:
    purpose `High Tier Validation`, status `Completed`, approval status
    `Approved`, sampled pairs `100`, and double-review count `100`. Keep its
@@ -134,8 +135,14 @@ decision.
 7. State the run diagnostics rather than exposing internal labels: candidate
    generation was not truncated and no oversized block was skipped in the
    corrected High run.
-8. Show that the shadow run did not modify production match fields, then end
-   with the recommendation-only canary diagram.
+8. Open the latest `Ready` canary and show aggregate fields only: 251,520
+   records, 821,592 candidates, 3,961 Tiered High candidates, 3,528 Proposed,
+   433 Exception, zero Active, no truncation, and no skipped block. Do not open
+   real recommendation rows in a recorded presentation.
+9. Explain that all 433 exceptions are one-to-many source conflicts and that
+   the immutable event count equals the recommendation count, 3,961.
+10. Show that the preview did not modify production match fields, then stop
+    before pressing **Activate Recommendations**.
 
 ### What the ERPNext `Metrics` field means
 
@@ -213,8 +220,10 @@ monitored and can remain exception-only until adequate validation exists.
 
 ### “Can approval merge records now?”
 
-No. The approved decision accepts POC evidence. A recommendation canary and a
-separate production-action decision come next.
+No. Activating this canary changes only `Proposed` recommendation status to
+`Active` and appends audit events. It does not merge records, set `Is Matched?`,
+or write the Matching Score table. Any production action remains a later,
+separate decision.
 
 ## Demo success criteria
 
@@ -222,4 +231,5 @@ separate production-action decision come next.
 - Management can distinguish model High from Human Confirmed Same.
 - Management sees quantitative evidence and confidence bounds.
 - Management understands that human workload is exception-based.
-- The requested decision is limited to a reversible recommendation-only canary.
+- The requested decision is limited to activating reversible recommendation
+  records; no production match action is included.
