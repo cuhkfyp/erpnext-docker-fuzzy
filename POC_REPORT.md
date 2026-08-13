@@ -31,6 +31,11 @@ Approval does **not** authorize record merging, automatic `Is Matched?`
 updates, or a general probability threshold. Those actions require a separate
 controlled rollout and management decision.
 
+The latest `pilot-1.6` representative recalibration was finalized on
+2026-08-13. It improved Splink's usefulness for prioritizing human review but
+still did not produce a validated probabilistic High threshold. Its proposed
+review-priority cutoff remains pending management review.
+
 ## Business problem
 
 `CCD Master` consolidates client records from multiple centres and systems.
@@ -139,30 +144,61 @@ future research.
 Three unregistered source labels contained one record each. They were excluded
 rather than having field mappings guessed.
 
-### Representative threshold evaluation
+### Latest `pilot-1.6` representative threshold evaluation
 
-- 500 labeled pairs: 98 Same and 402 Different.
+- 500 previously unseen labeled pairs: 70 Same and 430 Different.
 - 100 randomized double-review assignments.
 - Every observed Same required two distinct human confirmations, resulting in
-  190 total double-reviewed pairs.
-- 96% raw agreement on the randomized double-review set.
-- Cohen's kappa: 0.8339.
-- 16 disagreements/Unsure outcomes required adjudication.
+  175 total double-reviewed pairs.
+- 93% raw agreement on the randomized double-review set.
+- Cohen's kappa: 0.7009.
+- 25 disagreements/Unsure outcomes required adjudication.
 - No stale labeled pairs at finalization.
+- Candidate generation covered 821,592 pairs without truncation or skipped
+  oversized blocks.
+- Splink produced usable probabilities for 490/500 pairs. The ten unavailable
+  pairs were excluded from probability calibration rather than treated as
+  score zero; all ten were human-labeled Different.
 
-Selected model observations:
+Current five-method observations:
 
-| Result | Precision | Recall |
-| --- | ---: | ---: |
-| Baseline current flag, all labeled | 33.33% | 53.06% |
-| Baseline current flag, held-out | 34.72% | 65.79% |
-| Tiered Evidence High, all labeled (13 predictions) | 100% | 13.27% |
-| Tiered Evidence High, held-out (6 predictions) | 100% | 15.79% |
-| Corrected Splink Review threshold, calibration | 44.92% | 88.33% |
-| Corrected Splink Review threshold, held-out | 44.62% | 76.32% |
+| Method/result | Precision | Recall | Interpretation |
+| --- | ---: | ---: | --- |
+| Baseline current flag, all labeled | 28.76% | 62.86% | Control only |
+| Baseline current flag, held-out | 23.64% | 61.90% | Too imprecise for automatic identity decisions |
+| Tiered Evidence High, all labeled (16 predictions) | 100% | 22.86% | No false positives observed; targeted validation below provides the stronger precision evidence |
+| Tiered Evidence High, held-out (3 predictions) | 100% | 14.29% | Correct but deliberately narrow |
+| Recoverable-Conflict High | Same as Tiered High | Same as Tiered High | Two observed conflicts stayed Conflict Review and both were Different |
+| Splink proposed Review cutoff, calibration | 66.67% | 61.22% | Cutoff `0.938995074`, selected by maximum calibration F1 |
+| Splink proposed Review cutoff, held-out | 56.52% | 61.90% | Useful for prioritization, not automatic matching |
+| Hybrid High | No predictions | 0% | Disabled because Splink has no validated High cutoff |
+| Hybrid Review queue, held-out | 10.82% | 100% | Preserves deterministic Review signals but is too broad to be a mandatory backlog |
 
 Neither the baseline nor corrected Splink model produced a valid automatic High
-threshold meeting 95% precision with the required calibration sample size.
+threshold meeting 95% precision with the required sample size. Splink's
+promising research cutoff `0.991342105` was 17/17 Same in calibration and 5/5
+Same in held-out data, but both supports are below the policy minimum of 30.
+It therefore remains unapproved for automatic High.
+
+#### How to interpret the Splink Review cutoff
+
+The proposed `0.938995074` cutoff is a first-priority operating point, not a
+Same/Different boundary:
+
+- It prioritized 68/490 scored pairs: 43 Same and 25 Different.
+- It captured 43/70 confirmed Same pairs (61.43% recall across all scored
+  labeled pairs).
+- Another 27 confirmed Same pairs scored below the cutoff.
+- A score below the cutoff means lower review priority, never confirmed
+  Different.
+- Deterministic Review and Conflict candidates remain eligible for human work
+  regardless of their Splink score. Splink orders optional work within the
+  available staffing capacity.
+
+Lowering the cutoff increases recall but also expands the queue and reduces its
+Same-pair yield. The final operating queue size should therefore be governed by
+review capacity and an explicit recall-versus-precision objective, while the
+stored probability remains a ranking value.
 
 ### Targeted deterministic High validation
 
@@ -197,8 +233,9 @@ and corrected several issues before approval:
    outcome-triggered positive confirmations, preventing biased kappa metrics.
 5. Previous human-used pairs are excluded from later validation cohorts.
 
-The corrected 500-pair Splink evaluation still produced no valid automatic
-High threshold, so its previous rejection remained unchanged.
+The latest `pilot-1.6` 500-pair recalibration still produced no valid automatic
+High threshold. It proposed `0.938995074` only for optional Review
+prioritization; that scoped decision remains pending management review.
 
 ## Safety and governance controls
 
@@ -242,8 +279,9 @@ separate rollout authorization:
    source-coverage, and data-quality gates.
 4. Retain safe High recommendations automatically.
 5. Route only exceptions and a periodic random QC sample to humans.
-6. Use Splink to rank optional/on-demand Review work; do not make the whole
-   Review population a mandatory backlog.
+6. Use Splink to rank optional/on-demand Review work. Treat `0.938995074` as a
+   proposed first-priority band, not a Same/Different boundary, and do not make
+   the whole Review population a mandatory backlog.
 7. Store human-confirmed Review pairs separately from model High predictions.
 
 ```mermaid
@@ -300,6 +338,10 @@ The POC recommends starting with option 1 or 2. Record merging and automatic
   consistency and one-to-many conflicts are checked.
 - The Splink model remains optional and unsuitable for automatic High decisions
   until a future labeled cohort validates a probability threshold.
+- The proposed Splink Review cutoff misses some true pairs by design: 27/70
+  scored confirmed Same pairs in the latest labeled cohort were below it.
+  Scores below the cutoff must remain lower priority rather than be labeled
+  Different.
 
 ## Decision boundary
 

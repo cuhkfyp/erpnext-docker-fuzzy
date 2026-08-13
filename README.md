@@ -30,7 +30,10 @@ The completed, sanitized proof-of-concept package is available in:
 
 The POC approves evidence for a narrow deterministic High recommendation rule.
 It does not authorize automatic record merging, `Is Matched?` changes, or a
-general Splink probability threshold.
+general Splink probability threshold. The package also includes the latest
+`pilot-1.6` representative recalibration as of 2026-08-13: Splink has a
+proposed review-priority operating point, but still has no validated automatic
+High threshold.
 
 ## Install the pilot
 

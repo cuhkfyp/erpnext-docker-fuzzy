@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "as_of": "2026-08-11",
+  "schema_version": 2,
+  "as_of": "2026-08-13",
   "privacy": "sanitized aggregate results only; no client or source-system identifiers",
   "poc_status": "completed",
   "policy_lifecycle_status_at_poc": "Draft",
@@ -18,14 +18,19 @@
   },
   "representative_evaluation": {
     "labeled_pairs": 500,
-    "same": 98,
-    "different": 402,
+    "same": 70,
+    "different": 430,
     "randomized_double_review_pairs": 100,
-    "total_double_review_pairs": 190,
-    "randomized_raw_agreement": 0.96,
-    "randomized_cohens_kappa": 0.8338870431893687,
-    "adjudicated_pairs": 16,
-    "stale_pairs": 0
+    "total_double_review_pairs": 175,
+    "randomized_raw_agreement": 0.93,
+    "randomized_cohens_kappa": 0.700854700854701,
+    "adjudicated_pairs": 25,
+    "stale_pairs": 0,
+    "candidate_truncated": false,
+    "skipped_block_count": 0,
+    "probabilistic_available_pairs": 490,
+    "probabilistic_unavailable_pairs": 10,
+    "unavailable_pair_same_count": 0
   },
   "high_validation": {
     "eligible_population": 3950,
@@ -45,40 +50,68 @@
   },
   "models": {
     "baseline_current_flag": {
-      "all_labeled_precision": 0.3333333333333333,
-      "all_labeled_recall": 0.5306122448979592,
-      "held_out_precision": 0.3472222222222222,
-      "held_out_recall": 0.6578947368421053,
+      "all_labeled_precision": 0.2875816993464052,
+      "all_labeled_recall": 0.6285714285714286,
+      "held_out_precision": 0.23636363636363636,
+      "held_out_recall": 0.6190476190476191,
       "automatic_high_approved": false,
       "role": "existing control/current path"
     },
     "tiered_evidence_gated": {
-      "representative_all_high_predictions": 13,
+      "representative_all_high_predictions": 16,
       "representative_all_high_precision": 1.0,
-      "representative_all_high_precision_wilson_lower": 0.7718981569447083,
+      "representative_all_high_recall": 0.22857142857142856,
+      "representative_all_high_precision_wilson_lower": 0.8063865817272802,
+      "representative_held_out_high_predictions": 3,
+      "representative_held_out_high_precision": 1.0,
+      "representative_held_out_high_recall": 0.14285714285714285,
       "targeted_high_predictions": 100,
       "targeted_high_precision": 1.0,
       "targeted_high_precision_wilson_lower": 0.9630051925239981,
       "approved_scope": "reversible recommendation canary subject to safety gates"
     },
     "recoverable_conflict": {
+      "representative_conflict_pairs": 2,
+      "representative_conflict_pairs_confirmed_different": 2,
+      "representative_conflicts_recovered_to_review": 0,
       "automatic_conflict_high_allowed": false,
       "role": "human exception routing"
     },
     "splink": {
       "adapter_version": "pilot-splink-1.1",
-      "representative_available_pairs": 482,
-      "calibration_review_precision": 0.4491525423728814,
-      "calibration_review_recall": 0.8833333333333333,
-      "held_out_review_precision": 0.4461538461538462,
-      "held_out_review_recall": 0.7631578947368421,
+      "representative_available_pairs": 490,
+      "representative_unavailable_pairs": 10,
+      "proposed_review_priority_threshold": 0.938995074,
+      "threshold_selection_objective": "maximum calibration F1",
+      "calibration_review_precision": 0.6666666666666666,
+      "calibration_review_recall": 0.6122448979591837,
+      "calibration_review_f1": 0.6382978723404255,
+      "held_out_review_precision": 0.5652173913043478,
+      "held_out_review_recall": 0.6190476190476191,
+      "held_out_review_f1": 0.5909090909090909,
+      "all_scored_priority_pairs": 68,
+      "all_scored_priority_same": 43,
+      "all_scored_priority_different": 25,
+      "all_scored_same_below_priority_threshold": 27,
+      "promising_research_high_threshold": 0.991342105,
+      "research_high_calibration_predictions": 17,
+      "research_high_calibration_precision": 1.0,
+      "research_high_held_out_predictions": 5,
+      "research_high_held_out_precision": 1.0,
+      "minimum_high_samples": 30,
       "automatic_high_threshold": null,
-      "role": "review ranking and future recalibration"
+      "review_priority_approval_status": "pending management review",
+      "role": "review ranking; scores below the proposed cutoff are lower priority, not Different"
     },
     "hybrid": {
       "automatic_high_threshold": null,
+      "held_out_review_precision": 0.10824742268041238,
+      "held_out_review_recall": 1.0,
       "role": "shadow and review prioritization"
     }
   },
-  "next_authorization": "build a reversible recommendation-only canary; no automatic merge or Is Matched mutation"
+  "next_authorizations": [
+    "build a reversible Tiered Evidence recommendation-only canary; no automatic merge or Is Matched mutation",
+    "optionally approve Splink 0.938995074 as a first-priority human-review operating point only"
+  ]
 }

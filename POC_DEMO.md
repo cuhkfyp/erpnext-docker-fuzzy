@@ -57,8 +57,10 @@ Show the workflow diagram from the POC report. Explain:
 
 Lead with the conclusion:
 
-- Baseline current flag: only 33.33% precision on the challenge set.
+- Latest baseline current flag: 23.64% held-out precision.
 - General Splink model: no validated automatic High threshold.
+- Proposed Splink first-priority Review cutoff: `0.938995074`, with 56.52%
+  held-out precision and 61.90% held-out recall.
 - Tiered High targeted validation: 100/100 Same.
 - Precision: 100%; 95% confidence lower bound: 96.30%.
 - Management approved the validation evidence.
@@ -79,6 +81,8 @@ formula:
 - Random double-review metrics were separated from positive confirmations.
 - The 500-pair conclusion was recalculated after the Splink correction and
   still did not support a probabilistic automatic High threshold.
+- The latest `pilot-1.6` run generated 821,592 candidates without truncation or
+  an oversized skipped block.
 
 ### 7. Feasible operating workload — 2 minutes
 
@@ -90,6 +94,9 @@ formula:
   unvalidated source groups, and small random QC samples.
 - Splink ranks optional Review work; it does not turn every Review candidate
   into a mandatory task.
+- Its proposed `0.938995074` cutoff is the first-priority band, not a
+  Same/Different boundary. Lower-scored deterministic Review/Conflict pairs
+  remain review candidates when capacity or operational need permits.
 
 ### 8. Requested next decision — 1 minute
 
@@ -180,6 +187,13 @@ samples. Review-tier candidates are not automatically a mandatory backlog.
 
 The baseline score is not calibrated, and corrected Splink scores did not yield
 a High threshold that met the 95% precision and minimum-sample requirements.
+
+### “Does a Splink score below 0.938995074 mean Different?”
+
+No. The cutoff maximized calibration F1 for first-priority human work. In the
+latest labeled cohort, 27/70 confirmed Same pairs scored below it. Lower scores
+remain ranked candidates and deterministic Review/Conflict signals are not
+discarded. Only human review can confirm Same or Different in this tier.
 
 ### “Can staff approve a Review pair?”
 
