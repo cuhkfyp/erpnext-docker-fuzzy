@@ -137,29 +137,30 @@ def _canary_prerequisites(policy_name: str) -> dict[str, Any]:
     }
 
 
-def _promote_policy_to_pilot(policy_name: str) -> dict[str, str]:
+def _promote_policy_to_pilot(policy_name: str) -> dict[str, Any]:
     prerequisites = _canary_prerequisites(policy_name)
     policy_doc = prerequisites["policy_doc"]
     if policy_doc.status == "Pilot":
-        return {"policy": policy_doc.name, "status": "Pilot", "changed": "false"}
+        return {"policy": policy_doc.name, "status": "Pilot", "changed": False}
     if policy_doc.status != "Draft":
         frappe.throw("Only the unchanged Draft policy can be promoted to Pilot")
-    policy_doc.db_set("status", "Pilot", update_modified=True)
+    policy_doc.status = "Pilot"
+    policy_doc.save(ignore_permissions=True)
     frappe.db.commit()
-    return {"policy": policy_doc.name, "status": "Pilot", "changed": "true"}
+    return {"policy": policy_doc.name, "status": "Pilot", "changed": True}
 
 
 @frappe.whitelist()
 def promote_policy_to_pilot(
     policy_name: str = DEFAULT_PILOT_POLICY_VERSION,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     _require_manager()
     return _promote_policy_to_pilot(policy_name)
 
 
 def install_promote_policy_to_pilot(
     policy_name: str = DEFAULT_PILOT_POLICY_VERSION,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Bench-only policy promotion after both required approvals."""
     return _promote_policy_to_pilot(policy_name)
 
