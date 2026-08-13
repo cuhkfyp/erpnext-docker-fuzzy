@@ -233,6 +233,36 @@ conflict, affected sampled edges are flagged for management attention. The
 pilot does not create or merge person clusters. Full-population cluster
 validation remains a separate prerequisite before production grouping.
 
+## Reversible recommendation canary
+
+The post-evaluation canary is implemented in `api_fuzzy_canary.py` and uses
+three dedicated DocTypes:
+
+- `CCD Match Canary Run` freezes the policy snapshot, approved evidence runs,
+  approved Splink Review cutoff, data snapshot, and aggregate safety result.
+- `CCD Match Recommendation` stores a versioned pair-level `Proposed`,
+  `Active`, `Exception`, `Reversed`, or `Superseded` decision.
+- `CCD Match Recommendation Event` is an immutable lifecycle audit record.
+
+The full governed candidate population is regenerated for each preview. Any
+candidate truncation or skipped block fails the run. The canary then evaluates
+only deterministic Tiered High edges and applies these gates before a
+recommendation can be proposed:
+
+1. the evidence reason must be the validated exact-full-name plus independent
+   phone, birthday, or email rule;
+2. the source pair must be represented in the approved High validation;
+3. neither endpoint may have changed after the run snapshot;
+4. a connected component may contain at most one record from each source;
+5. a component may not contain contradictory complete trusted identifiers; and
+6. a component may not contain a transitive Tiered conflict.
+
+Passing edges are only reversible recommendations. They do not create a person
+cluster, merge records, set `Is Matched?`, or update `CCD Master.match_table`.
+Activation is separate from preview generation. A subsequent active canary
+supersedes the prior version while preserving both histories, and a manager can
+reverse one recommendation or the whole canary with a mandatory reason.
+
 ## Operations
 
 ### 1. Install and migrate

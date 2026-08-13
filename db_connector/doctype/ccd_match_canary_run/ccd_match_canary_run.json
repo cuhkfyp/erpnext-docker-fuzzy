@@ -1,0 +1,50 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "matching_policy", "policy_version", "policy_snapshot_json", "policy_snapshot_sha256",
+  "high_validation_run", "threshold_evaluation_run", "splink_review_threshold",
+  "status", "snapshot_at", "activated_at", "activated_by",
+  "record_count", "candidate_count", "candidate_truncated", "skipped_blocks_json",
+  "high_candidate_count", "proposed_count", "exception_count", "active_count",
+  "reversed_count", "superseded_count", "summary_json", "error_summary"
+ ],
+ "fields": [
+  {"fieldname": "matching_policy", "fieldtype": "Link", "in_list_view": 1, "label": "Matching Policy", "options": "CCD Matching Policy", "read_only": 1, "reqd": 1},
+  {"fieldname": "policy_version", "fieldtype": "Data", "in_list_view": 1, "label": "Policy Version", "read_only": 1, "reqd": 1},
+  {"fieldname": "policy_snapshot_json", "fieldtype": "Code", "hidden": 1, "label": "Policy Snapshot", "options": "JSON", "read_only": 1, "reqd": 1},
+  {"fieldname": "policy_snapshot_sha256", "fieldtype": "Data", "label": "Policy Snapshot SHA-256", "read_only": 1, "reqd": 1},
+  {"fieldname": "high_validation_run", "fieldtype": "Link", "label": "Approved High Validation", "options": "CCD Match Evaluation Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "threshold_evaluation_run", "fieldtype": "Link", "label": "Approved Threshold Evaluation", "options": "CCD Match Evaluation Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "splink_review_threshold", "fieldtype": "Float", "label": "Approved Splink Review Threshold", "precision": "12", "read_only": 1},
+  {"default": "Queued", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Queued\nProfiling\nGenerating Candidates\nApplying Safety Gates\nWriting Recommendations\nReady\nActive\nCompleted\nFailed", "read_only": 1},
+  {"fieldname": "snapshot_at", "fieldtype": "Datetime", "label": "Snapshot At", "read_only": 1, "reqd": 1},
+  {"fieldname": "activated_at", "fieldtype": "Datetime", "label": "Activated At", "read_only": 1},
+  {"fieldname": "activated_by", "fieldtype": "Link", "label": "Activated By", "options": "User", "read_only": 1},
+  {"fieldname": "record_count", "fieldtype": "Int", "label": "Governed Record Count", "read_only": 1},
+  {"fieldname": "candidate_count", "fieldtype": "Int", "label": "Candidate Pair Count", "read_only": 1},
+  {"fieldname": "candidate_truncated", "fieldtype": "Check", "label": "Candidate Truncated", "read_only": 1},
+  {"fieldname": "skipped_blocks_json", "fieldtype": "Code", "label": "Skipped Blocks", "options": "JSON", "read_only": 1},
+  {"fieldname": "high_candidate_count", "fieldtype": "Int", "label": "Tiered High Candidates", "read_only": 1},
+  {"fieldname": "proposed_count", "fieldtype": "Int", "label": "Proposed", "read_only": 1},
+  {"fieldname": "exception_count", "fieldtype": "Int", "label": "Exceptions", "read_only": 1},
+  {"fieldname": "active_count", "fieldtype": "Int", "label": "Active", "read_only": 1},
+  {"fieldname": "reversed_count", "fieldtype": "Int", "label": "Reversed", "read_only": 1},
+  {"fieldname": "superseded_count", "fieldtype": "Int", "label": "Superseded", "read_only": 1},
+  {"fieldname": "summary_json", "fieldtype": "Code", "label": "Aggregate Safety Summary", "options": "JSON", "read_only": 1},
+  {"fieldname": "error_summary", "fieldtype": "Small Text", "label": "Error Summary", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Match Canary Run",
+ "permissions": [
+  {"create": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

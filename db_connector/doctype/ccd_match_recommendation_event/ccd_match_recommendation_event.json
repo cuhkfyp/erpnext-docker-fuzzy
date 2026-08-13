@@ -1,0 +1,29 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["recommendation", "canary_run", "event_type", "from_status", "to_status", "reason", "event_at", "actor", "metadata_json"],
+ "fields": [
+  {"fieldname": "recommendation", "fieldtype": "Link", "in_list_view": 1, "label": "Recommendation", "options": "CCD Match Recommendation", "read_only": 1, "reqd": 1},
+  {"fieldname": "canary_run", "fieldtype": "Link", "label": "Canary Run", "options": "CCD Match Canary Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "event_type", "fieldtype": "Select", "in_list_view": 1, "label": "Event Type", "options": "Created\nActivated\nReversed\nSuperseded\nSafety Exception", "read_only": 1, "reqd": 1},
+  {"fieldname": "from_status", "fieldtype": "Data", "label": "From Status", "read_only": 1},
+  {"fieldname": "to_status", "fieldtype": "Data", "label": "To Status", "read_only": 1, "reqd": 1},
+  {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason", "read_only": 1, "reqd": 1},
+  {"fieldname": "event_at", "fieldtype": "Datetime", "label": "Event At", "read_only": 1, "reqd": 1},
+  {"fieldname": "actor", "fieldtype": "Link", "label": "Actor", "options": "User", "read_only": 1, "reqd": 1},
+  {"fieldname": "metadata_json", "fieldtype": "Code", "label": "Metadata", "options": "JSON", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Match Recommendation Event",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 0
+}

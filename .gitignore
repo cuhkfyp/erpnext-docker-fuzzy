@@ -9,6 +9,7 @@
 !api_ccd_fuzzy.py
 !api_ccd_fuzzy.md
 !api_fuzzy_evaluation.py
+!api_fuzzy_canary.py
 
 # Implementation packages added after the baseline commit.
 !fuzzy_matching/

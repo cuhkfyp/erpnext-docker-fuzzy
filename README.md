@@ -14,6 +14,10 @@ This repository contains two deliberately separate paths:
   two safe identifier-conflict policies, a local Splink model, and a hybrid.
   They never set `Is Matched?` and never modify the production match table. See
   [`MATCHING_PILOT.md`](MATCHING_PILOT.md).
+- `api_fuzzy_canary.py` turns only the validated Tiered Evidence High rule into
+  versioned, reversible recommendation records. It applies full-population
+  cluster and source-coverage gates and still never merges CCD records or
+  modifies production match fields.
 
 ## Management POC
 
@@ -131,6 +135,40 @@ precision and its Wilson 95% confidence interval, but does not recalibrate
 score thresholds or alter production matching. Pilot 1.6 also discards
 malformed and obvious sequential Hong Kong phone placeholders before blocking
 or scoring.
+
+## Recommendation-only canary
+
+After the unchanged policy has both an approved High Tier Validation and an
+approved Threshold Evaluation, promote it from Draft to Pilot:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_canary.install_promote_policy_to_pilot \
+  --kwargs '{"policy_name":"pilot-1.6"}'
+```
+
+Create a preview run:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_canary.install_canary_run \
+  --kwargs '{"policy_name":"pilot-1.6"}'
+```
+
+The preview fails closed if candidate generation is truncated or skips any
+oversized block. Only the validated exact-full-name-plus-independent-evidence
+High rule may become `Proposed`; HKID-only High, unvalidated source pairs,
+stale records, one-to-many components, and transitive contradictions become
+`Exception`.
+
+Each recommendation stores the frozen policy version, source-record snapshot,
+reason codes, safety status, and opaque pair/cluster fingerprints. Separate
+immutable events retain Created, Activated, Reversed, and Superseded history.
+Activation is a distinct System Manager action after aggregate inspection.
+Both individual recommendations and the complete active canary can be
+reversed with a required reason.
+
+The approved Splink cutoff is stored with the canary for future Review-queue
+ordering. This first canary emits Tiered High recommendations only; it does not
+turn Splink scores into automatic High decisions.
 
 ## Development validation
 

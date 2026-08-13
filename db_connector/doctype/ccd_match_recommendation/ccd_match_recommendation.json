@@ -1,0 +1,53 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "canary_run", "matching_policy", "policy_version", "recommendation_key", "pair_fingerprint",
+  "left_record", "right_record", "left_source", "right_source", "source_pair",
+  "left_modified_at", "right_modified_at", "model_tier", "blocking_routes", "reason_codes_json",
+  "cluster_fingerprint", "cluster_size", "status", "safety_reasons_json",
+  "activated_at", "activated_by", "ended_at", "ended_by", "end_reason", "supersedes"
+ ],
+ "fields": [
+  {"fieldname": "canary_run", "fieldtype": "Link", "in_list_view": 1, "label": "Canary Run", "options": "CCD Match Canary Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "matching_policy", "fieldtype": "Link", "label": "Matching Policy", "options": "CCD Matching Policy", "read_only": 1, "reqd": 1},
+  {"fieldname": "policy_version", "fieldtype": "Data", "label": "Policy Version", "read_only": 1, "reqd": 1},
+  {"fieldname": "recommendation_key", "fieldtype": "Data", "label": "Recommendation Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "pair_fingerprint", "fieldtype": "Data", "label": "Pair Fingerprint", "read_only": 1, "reqd": 1},
+  {"fieldname": "left_record", "fieldtype": "Link", "label": "Left CCD Master", "options": "CCD Master", "permlevel": 1, "read_only": 1, "reqd": 1},
+  {"fieldname": "right_record", "fieldtype": "Link", "label": "Right CCD Master", "options": "CCD Master", "permlevel": 1, "read_only": 1, "reqd": 1},
+  {"fieldname": "left_source", "fieldtype": "Data", "label": "Left Source", "read_only": 1},
+  {"fieldname": "right_source", "fieldtype": "Data", "label": "Right Source", "read_only": 1},
+  {"fieldname": "source_pair", "fieldtype": "Data", "label": "Source Pair", "read_only": 1},
+  {"fieldname": "left_modified_at", "fieldtype": "Datetime", "hidden": 1, "label": "Left Modified At", "read_only": 1},
+  {"fieldname": "right_modified_at", "fieldtype": "Datetime", "hidden": 1, "label": "Right Modified At", "read_only": 1},
+  {"default": "High", "fieldname": "model_tier", "fieldtype": "Data", "in_list_view": 1, "label": "Model Tier", "read_only": 1},
+  {"fieldname": "blocking_routes", "fieldtype": "Small Text", "label": "Blocking Routes", "read_only": 1},
+  {"fieldname": "reason_codes_json", "fieldtype": "Code", "label": "Reason Codes", "options": "JSON", "read_only": 1},
+  {"fieldname": "cluster_fingerprint", "fieldtype": "Data", "label": "Cluster Fingerprint", "read_only": 1},
+  {"fieldname": "cluster_size", "fieldtype": "Int", "label": "Cluster Size", "read_only": 1},
+  {"default": "Proposed", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Proposed\nActive\nException\nReversed\nSuperseded", "read_only": 1},
+  {"fieldname": "safety_reasons_json", "fieldtype": "Code", "label": "Safety Reasons", "options": "JSON", "read_only": 1},
+  {"fieldname": "activated_at", "fieldtype": "Datetime", "label": "Activated At", "read_only": 1},
+  {"fieldname": "activated_by", "fieldtype": "Link", "label": "Activated By", "options": "User", "read_only": 1},
+  {"fieldname": "ended_at", "fieldtype": "Datetime", "label": "Ended At", "read_only": 1},
+  {"fieldname": "ended_by", "fieldtype": "Link", "label": "Ended By", "options": "User", "read_only": 1},
+  {"fieldname": "end_reason", "fieldtype": "Small Text", "label": "End Reason", "read_only": 1},
+  {"fieldname": "supersedes", "fieldtype": "Link", "label": "Supersedes", "options": "CCD Match Recommendation", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Match Recommendation",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
