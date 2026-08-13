@@ -59,7 +59,7 @@ Lead with the conclusion:
 
 - Latest baseline current flag: 23.64% held-out precision.
 - General Splink model: no validated automatic High threshold.
-- Proposed Splink first-priority Review cutoff: `0.938995074`, with 56.52%
+- Approved Splink first-priority Review cutoff: `0.938995074`, with 56.52%
   held-out precision and 61.90% held-out recall.
 - Tiered High targeted validation: 100/100 Same.
 - Precision: 100%; 95% confidence lower bound: 96.30%.
@@ -94,7 +94,7 @@ formula:
   unvalidated source groups, and small random QC samples.
 - Splink ranks optional Review work; it does not turn every Review candidate
   into a mandatory task.
-- Its proposed `0.938995074` cutoff is the first-priority band, not a
+- Its approved `0.938995074` cutoff is the first-priority band, not a
   Same/Different boundary. Lower-scored deterministic Review/Conflict pairs
   remain review candidates when capacity or operational need permits.
 

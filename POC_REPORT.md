@@ -34,7 +34,8 @@ controlled rollout and management decision.
 The latest `pilot-1.6` representative recalibration was finalized on
 2026-08-13. It improved Splink's usefulness for prioritizing human review but
 still did not produce a validated probabilistic High threshold. Its proposed
-review-priority cutoff remains pending management review.
+review-priority cutoff was subsequently approved for human-review ordering
+only.
 
 ## Business problem
 
@@ -169,8 +170,8 @@ Current five-method observations:
 | Tiered Evidence High, all labeled (16 predictions) | 100% | 22.86% | No false positives observed; targeted validation below provides the stronger precision evidence |
 | Tiered Evidence High, held-out (3 predictions) | 100% | 14.29% | Correct but deliberately narrow |
 | Recoverable-Conflict High | Same as Tiered High | Same as Tiered High | Two observed conflicts stayed Conflict Review and both were Different |
-| Splink proposed Review cutoff, calibration | 66.67% | 61.22% | Cutoff `0.938995074`, selected by maximum calibration F1 |
-| Splink proposed Review cutoff, held-out | 56.52% | 61.90% | Useful for prioritization, not automatic matching |
+| Splink approved Review cutoff, calibration | 66.67% | 61.22% | Cutoff `0.938995074`, selected by maximum calibration F1 |
+| Splink approved Review cutoff, held-out | 56.52% | 61.90% | Approved for prioritization, not automatic matching |
 | Hybrid High | No predictions | 0% | Disabled because Splink has no validated High cutoff |
 | Hybrid Review queue, held-out | 10.82% | 100% | Preserves deterministic Review signals but is too broad to be a mandatory backlog |
 
@@ -182,7 +183,7 @@ It therefore remains unapproved for automatic High.
 
 #### How to interpret the Splink Review cutoff
 
-The proposed `0.938995074` cutoff is a first-priority operating point, not a
+The approved `0.938995074` cutoff is a first-priority operating point, not a
 Same/Different boundary:
 
 - It prioritized 68/490 scored pairs: 43 Same and 25 Different.
@@ -234,8 +235,8 @@ and corrected several issues before approval:
 5. Previous human-used pairs are excluded from later validation cohorts.
 
 The latest `pilot-1.6` 500-pair recalibration still produced no valid automatic
-High threshold. It proposed `0.938995074` only for optional Review
-prioritization; that scoped decision remains pending management review.
+High threshold. Management approved `0.938995074` only for optional Review
+prioritization.
 
 ## Safety and governance controls
 
@@ -338,7 +339,7 @@ The POC recommends starting with option 1 or 2. Record merging and automatic
   consistency and one-to-many conflicts are checked.
 - The Splink model remains optional and unsuitable for automatic High decisions
   until a future labeled cohort validates a probability threshold.
-- The proposed Splink Review cutoff misses some true pairs by design: 27/70
+- The approved Splink Review cutoff misses some true pairs by design: 27/70
   scored confirmed Same pairs in the latest labeled cohort were below it.
   Scores below the cutoff must remain lower priority rather than be labeled
   Different.

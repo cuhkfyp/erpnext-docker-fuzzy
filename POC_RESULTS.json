@@ -81,7 +81,7 @@
       "adapter_version": "pilot-splink-1.1",
       "representative_available_pairs": 490,
       "representative_unavailable_pairs": 10,
-      "proposed_review_priority_threshold": 0.938995074,
+      "approved_review_priority_threshold": 0.938995074,
       "threshold_selection_objective": "maximum calibration F1",
       "calibration_review_precision": 0.6666666666666666,
       "calibration_review_recall": 0.6122448979591837,
@@ -100,7 +100,7 @@
       "research_high_held_out_precision": 1.0,
       "minimum_high_samples": 30,
       "automatic_high_threshold": null,
-      "review_priority_approval_status": "pending management review",
+      "review_priority_approval_status": "approved for optional human-review prioritization only",
       "role": "review ranking; scores below the proposed cutoff are lower priority, not Different"
     },
     "hybrid": {
@@ -111,7 +111,6 @@
     }
   },
   "next_authorizations": [
-    "build a reversible Tiered Evidence recommendation-only canary; no automatic merge or Is Matched mutation",
-    "optionally approve Splink 0.938995074 as a first-priority human-review operating point only"
+    "build a reversible Tiered Evidence recommendation-only canary; no automatic merge or Is Matched mutation"
   ]
 }
