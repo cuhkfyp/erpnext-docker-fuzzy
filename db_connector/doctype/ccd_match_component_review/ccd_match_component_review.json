@@ -1,0 +1,41 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "canary_run", "review_key", "cluster_fingerprint", "cluster_size", "recommendation_count",
+  "review_status", "final_decision", "stale", "finalized_at", "finalized_by",
+  "final_groups_json", "review_submissions", "evidence_html"
+ ],
+ "fields": [
+  {"fieldname": "canary_run", "fieldtype": "Link", "in_list_view": 1, "label": "Canary Run", "options": "CCD Match Canary Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "review_key", "fieldtype": "Data", "hidden": 1, "label": "Review Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "cluster_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Cluster Fingerprint", "read_only": 1, "reqd": 1},
+  {"fieldname": "cluster_size", "fieldtype": "Int", "in_list_view": 1, "label": "Records", "read_only": 1},
+  {"fieldname": "recommendation_count", "fieldtype": "Int", "in_list_view": 1, "label": "Candidate Pairs", "read_only": 1},
+  {"default": "Unreviewed", "fieldname": "review_status", "fieldtype": "Select", "in_list_view": 1, "label": "Review Status", "options": "Unreviewed\nPartially Reviewed\nNeeds Adjudication\nPositive Confirmation Required\nAgreed\nAdjudicated\nStale", "read_only": 1},
+  {"fieldname": "final_decision", "fieldtype": "Select", "in_list_view": 1, "label": "Final Decision", "options": "\nAll Same\nPartial Match\nAll Different", "read_only": 1},
+  {"default": "0", "fieldname": "stale", "fieldtype": "Check", "label": "Stale", "read_only": 1},
+  {"fieldname": "finalized_at", "fieldtype": "Datetime", "label": "Finalized At", "read_only": 1},
+  {"fieldname": "finalized_by", "fieldtype": "Link", "label": "Finalized By", "options": "User", "read_only": 1},
+  {"fieldname": "final_groups_json", "fieldtype": "Code", "hidden": 1, "label": "Final Identity Groups", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "review_submissions", "fieldtype": "Table", "hidden": 1, "label": "Review Submissions", "options": "CCD Match Component Review Submission", "permlevel": 2, "read_only": 1},
+  {"fieldname": "evidence_html", "fieldtype": "HTML", "label": "Protected Component Evidence"}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Match Component Review",
+ "permissions": [
+  {"read": 1, "report": 1, "role": "CCD Match Reviewer"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -54,6 +55,44 @@ class GateDecision:
 
 def _cluster_fingerprint(record_ids: Iterable[str]) -> str:
     payload = "\x1f".join(sorted(set(record_ids)))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def canonical_identity_groups(
+    record_ids: Iterable[str],
+    same_pairs: Iterable[tuple[str, str]] = (),
+) -> tuple[tuple[str, ...], ...]:
+    """Return a stable identity partition implied by selected Same pairs.
+
+    The review UI lets a reviewer choose pairs that belong together.  Connected
+    selections are deliberately closed transitively: choosing A=B and B=C means
+    the stored decision is the single group A=B=C.  Unselected records remain
+    singleton groups and no CCD record is modified.
+    """
+    ordered_ids = tuple(sorted({str(item) for item in record_ids if str(item)}))
+    if not ordered_ids:
+        raise ValueError("At least one record is required")
+    allowed = set(ordered_ids)
+    graph = _UnionFind()
+    for item in ordered_ids:
+        graph.find(item)
+    for left, right in same_pairs:
+        pair = ordered_pair(left, right)
+        if pair[0] not in allowed or pair[1] not in allowed:
+            raise ValueError("A selected pair is outside the reviewed component")
+        if pair[0] == pair[1]:
+            raise ValueError("A record cannot be paired with itself")
+        graph.union(*pair)
+    groups: dict[str, list[str]] = defaultdict(list)
+    for item in ordered_ids:
+        groups[graph.find(item)].append(item)
+    return tuple(sorted(tuple(sorted(group)) for group in groups.values()))
+
+
+def identity_partition_fingerprint(groups: Iterable[Iterable[str]]) -> str:
+    """Hash a canonical human decision without exposing record identifiers."""
+    canonical = tuple(sorted(tuple(sorted(str(item) for item in group)) for group in groups))
+    payload = json.dumps(canonical, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(payload.encode()).hexdigest()
 
 

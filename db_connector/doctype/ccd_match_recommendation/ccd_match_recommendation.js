@@ -1,18 +1,114 @@
 frappe.ui.form.on("CCD Match Recommendation", {
 	refresh(frm) {
-		if (frm.is_new() || !frappe.user.has_role("System Manager")) return;
+		if (frm.is_new()) return;
+		load_recommendation_evidence(frm);
+		if (!frappe.user.has_role("System Manager")) return;
 		if (["Proposed", "Active"].includes(frm.doc.status)) {
-			frm.add_custom_button(__("Reverse Recommendation"), () => {
+			frm.add_custom_button(__("Withdraw Recommendation"), () => {
 				frappe.prompt(
-					[{ fieldname: "reason", fieldtype: "Small Text", label: __("Reversal Reason"), reqd: 1 }],
+					[{ fieldname: "reason", fieldtype: "Small Text", label: __("Withdrawal Reason"), reqd: 1 }],
 					(values) => frappe.call({
 						method: "db_connector.api_fuzzy_canary.reverse_recommendation",
 						args: { recommendation_name: frm.doc.name, reason: values.reason },
 						callback: () => frm.reload_doc(),
 					}),
-					__("Reverse Recommendation"),
+					__("Withdraw Recommendation"),
 				);
 			});
 		}
 	},
 });
+
+function esc(value) {
+	return frappe.utils.escape_html(String(value || ""));
+}
+
+function record_heading(side) {
+	const text = `${side.alias} — ${side.source || "Unknown source"}`;
+	if (!side.record_id) return esc(text);
+	const route = `/app/ccd-master/${encodeURIComponent(side.record_id)}`;
+	return `<a href="${route}" target="_blank" rel="noopener">${esc(text)}</a>`;
+}
+
+function comparison_label(value) {
+	const labels = {
+		exact: __("Exact"),
+		missing: __("Missing"),
+		disagree: __("Different"),
+		close: __("Close"),
+		phonetic: __("Phonetic"),
+		weak: __("Weak"),
+	};
+	return labels[value] || value;
+}
+
+function render_recommendation_evidence(frm, payload) {
+	const privacy = payload.sensitive_values_visible
+		? '<div class="alert alert-warning">' + __("Sensitive values are visible because your role permits them.") + "</div>"
+		: '<div class="alert alert-info">' + __("Identity values are masked. A Sensitive Reviewer or System Manager can see the full permitted values.") + "</div>";
+	const stale = payload.stale
+		? '<div class="alert alert-danger">' + __("The source record changed after this canary snapshot. Do not review this stale pair.") + "</div>"
+		: "";
+	const rows = (payload.attributes || []).map((row) =>
+		`<tr><td>${esc(row.attribute)}</td><td>${esc(row.left)}</td>` +
+		`<td>${esc(row.right)}</td><td>${esc(comparison_label(row.comparison))}</td></tr>`
+	).join("");
+	const component = payload.component_review
+		? `<div class="alert alert-warning">${__("This pair belongs to a multi-record exception. Review the complete component, not this edge alone.")} ` +
+			`<a href="/app/ccd-match-component-review/${encodeURIComponent(payload.component_review)}">${__("Open component review")}</a></div>`
+		: "";
+	const qc = payload.qc_selected
+		? `<div class="alert alert-secondary"><b>${__("Random QC sample")}</b>: ${esc(payload.qc_review_status || "Unreviewed")}` +
+			`${payload.qc_final_label ? ` — ${esc(payload.qc_final_label)}` : ""}</div>`
+		: "";
+	frm.fields_dict.evidence_html.$wrapper.html(
+		privacy + stale + component + qc +
+		`<div class="table-responsive"><table class="table table-bordered"><thead><tr>` +
+		`<th>${__("Evidence")}</th><th>${record_heading(payload.left)}</th>` +
+		`<th>${record_heading(payload.right)}</th><th>${__("Comparison")}</th>` +
+		`</tr></thead><tbody>${rows}</tbody></table></div>`
+	);
+}
+
+function load_recommendation_evidence(frm) {
+	frappe.call({
+		method: "db_connector.api_fuzzy_canary.get_recommendation_evidence",
+		args: { recommendation_name: frm.doc.name },
+		callback(response) {
+			const payload = response.message || {};
+			render_recommendation_evidence(frm, payload);
+			if (payload.can_submit_qc) add_qc_buttons(frm);
+			if (payload.can_adjudicate_qc) add_qc_adjudication_buttons(frm);
+		},
+	});
+}
+
+function add_qc_buttons(frm) {
+	for (const label of ["Same", "Different", "Unsure"]) {
+		frm.add_custom_button(__(label), () => submit_qc(frm, label), __("QC Review"));
+	}
+}
+
+function add_qc_adjudication_buttons(frm) {
+	for (const label of ["Same", "Different"]) {
+		frm.add_custom_button(
+			__(`Adjudicate ${label}`),
+			() => submit_qc(frm, label, true),
+			__("QC Adjudication"),
+		);
+	}
+}
+
+function submit_qc(frm, label, adjudication = false) {
+	frappe.prompt(
+		[{ fieldname: "notes", fieldtype: "Small Text", label: __("Notes"), reqd: adjudication ? 1 : 0 }],
+		(values) => frappe.call({
+			method: adjudication
+				? "db_connector.api_fuzzy_canary.adjudicate_recommendation_qc"
+				: "db_connector.api_fuzzy_canary.submit_recommendation_qc",
+			args: { recommendation_name: frm.doc.name, label, notes: values.notes || "" },
+			callback: () => frm.reload_doc(),
+		}),
+		adjudication ? __(`Adjudicate as ${label}`) : __(`Submit ${label}`),
+	);
+}

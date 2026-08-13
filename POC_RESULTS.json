@@ -61,6 +61,10 @@
     "proposed_count": 3528,
     "exception_count": 433,
     "active_count": 0,
+    "exception_component_review_count": 191,
+    "exception_component_review_complete_count": 0,
+    "random_qc_sample_count": 100,
+    "random_qc_review_complete_count": 0,
     "exception_reason_counts": {
       "one_to_many_source_conflict": 433
     },
@@ -71,7 +75,8 @@
     "immutable_creation_event_count": 3961,
     "post_snapshot_ccd_master_modification_count": 0,
     "production_matching_changed": false,
-    "activation_approved": false
+    "recommendation_approval_recorded": false,
+    "review_interface": "deployed; masked ordinary view, role-gated sensitive view, component decisions and random QC"
   },
   "models": {
     "baseline_current_flag": {
@@ -136,6 +141,6 @@
     }
   },
   "next_authorizations": [
-    "inspect the aggregate canary preview and separately approve activation of Proposed recommendation records; activation remains reversible and does not merge records or mutate Is Matched"
+    "inspect the aggregate canary preview and separately approve Proposed recommendation records; approval is reversible and does not link, merge, or mutate Is Matched"
   ]
 }

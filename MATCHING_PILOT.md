@@ -149,6 +149,21 @@ Standard reviewers see trusted strong identifiers in masked form. System
 Managers and users with `CCD Match Sensitive Reviewer` can see the full value.
 Record values rendered in HTML are escaped.
 
+The recommendation canary applies a stricter presentation boundary: ordinary
+`CCD Match Reviewer` users see every identity value masked and receive no CCD
+record key. `CCD Match Sensitive Reviewer` and `System Manager` retain the
+full-value view and record links. The same protected table is embedded directly
+in the recommendation form, so reviewers do not need to compare browser tabs.
+
+One-to-many exceptions are reviewed as connected components. A component
+decision is one of `All Same`, `Partial Match`, `All Different`, or `Unsure`.
+For Partial Match, the reviewer selects Same pairs; the server closes those
+selections transitively and stores the resulting identity groups. Two matching
+independent submissions are required. `Unsure` and disagreement require
+manager adjudication; positive adjudication still requires one independent
+matching confirmation. Model status remains `Exception` regardless of the
+human conclusion, preserving model-versus-human audit history.
+
 ## Threshold calibration
 
 Do not select `65%`, `70%`, or another threshold from intuition or from the three
@@ -236,13 +251,17 @@ validation remains a separate prerequisite before production grouping.
 ## Reversible recommendation canary
 
 The post-evaluation canary is implemented in `api_fuzzy_canary.py` and uses
-three dedicated DocTypes:
+five dedicated DocTypes:
 
 - `CCD Match Canary Run` freezes the policy snapshot, approved evidence runs,
   approved Splink Review cutoff, data snapshot, and aggregate safety result.
 - `CCD Match Recommendation` stores a versioned pair-level `Proposed`,
   `Active`, `Exception`, `Reversed`, or `Superseded` decision.
 - `CCD Match Recommendation Event` is an immutable lifecycle audit record.
+- `CCD Match Component Review` stores one governed decision per connected
+  exception component.
+- `CCD Match Component Review Submission` preserves independent component
+  decisions and adjudication history.
 
 The full governed candidate population is regenerated for each preview. Any
 candidate truncation or skipped block fails the run. The canary then evaluates
@@ -259,7 +278,9 @@ recommendation can be proposed:
 
 Passing edges are only reversible recommendations. They do not create a person
 cluster, merge records, set `Is Matched?`, or update `CCD Master.match_table`.
-Activation is separate from preview generation. A subsequent active canary
+Recommendation approval is separate from preview generation. Approval changes
+only `Proposed` recommendation records to `Active` and adds audit events; it is
+not an identity-link action. A subsequent active canary
 supersedes the prior version while preserving both histories, and a manager can
 reverse one recommendation or the whole canary with a mandatory reason.
 

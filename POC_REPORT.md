@@ -29,7 +29,8 @@ sampled unseen High predictions. Estimated precision is 100%, with a Wilson
 
 Approval does **not** authorize record merging, automatic `Is Matched?`
 updates, or a general probability threshold. The completed preview has also
-not been activated. Those actions remain separate management decisions.
+not had its recommendations approved. Those actions remain separate management
+decisions.
 
 The latest `pilot-1.6` representative recalibration was finalized on
 2026-08-13. It improved Splink's usefulness for prioritizing human review but
@@ -234,6 +235,8 @@ completed on the latest governed snapshot:
 | Recommendation records / immutable creation events | 3,961 / 3,961 |
 | High components / largest component | 3,711 / 7 |
 | Stale High records | 0 |
+| Exception component-review cases | 191 |
+| Deterministic random QC sample | 100 |
 
 Every current exception has reason `one_to_many_source_conflict`; the whole
 affected component stays inactive rather than selecting one convenient edge.
@@ -243,7 +246,15 @@ CCD Master modification after the frozen snapshot, no duplicate recommendation
 key, and no recommendation missing its creation event.
 
 `Proposed` means eligible for a separately authorized recommendation-status
-activation. It does not mean merged, matched in production, or human-confirmed.
+approval. It does not mean merged, matched in production, or human-confirmed.
+
+The deployed review interface shows pair evidence on the recommendation form.
+Ordinary reviewers receive masked values and no CCD record keys; users with the
+Sensitive Reviewer role and System Managers retain full permitted values and
+record links. The 433 exception edges are presented as 191 connected-component
+cases with `All Same`, `Partial Match`, `All Different`, and `Unsure` decisions.
+Human submissions are independent and auditable. A separate deterministic
+100-pair sample supports ongoing QC of Proposed recommendations.
 
 ## Important quality findings during the POC
 

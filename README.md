@@ -166,12 +166,37 @@ High rule may become `Proposed`; HKID-only High, unvalidated source pairs,
 stale records, one-to-many components, and transitive contradictions become
 `Exception`.
 
+Every recommendation form now renders the pair in one protected side-by-side
+table. `CCD Match Reviewer` sees masked identity values and no CCD record keys;
+`CCD Match Sensitive Reviewer` and `System Manager` see the full permitted
+values and may follow the record links. Raw model reason codes remain restricted
+to System Managers.
+
+Exception edges are grouped into one `CCD Match Component Review` per connected
+component, so staff decide the complete 3–7-record case rather than switching
+between pair tabs. Reviewers choose `All Same`, `Partial Match`, `All Different`,
+or `Unsure`. Partial Match stores a canonical partition of the component.
+Two independent matching submissions finalize an agreement; disagreements and
+Unsure go to manager adjudication, and a positive adjudication still requires
+an independent matching confirmation. These human decisions never rewrite the
+model's `Exception` status or modify CCD Master.
+
+A deterministic 100-pair sample of passing Proposed recommendations is marked
+`Selected for QC` and uses the same blinded `Same` / `Different` / `Unsure`
+workflow. The canary form links directly to both the component queue and the QC
+queue.
+
 Each recommendation stores the frozen policy version, source-record snapshot,
 reason codes, safety status, and opaque pair/cluster fingerprints. Separate
-immutable events retain Created, Activated, Reversed, and Superseded history.
-Activation is a distinct System Manager action after aggregate inspection.
+immutable events retain Created, Approved, Reversed, and Superseded history.
+Approval is a distinct System Manager action after aggregate inspection.
 Both individual recommendations and the complete active canary can be
 reversed with a required reason.
+
+The Desk button is deliberately named **Approve Recommendations**. It changes
+only dedicated recommendation statuses from `Proposed` to `Active` and appends
+audit events. It does not link or merge CCD records, set `Is Matched?`, or
+populate Matching Score.
 
 The approved Splink cutoff is stored with the canary for future Review-queue
 ordering. This first canary emits Tiered High recommendations only; it does not

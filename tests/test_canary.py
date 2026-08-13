@@ -1,6 +1,11 @@
 import unittest
 
-from fuzzy_matching.canary import CanaryEdge, analyze_canary_edges
+from fuzzy_matching.canary import (
+    CanaryEdge,
+    analyze_canary_edges,
+    canonical_identity_groups,
+    identity_partition_fingerprint,
+)
 
 
 def edge(left, right, left_source, right_source, source_pair="A::B"):
@@ -8,6 +13,21 @@ def edge(left, right, left_source, right_source, source_pair="A::B"):
 
 
 class CanaryGateTests(unittest.TestCase):
+    def test_partial_review_pairs_close_transitively_and_keep_singletons(self):
+        groups = canonical_identity_groups(
+            ["D", "B", "A", "C"],
+            [("A", "B"), ("B", "C")],
+        )
+        self.assertEqual(groups, (("A", "B", "C"), ("D",)))
+        self.assertEqual(
+            identity_partition_fingerprint(groups),
+            identity_partition_fingerprint((("D",), ("C", "A", "B"))),
+        )
+
+    def test_partial_review_rejects_record_outside_component(self):
+        with self.assertRaises(ValueError):
+            canonical_identity_groups(["A", "B"], [("A", "C")])
+
     def test_safe_validated_pair_is_proposed(self):
         rows = [edge("A1", "B1", "A", "B")]
         records = {

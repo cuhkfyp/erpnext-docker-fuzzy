@@ -17,6 +17,8 @@ import frappe
 from db_connector.api_fuzzy_evaluation import (
     DEFAULT_PILOT_POLICY_VERSION,
     HIGH_TIER_VALIDATION,
+    REVIEW_ROLE,
+    SENSITIVE_ROLE,
     THRESHOLD_EVALUATION,
     _canonical_record,
     _policy_from_doc,
@@ -24,15 +26,32 @@ from db_connector.api_fuzzy_evaluation import (
 )
 from db_connector.fuzzy_matching import normalization as norm
 from db_connector.fuzzy_matching.blocking import BLOCKING_VERSION, generate_candidate_pairs
-from db_connector.fuzzy_matching.canary import CanaryEdge, analyze_canary_edges, ordered_pair
+from db_connector.fuzzy_matching.canary import (
+    CanaryEdge,
+    analyze_canary_edges,
+    canonical_identity_groups,
+    identity_partition_fingerprint,
+    ordered_pair,
+)
 from db_connector.fuzzy_matching.models import build_evidence, tiered_result
 from db_connector.fuzzy_matching.policy import MatchingPolicy
+from db_connector.fuzzy_matching.security import mask_identifier
 from db_connector.fuzzy_matching.types import MatchTier
 
 RUN_DOCTYPE = "CCD Match Canary Run"
 RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 EVENT_DOCTYPE = "CCD Match Recommendation Event"
+COMPONENT_REVIEW_DOCTYPE = "CCD Match Component Review"
 APPROVED_HIGH_REASON = "exact_name_plus_independent_evidence"
+QC_SAMPLE_SIZE = 100
+COMPONENT_DECISIONS = {"All Same", "Partial Match", "All Different", "Unsure"}
+FINAL_COMPONENT_DECISIONS = COMPONENT_DECISIONS - {"Unsure"}
+FINAL_REVIEW_STATUSES = {"Agreed", "Adjudicated"}
+OPEN_REVIEW_STATUSES = {
+    "Unreviewed",
+    "Partially Reviewed",
+    "Positive Confirmation Required",
+}
 RUNNING_STATUSES = (
     "Queued",
     "Profiling",
@@ -49,6 +68,17 @@ def _json(value: Any) -> str:
 def _require_manager() -> None:
     if "System Manager" not in set(frappe.get_roles()):
         frappe.throw("System Manager role is required", frappe.PermissionError)
+
+
+def _require_reviewer() -> None:
+    roles = set(frappe.get_roles())
+    if "System Manager" not in roles and REVIEW_ROLE not in roles and SENSITIVE_ROLE not in roles:
+        frappe.throw("CCD Match Reviewer role is required", frappe.PermissionError)
+
+
+def _has_sensitive_access() -> bool:
+    roles = set(frappe.get_roles())
+    return "System Manager" in roles or SENSITIVE_ROLE in roles
 
 
 def _snapshot_hash(value: str | dict[str, Any]) -> str:
@@ -302,6 +332,135 @@ def _refresh_run_counts(run_name: str) -> dict[str, int]:
     return values
 
 
+def _component_review_key(run_name: str, cluster_fingerprint: str) -> str:
+    return hashlib.sha256(f"{run_name}\x1f{cluster_fingerprint}".encode()).hexdigest()
+
+
+def _refresh_review_workflow_counts(run_name: str) -> dict[str, int]:
+    component_count = frappe.db.count(COMPONENT_REVIEW_DOCTYPE, {"canary_run": run_name})
+    component_complete = frappe.db.count(
+        COMPONENT_REVIEW_DOCTYPE,
+        {"canary_run": run_name, "review_status": ["in", sorted(FINAL_REVIEW_STATUSES)]},
+    )
+    qc_count = frappe.db.count(
+        RECOMMENDATION_DOCTYPE,
+        {"canary_run": run_name, "qc_selected": 1},
+    )
+    qc_complete = frappe.db.count(
+        RECOMMENDATION_DOCTYPE,
+        {
+            "canary_run": run_name,
+            "qc_selected": 1,
+            "qc_review_status": ["in", sorted(FINAL_REVIEW_STATUSES)],
+        },
+    )
+    values = {
+        "exception_component_count": component_count,
+        "exception_review_complete_count": component_complete,
+        "qc_sample_count": qc_count,
+        "qc_review_complete_count": qc_complete,
+    }
+    frappe.db.set_value(RUN_DOCTYPE, run_name, values, update_modified=False)
+    return values
+
+
+def _initialize_review_workflow(run_name: str) -> dict[str, int]:
+    """Create one human-review case per exception component and a stable QC sample."""
+    exception_rows = frappe.get_all(
+        RECOMMENDATION_DOCTYPE,
+        filters={"canary_run": run_name, "status": "Exception"},
+        fields=["cluster_fingerprint", "cluster_size", "count(name) as recommendation_count"],
+        group_by="cluster_fingerprint, cluster_size",
+        limit_page_length=100_000,
+    )
+    existing = {
+        str(row.review_key): row.name
+        for row in frappe.get_all(
+            COMPONENT_REVIEW_DOCTYPE,
+            filters={"canary_run": run_name},
+            fields=["name", "review_key"],
+            limit_page_length=100_000,
+        )
+    }
+    for row in exception_rows:
+        fingerprint = str(row.cluster_fingerprint)
+        review_key = _component_review_key(run_name, fingerprint)
+        review_name = existing.get(review_key)
+        if not review_name:
+            review = frappe.get_doc(
+                {
+                    "doctype": COMPONENT_REVIEW_DOCTYPE,
+                    "canary_run": run_name,
+                    "review_key": review_key,
+                    "cluster_fingerprint": fingerprint,
+                    "cluster_size": int(row.cluster_size or 0),
+                    "recommendation_count": int(row.recommendation_count or 0),
+                    "review_status": "Unreviewed",
+                }
+            ).insert(ignore_permissions=True)
+            review_name = review.name
+        frappe.db.sql(
+            f"""UPDATE `tab{RECOMMENDATION_DOCTYPE}`
+                SET component_review = %s
+                WHERE canary_run = %s AND cluster_fingerprint = %s
+                  AND status = 'Exception'""",
+            (review_name, run_name, fingerprint),
+        )
+
+    already_selected = frappe.db.count(
+        RECOMMENDATION_DOCTYPE,
+        {"canary_run": run_name, "qc_selected": 1},
+    )
+    if not already_selected:
+        proposed = frappe.get_all(
+            RECOMMENDATION_DOCTYPE,
+            filters={"canary_run": run_name, "status": "Proposed"},
+            fields=["name", "recommendation_key"],
+            limit_page_length=100_000,
+        )
+        selected = sorted(
+            proposed,
+            key=lambda row: hashlib.sha256(
+                f"{run_name}\x1f{row.recommendation_key}".encode()
+            ).hexdigest(),
+        )[: min(QC_SAMPLE_SIZE, len(proposed))]
+        for row in selected:
+            frappe.db.set_value(
+                RECOMMENDATION_DOCTYPE,
+                row.name,
+                {"qc_selected": 1, "qc_review_status": "Unreviewed"},
+                update_modified=False,
+            )
+    return _refresh_review_workflow_counts(run_name)
+
+
+def install_canary_review_workflow(run_name: str) -> dict[str, Any]:
+    """Bench-only idempotent backfill for a canary created before the review UI."""
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if run.status not in {"Ready", "Active", "Completed"}:
+        frappe.throw("The canary must have finished generating recommendations")
+    counts = _initialize_review_workflow(run.name)
+    frappe.db.commit()
+    return {"run": run.name, **counts}
+
+
+def install_existing_canary_review_workflows() -> dict[str, Any]:
+    """Idempotently add review cases to all completed recommendation generations."""
+    output = []
+    for run_name in frappe.get_all(
+        RUN_DOCTYPE,
+        filters={"status": ["in", ["Ready", "Active", "Completed"]]},
+        order_by="creation",
+        pluck="name",
+        limit_page_length=10_000,
+    ):
+        if not frappe.db.count(RECOMMENDATION_DOCTYPE, {"canary_run": run_name}):
+            continue
+        output.append({"run": run_name, **_initialize_review_workflow(run_name)})
+    frappe.db.commit()
+    return {"runs": output, "run_count": len(output)}
+
+
 def run_canary(run_name: str) -> None:
     run = frappe.get_doc(RUN_DOCTYPE, run_name)
     if run.status != "Queued":
@@ -451,6 +610,7 @@ def run_canary(run_name: str) -> None:
                 ),
             )
 
+        review_workflow = _initialize_review_workflow(run.name)
         summary = {
             "policy_snapshot_sha256": run.policy_snapshot_sha256,
             "blocking_version": BLOCKING_VERSION,
@@ -466,6 +626,8 @@ def run_canary(run_name: str) -> None:
             "largest_component_size": largest_cluster,
             "model_conflict_candidate_count": len(conflicting_pairs),
             "stale_record_count": len(stale),
+            "exception_component_count": review_workflow["exception_component_count"],
+            "random_qc_sample_count": review_workflow["qc_sample_count"],
             "production_records_modified": False,
         }
         run.db_set("high_candidate_count", len(high_edges), update_modified=False)
@@ -489,20 +651,572 @@ def run_canary(run_name: str) -> None:
         raise
 
 
+def _masked_evidence_value(value: Any) -> str:
+    """Mask every identity value for ordinary reviewers, preserving equality clues."""
+    return mask_identifier(value, visible_suffix=2)
+
+
+def _display_evidence_value(value: Any, sensitive: bool) -> str:
+    raw = str(value or "").strip()
+    return raw if sensitive else _masked_evidence_value(raw)
+
+
+def _run_and_policy(run_name: str) -> tuple[Any, MatchingPolicy]:
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    return run, MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
+
+
+def _recommendation_stale(recommendation: Any) -> bool:
+    left_modified = frappe.db.get_value("CCD Master", recommendation.left_record, "modified")
+    right_modified = frappe.db.get_value("CCD Master", recommendation.right_record, "modified")
+    return (
+        str(left_modified or "") != str(recommendation.left_modified_at or "")
+        or str(right_modified or "") != str(recommendation.right_modified_at or "")
+    )
+
+
+def _pair_evidence_payload(recommendation: Any) -> dict[str, Any]:
+    _run, policy = _run_and_policy(recommendation.canary_run)
+    left = frappe.get_doc("CCD Master", recommendation.left_record).as_dict()
+    right = frappe.get_doc("CCD Master", recommendation.right_record).as_dict()
+    left["source"] = recommendation.left_source
+    right["source"] = recommendation.right_source
+    evidence = build_evidence(left, right, policy)
+    sensitive = _has_sensitive_access()
+    attributes = []
+    for attribute in policy.attributes():
+        item = evidence.get(attribute)
+        attributes.append(
+            {
+                "attribute": attribute,
+                "left": _display_evidence_value(policy.value(left, attribute), sensitive),
+                "right": _display_evidence_value(policy.value(right, attribute), sensitive),
+                "comparison": str(item.level.value if item else "not_compared"),
+            }
+        )
+    payload = {
+        "recommendation": recommendation.name,
+        "status": recommendation.status,
+        "left": {"alias": "Left", "source": recommendation.left_source},
+        "right": {"alias": "Right", "source": recommendation.right_source},
+        "attributes": attributes,
+        "sensitive_values_visible": sensitive,
+        "stale": _recommendation_stale(recommendation),
+        "component_review": recommendation.component_review or "",
+        "qc_selected": bool(recommendation.qc_selected),
+        "qc_review_status": recommendation.qc_review_status or "",
+        "qc_final_label": recommendation.qc_final_label or "",
+    }
+    if sensitive:
+        payload["left"]["record_id"] = recommendation.left_record
+        payload["right"]["record_id"] = recommendation.right_record
+    if "System Manager" in set(frappe.get_roles()):
+        payload["reason_codes"] = json.loads(recommendation.reason_codes_json or "[]")
+        payload["safety_reasons"] = json.loads(
+            recommendation.safety_reasons_json or "[]"
+        )
+    return payload
+
+
+@frappe.whitelist()
+def get_recommendation_evidence(recommendation_name: str) -> dict[str, Any]:
+    _require_reviewer()
+    recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, recommendation_name)
+    payload = _pair_evidence_payload(recommendation)
+    ordinary = [
+        row
+        for row in recommendation.get("qc_review_labels") or []
+        if not row.is_adjudication
+    ]
+    submitted = any(row.reviewer == frappe.session.user for row in ordinary)
+    payload["can_submit_qc"] = bool(
+        recommendation.qc_selected
+        and not payload["stale"]
+        and recommendation.qc_review_status in OPEN_REVIEW_STATUSES
+        and not submitted
+    )
+    payload["can_adjudicate_qc"] = bool(
+        "System Manager" in set(frappe.get_roles())
+        and not payload["stale"]
+        and recommendation.qc_review_status == "Needs Adjudication"
+    )
+    return payload
+
+
+def _component_context(review: Any) -> tuple[list[Any], list[str], dict[str, Any]]:
+    recommendations = frappe.get_all(
+        RECOMMENDATION_DOCTYPE,
+        filters={
+            "canary_run": review.canary_run,
+            "cluster_fingerprint": review.cluster_fingerprint,
+        },
+        fields=[
+            "name",
+            "left_record",
+            "right_record",
+            "left_source",
+            "right_source",
+            "left_modified_at",
+            "right_modified_at",
+        ],
+        order_by="creation",
+        limit_page_length=100_000,
+    )
+    record_ids = sorted(
+        {
+            str(item)
+            for row in recommendations
+            for item in (row.left_record, row.right_record)
+        }
+    )
+    expected_modified: dict[str, str] = {}
+    for row in recommendations:
+        expected_modified[str(row.left_record)] = str(row.left_modified_at or "")
+        expected_modified[str(row.right_record)] = str(row.right_modified_at or "")
+    return recommendations, record_ids, expected_modified
+
+
+def _component_stale(review: Any) -> bool:
+    _rows, record_ids, expected = _component_context(review)
+    current = {
+        str(row.name): str(row.modified or "")
+        for row in frappe.get_all(
+            "CCD Master",
+            filters={"name": ["in", record_ids]},
+            fields=["name", "modified"],
+            limit_page_length=100,
+        )
+    }
+    return any(current.get(record_id, "") != expected.get(record_id, "") for record_id in record_ids)
+
+
+def _component_aliases(record_ids: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+    by_record = {record_id: f"R{index + 1}" for index, record_id in enumerate(record_ids)}
+    return by_record, {alias: record_id for record_id, alias in by_record.items()}
+
+
+def _groups_for_component_decision(
+    decision: str,
+    record_ids: list[str],
+    aliases_to_records: dict[str, str],
+    same_pairs_json: str | list[Any] | None,
+) -> tuple[tuple[str, ...], ...]:
+    if decision not in COMPONENT_DECISIONS:
+        frappe.throw("Decision must be All Same, Partial Match, All Different, or Unsure")
+    if decision == "Unsure":
+        return tuple()
+    if decision == "All Same":
+        return (tuple(sorted(record_ids)),)
+    if decision == "All Different":
+        return tuple((record_id,) for record_id in sorted(record_ids))
+    raw_pairs = (
+        json.loads(same_pairs_json or "[]")
+        if isinstance(same_pairs_json, str)
+        else (same_pairs_json or [])
+    )
+    same_pairs = []
+    for raw_pair in raw_pairs:
+        values = str(raw_pair).split("|")
+        if len(values) != 2 or any(value not in aliases_to_records for value in values):
+            frappe.throw("A Partial Match selection contains an invalid record pair")
+        same_pairs.append(
+            (aliases_to_records[values[0]], aliases_to_records[values[1]])
+        )
+    if not same_pairs:
+        frappe.throw("Partial Match requires at least one Same pair")
+    try:
+        groups = canonical_identity_groups(record_ids, same_pairs)
+    except ValueError as exc:
+        frappe.throw(str(exc))
+    if len(groups) in {1, len(record_ids)}:
+        frappe.throw("Use All Same or All Different for this selection")
+    return groups
+
+
+def _component_decision_fingerprint(
+    decision: str, groups: tuple[tuple[str, ...], ...]
+) -> str:
+    if decision == "Unsure":
+        return hashlib.sha256(b"Unsure").hexdigest()
+    return hashlib.sha256(
+        f"{decision}\x1f{identity_partition_fingerprint(groups)}".encode()
+    ).hexdigest()
+
+
+def _finalize_component_review(
+    review: Any,
+    decision: str,
+    groups_json: str,
+    status: str,
+) -> None:
+    review.review_status = status
+    review.final_decision = decision
+    review.final_groups_json = groups_json
+    review.finalized_at = frappe.utils.now_datetime()
+    review.finalized_by = frappe.session.user
+
+
+def _append_component_submission(
+    review: Any,
+    decision: str,
+    groups: tuple[tuple[str, ...], ...],
+    notes: str,
+    *,
+    is_adjudication: bool,
+) -> Any:
+    groups_json = _json(groups)
+    return review.append(
+        "review_submissions",
+        {
+            "reviewer": frappe.session.user,
+            "decision": decision,
+            "decision_fingerprint": _component_decision_fingerprint(decision, groups),
+            "groups_json": groups_json,
+            "notes": str(notes or "").strip(),
+            "submitted_at": frappe.utils.now_datetime(),
+            "is_adjudication": int(is_adjudication),
+        },
+    )
+
+
+@frappe.whitelist()
+def get_component_evidence(review_name: str) -> dict[str, Any]:
+    _require_reviewer()
+    review = frappe.get_doc(COMPONENT_REVIEW_DOCTYPE, review_name)
+    recommendations, record_ids, _expected = _component_context(review)
+    aliases, _reverse = _component_aliases(record_ids)
+    _run, policy = _run_and_policy(review.canary_run)
+    raw_rows = frappe.get_all(
+        "CCD Master",
+        filters={"name": ["in", record_ids]},
+        fields=["*"],
+        limit_page_length=100,
+    )
+    raw_by_id = {str(row.name): dict(row) for row in raw_rows}
+    source_by_id: dict[str, str] = {}
+    for recommendation in recommendations:
+        source_by_id[str(recommendation.left_record)] = recommendation.left_source
+        source_by_id[str(recommendation.right_record)] = recommendation.right_source
+    sensitive = _has_sensitive_access()
+    records = []
+    for record_id in record_ids:
+        raw = raw_by_id[record_id]
+        records.append(
+            {
+                "alias": aliases[record_id],
+                "source": source_by_id.get(record_id, ""),
+                "attributes": {
+                    attribute: _display_evidence_value(
+                        policy.value(raw, attribute), sensitive
+                    )
+                    for attribute in policy.attributes()
+                },
+                **({"record_id": record_id} if sensitive else {}),
+            }
+        )
+    candidate_pairs = [
+        {
+            "left": aliases[str(row.left_record)],
+            "right": aliases[str(row.right_record)],
+        }
+        for row in recommendations
+    ]
+    pair_options = [
+        {
+            "value": f"{aliases[left]}|{aliases[right]}",
+            "label": (
+                f"{aliases[left]} ({source_by_id.get(left, '')}) = "
+                f"{aliases[right]} ({source_by_id.get(right, '')})"
+            ),
+        }
+        for index, left in enumerate(record_ids)
+        for right in record_ids[index + 1 :]
+    ]
+    stale = _component_stale(review)
+    if stale and not review.stale:
+        frappe.db.set_value(
+            COMPONENT_REVIEW_DOCTYPE,
+            review.name,
+            {"stale": 1, "review_status": "Stale"},
+            update_modified=False,
+        )
+    ordinary = [row for row in review.review_submissions if not row.is_adjudication]
+    submitted = any(row.reviewer == frappe.session.user for row in ordinary)
+    final_groups = []
+    if review.final_groups_json:
+        for group in json.loads(review.final_groups_json):
+            final_groups.append([aliases[str(record_id)] for record_id in group])
+    return {
+        "review": review.name,
+        "status": "Stale" if stale else review.review_status,
+        "final_decision": review.final_decision or "",
+        "final_groups": final_groups,
+        "records": records,
+        "attributes": list(policy.attributes()),
+        "candidate_pairs": candidate_pairs,
+        "pair_options": pair_options,
+        "sensitive_values_visible": sensitive,
+        "stale": stale,
+        "can_submit": bool(
+            not stale
+            and review.review_status in OPEN_REVIEW_STATUSES
+            and not submitted
+        ),
+        "can_adjudicate": bool(
+            "System Manager" in set(frappe.get_roles())
+            and not stale
+            and review.review_status == "Needs Adjudication"
+        ),
+    }
+
+
+@frappe.whitelist()
+def submit_component_review(
+    review_name: str,
+    decision: str,
+    same_pairs_json: str = "[]",
+    notes: str = "",
+) -> dict[str, str]:
+    _require_reviewer()
+    review = frappe.get_doc(COMPONENT_REVIEW_DOCTYPE, review_name)
+    if _component_stale(review):
+        frappe.db.set_value(
+            COMPONENT_REVIEW_DOCTYPE,
+            review.name,
+            {"stale": 1, "review_status": "Stale"},
+            update_modified=False,
+        )
+        frappe.throw("This component is stale. Create a new canary before reviewing it.")
+    if review.review_status not in OPEN_REVIEW_STATUSES:
+        frappe.throw("This component is closed to ordinary review")
+    ordinary = [row for row in review.review_submissions if not row.is_adjudication]
+    if any(row.reviewer == frappe.session.user for row in ordinary):
+        frappe.throw("Your immutable component review is already recorded")
+    _recommendations, record_ids, _expected = _component_context(review)
+    _aliases, aliases_to_records = _component_aliases(record_ids)
+    groups = _groups_for_component_decision(
+        decision, record_ids, aliases_to_records, same_pairs_json
+    )
+    submission = _append_component_submission(
+        review, decision, groups, notes, is_adjudication=False
+    )
+    adjudications = [row for row in review.review_submissions if row.is_adjudication]
+    if adjudications:
+        adjudication = adjudications[-1]
+        if submission.decision_fingerprint == adjudication.decision_fingerprint:
+            supporters = {
+                row.reviewer
+                for row in review.review_submissions
+                if row.decision_fingerprint == adjudication.decision_fingerprint
+            }
+            if len(supporters) >= 2:
+                _finalize_component_review(
+                    review,
+                    adjudication.decision,
+                    adjudication.groups_json,
+                    "Adjudicated",
+                )
+            else:
+                review.review_status = "Positive Confirmation Required"
+        else:
+            review.review_status = "Needs Adjudication"
+            review.final_decision = ""
+            review.final_groups_json = ""
+    elif decision == "Unsure":
+        review.review_status = "Needs Adjudication"
+    elif len(ordinary) + 1 < 2:
+        review.review_status = "Partially Reviewed"
+    else:
+        fingerprints = {row.decision_fingerprint for row in ordinary}
+        fingerprints.add(submission.decision_fingerprint)
+        if len(fingerprints) == 1:
+            _finalize_component_review(
+                review, decision, submission.groups_json, "Agreed"
+            )
+        else:
+            review.review_status = "Needs Adjudication"
+    review.save(ignore_permissions=True)
+    _refresh_review_workflow_counts(review.canary_run)
+    frappe.db.commit()
+    return {"review": review.name, "status": review.review_status}
+
+
+@frappe.whitelist()
+def adjudicate_component_review(
+    review_name: str,
+    decision: str,
+    same_pairs_json: str = "[]",
+    notes: str = "",
+) -> dict[str, str]:
+    _require_manager()
+    if decision not in FINAL_COMPONENT_DECISIONS:
+        frappe.throw("Adjudication must be All Same, Partial Match, or All Different")
+    if not str(notes or "").strip():
+        frappe.throw("Adjudication notes are required")
+    review = frappe.get_doc(COMPONENT_REVIEW_DOCTYPE, review_name)
+    if _component_stale(review):
+        frappe.throw("This component is stale. Create a new canary before adjudicating it.")
+    if review.review_status != "Needs Adjudication":
+        frappe.throw("Only a component awaiting adjudication may be adjudicated")
+    _recommendations, record_ids, _expected = _component_context(review)
+    _aliases, aliases_to_records = _component_aliases(record_ids)
+    groups = _groups_for_component_decision(
+        decision, record_ids, aliases_to_records, same_pairs_json
+    )
+    submission = _append_component_submission(
+        review, decision, groups, notes, is_adjudication=True
+    )
+    supporters = {
+        row.reviewer
+        for row in review.review_submissions
+        if row.decision_fingerprint == submission.decision_fingerprint
+    }
+    if decision in {"All Same", "Partial Match"} and len(supporters) < 2:
+        review.review_status = "Positive Confirmation Required"
+        review.final_decision = ""
+        review.final_groups_json = ""
+    else:
+        _finalize_component_review(
+            review, decision, submission.groups_json, "Adjudicated"
+        )
+    review.save(ignore_permissions=True)
+    _refresh_review_workflow_counts(review.canary_run)
+    frappe.db.commit()
+    return {"review": review.name, "status": review.review_status}
+
+
+def _update_qc_review_state(recommendation: Any) -> None:
+    ordinary = [row for row in recommendation.qc_review_labels if not row.is_adjudication]
+    adjudications = [row for row in recommendation.qc_review_labels if row.is_adjudication]
+    if adjudications:
+        adjudication = adjudications[-1]
+        supporters = {
+            row.reviewer
+            for row in recommendation.qc_review_labels
+            if row.label == adjudication.label
+        }
+        if adjudication.label == "Same" and len(supporters) < 2:
+            recommendation.qc_review_status = "Positive Confirmation Required"
+            recommendation.qc_final_label = ""
+        else:
+            recommendation.qc_review_status = "Adjudicated"
+            recommendation.qc_final_label = adjudication.label
+        return
+    labels = [row.label for row in ordinary]
+    if "Unsure" in labels:
+        recommendation.qc_review_status = "Needs Adjudication"
+    elif len(labels) < 2:
+        recommendation.qc_review_status = "Partially Reviewed"
+    elif len(set(labels)) == 1:
+        recommendation.qc_review_status = "Agreed"
+        recommendation.qc_final_label = labels[0]
+    else:
+        recommendation.qc_review_status = "Needs Adjudication"
+
+
+@frappe.whitelist()
+def submit_recommendation_qc(
+    recommendation_name: str, label: str, notes: str = ""
+) -> dict[str, str]:
+    _require_reviewer()
+    if label not in {"Same", "Different", "Unsure"}:
+        frappe.throw("QC label must be Same, Different, or Unsure")
+    recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, recommendation_name)
+    if not recommendation.qc_selected:
+        frappe.throw("This recommendation is not in the random QC sample")
+    if _recommendation_stale(recommendation):
+        recommendation.db_set(
+            {"qc_stale": 1, "qc_review_status": "Stale"}, update_modified=False
+        )
+        frappe.throw("This recommendation is stale. Review it in a new canary.")
+    if recommendation.qc_review_status not in OPEN_REVIEW_STATUSES:
+        frappe.throw("This QC case is closed to ordinary review")
+    ordinary = [row for row in recommendation.qc_review_labels if not row.is_adjudication]
+    if any(row.reviewer == frappe.session.user for row in ordinary):
+        frappe.throw("Your immutable QC review is already recorded")
+    recommendation.append(
+        "qc_review_labels",
+        {
+            "reviewer": frappe.session.user,
+            "label": label,
+            "notes": str(notes or "").strip(),
+            "submitted_at": frappe.utils.now_datetime(),
+            "is_adjudication": 0,
+        },
+    )
+    adjudications = [
+        row for row in recommendation.qc_review_labels if row.is_adjudication
+    ]
+    if adjudications and label != adjudications[-1].label:
+        recommendation.qc_review_status = "Needs Adjudication"
+        recommendation.qc_final_label = ""
+    else:
+        _update_qc_review_state(recommendation)
+    recommendation.save(ignore_permissions=True)
+    _refresh_review_workflow_counts(recommendation.canary_run)
+    frappe.db.commit()
+    return {
+        "recommendation": recommendation.name,
+        "status": recommendation.qc_review_status,
+    }
+
+
+@frappe.whitelist()
+def adjudicate_recommendation_qc(
+    recommendation_name: str, label: str, notes: str = ""
+) -> dict[str, str]:
+    _require_manager()
+    if label not in {"Same", "Different"}:
+        frappe.throw("QC adjudication must be Same or Different")
+    if not str(notes or "").strip():
+        frappe.throw("Adjudication notes are required")
+    recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, recommendation_name)
+    if _recommendation_stale(recommendation):
+        frappe.throw("This recommendation is stale. Review it in a new canary.")
+    if recommendation.qc_review_status != "Needs Adjudication":
+        frappe.throw("Only QC cases awaiting adjudication may be adjudicated")
+    recommendation.append(
+        "qc_review_labels",
+        {
+            "reviewer": frappe.session.user,
+            "label": label,
+            "notes": str(notes).strip(),
+            "submitted_at": frappe.utils.now_datetime(),
+            "is_adjudication": 1,
+        },
+    )
+    _update_qc_review_state(recommendation)
+    recommendation.save(ignore_permissions=True)
+    _refresh_review_workflow_counts(recommendation.canary_run)
+    frappe.db.commit()
+    return {
+        "recommendation": recommendation.name,
+        "status": recommendation.qc_review_status,
+    }
+
+
 def _change_recommendation_status(
     recommendation: Any,
     to_status: str,
     event_type: str,
     reason: str,
     *,
-    activated: bool = False,
+    approved: bool = False,
 ) -> None:
     from_status = str(recommendation.status)
     values: dict[str, Any] = {"status": to_status}
     now = frappe.utils.now_datetime()
     actor = frappe.session.user or "Administrator"
-    if activated:
-        values.update({"activated_at": now, "activated_by": actor})
+    if approved:
+        values.update(
+            {
+                "approved_at": now,
+                "approved_by": actor,
+                # Retain the original columns for backward-compatible reports.
+                "activated_at": now,
+                "activated_by": actor,
+            }
+        )
     if to_status in {"Reversed", "Superseded"}:
         values.update({"ended_at": now, "ended_by": actor, "end_reason": reason})
     frappe.db.set_value(
@@ -547,11 +1261,12 @@ def _stale_recommendation_names(run_name: str) -> list[str]:
 
 
 @frappe.whitelist()
-def activate_canary(run_name: str) -> dict[str, Any]:
+def approve_canary_recommendations(run_name: str) -> dict[str, Any]:
+    """Approve reversible recommendation records without linking CCD records."""
     _require_manager()
     run = frappe.get_doc(RUN_DOCTYPE, run_name)
     if run.status != "Ready":
-        frappe.throw("Only a Ready canary may be activated")
+        frappe.throw("Only a Ready canary may have its recommendations approved")
     policy = frappe.get_doc("CCD Matching Policy", run.matching_policy)
     if policy.status != "Pilot":
         frappe.throw("The matching policy is no longer in Pilot status")
@@ -566,13 +1281,15 @@ def activate_canary(run_name: str) -> dict[str, Any]:
                 recommendation,
                 "Exception",
                 "Safety Exception",
-                "stale_before_activation",
+                "stale_before_recommendation_approval",
             )
         _refresh_run_counts(run.name)
+        _initialize_review_workflow(run.name)
         frappe.db.commit()
         return {
             "run": run.name,
             "status": "Ready",
+            "approved": 0,
             "activated": 0,
             "new_stale_exceptions": len(stale_names),
         }
@@ -614,9 +1331,9 @@ def activate_canary(run_name: str) -> dict[str, Any]:
         _change_recommendation_status(
             recommendation,
             "Active",
-            "Activated",
-            "canary_activation",
-            activated=True,
+            "Approved",
+            "recommendation_only_approval",
+            approved=True,
         )
     for old_run in set(row.canary_run for row in prior):
         frappe.db.set_value(RUN_DOCTYPE, old_run, "status", "Completed", update_modified=False)
@@ -627,13 +1344,26 @@ def activate_canary(run_name: str) -> dict[str, Any]:
         run.name,
         {
             "status": "Active",
+            "approved_at": frappe.utils.now_datetime(),
+            "approved_by": frappe.session.user,
             "activated_at": frappe.utils.now_datetime(),
             "activated_by": frappe.session.user,
         },
         update_modified=False,
     )
     frappe.db.commit()
-    return {"run": run.name, "status": "Active", "activated": counts["active_count"]}
+    return {
+        "run": run.name,
+        "status": "Active",
+        "approved": counts["active_count"],
+        "activated": counts["active_count"],
+    }
+
+
+@frappe.whitelist()
+def activate_canary(run_name: str) -> dict[str, Any]:
+    """Backward-compatible alias; approval still creates no CCD identity link."""
+    return approve_canary_recommendations(run_name)
 
 
 @frappe.whitelist()
@@ -701,5 +1431,9 @@ def get_canary_summary(run_name: str) -> dict[str, Any]:
         "active_count": run.active_count,
         "reversed_count": run.reversed_count,
         "superseded_count": run.superseded_count,
+        "exception_component_count": run.exception_component_count,
+        "exception_review_complete_count": run.exception_review_complete_count,
+        "qc_sample_count": run.qc_sample_count,
+        "qc_review_complete_count": run.qc_review_complete_count,
         "summary": json.loads(run.summary_json or "{}"),
     }

@@ -111,6 +111,8 @@ if (( ! CODE_ONLY )); then
 		db_connector.api_fuzzy_evaluation.install_matching_roles
 	docker exec frappe_docker-backend-1 bench --site "$SITE" execute \
 		db_connector.api_fuzzy_evaluation.install_default_pilot_policy
+	docker exec frappe_docker-backend-1 bench --site "$SITE" execute \
+		db_connector.api_fuzzy_canary.install_existing_canary_review_workflows
 	docker exec frappe_docker-backend-1 bench --site "$SITE" build --app db_connector
 fi
 docker exec frappe_docker-backend-1 bench --site "$SITE" clear-cache

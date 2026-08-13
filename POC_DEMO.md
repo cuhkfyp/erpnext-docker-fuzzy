@@ -102,7 +102,7 @@ formula:
 
 Ask management to authorize only:
 
-> Activation of the 3,528 safety-gated `Proposed` records inside the reversible
+> Approval of the 3,528 safety-gated `Proposed` records inside the reversible
 > recommendation register. This does not merge records, set `Is Matched?`, or
 > populate the production matching table; the 433 exceptions remain inactive.
 
@@ -112,7 +112,8 @@ The policy document and its evaluation run have separate lifecycles. At the
 time the evaluation evidence was prepared, `pilot-1.6` was **Draft**, while its
 High Tier Validation run was **Completed / Approved**. It was subsequently and
 separately promoted to **Pilot** to create the recommendation-only preview. It
-has not been promoted to `Approved`, and the preview has not been activated.
+has not been promoted to `Approved`, and its recommendations have not been
+approved/activated.
 
 1. In ERPNext, open `pilot-1.6` and identify it as the **Pilot policy whose
    unchanged frozen snapshot was evaluated before promotion**.
@@ -141,8 +142,14 @@ has not been promoted to `Approved`, and the preview has not been activated.
    real recommendation rows in a recorded presentation.
 9. Explain that all 433 exceptions are one-to-many source conflicts and that
    the immutable event count equals the recommendation count, 3,961.
-10. Show that the preview did not modify production match fields, then stop
-    before pressing **Activate Recommendations**.
+10. Open one presentation-safe/specially authorized component review and show
+    that its complete cluster is on one page. Explain the masked ordinary view,
+    the role-gated sensitive view, and the four component decisions. Do not
+    expose real values in a recorded or general-audience presentation.
+11. Show the 100-pair random QC queue and explain that it is a sample, not a
+    3,528-pair mandatory workload.
+12. Show that the preview did not modify production match fields, then stop
+    before pressing **Approve Recommendations**.
 
 ### What the ERPNext `Metrics` field means
 
@@ -231,5 +238,5 @@ separate decision.
 - Management can distinguish model High from Human Confirmed Same.
 - Management sees quantitative evidence and confidence bounds.
 - Management understands that human workload is exception-based.
-- The requested decision is limited to activating reversible recommendation
+- The requested decision is limited to approving reversible recommendation
   records; no production match action is included.

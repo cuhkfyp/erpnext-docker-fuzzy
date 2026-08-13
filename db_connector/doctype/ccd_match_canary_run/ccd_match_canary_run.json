@@ -6,10 +6,11 @@
  "field_order": [
   "matching_policy", "policy_version", "policy_snapshot_json", "policy_snapshot_sha256",
   "high_validation_run", "threshold_evaluation_run", "splink_review_threshold",
-  "status", "snapshot_at", "activated_at", "activated_by",
+  "status", "snapshot_at", "approved_at", "approved_by", "activated_at", "activated_by",
   "record_count", "candidate_count", "candidate_truncated", "skipped_blocks_json",
   "high_candidate_count", "proposed_count", "exception_count", "active_count",
-  "reversed_count", "superseded_count", "summary_json", "error_summary"
+  "reversed_count", "superseded_count", "exception_component_count", "exception_review_complete_count",
+  "qc_sample_count", "qc_review_complete_count", "summary_json", "error_summary"
  ],
  "fields": [
   {"fieldname": "matching_policy", "fieldtype": "Link", "in_list_view": 1, "label": "Matching Policy", "options": "CCD Matching Policy", "read_only": 1, "reqd": 1},
@@ -21,8 +22,10 @@
   {"fieldname": "splink_review_threshold", "fieldtype": "Float", "label": "Approved Splink Review Threshold", "precision": "12", "read_only": 1},
   {"default": "Queued", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Queued\nProfiling\nGenerating Candidates\nApplying Safety Gates\nWriting Recommendations\nReady\nActive\nCompleted\nFailed", "read_only": 1},
   {"fieldname": "snapshot_at", "fieldtype": "Datetime", "label": "Snapshot At", "read_only": 1, "reqd": 1},
-  {"fieldname": "activated_at", "fieldtype": "Datetime", "label": "Activated At", "read_only": 1},
-  {"fieldname": "activated_by", "fieldtype": "Link", "label": "Activated By", "options": "User", "read_only": 1},
+  {"fieldname": "approved_at", "fieldtype": "Datetime", "label": "Recommendations Approved At", "read_only": 1},
+  {"fieldname": "approved_by", "fieldtype": "Link", "label": "Recommendations Approved By", "options": "User", "read_only": 1},
+  {"fieldname": "activated_at", "fieldtype": "Datetime", "hidden": 1, "label": "Legacy Activated At", "read_only": 1},
+  {"fieldname": "activated_by", "fieldtype": "Link", "hidden": 1, "label": "Legacy Activated By", "options": "User", "read_only": 1},
   {"fieldname": "record_count", "fieldtype": "Int", "label": "Governed Record Count", "read_only": 1},
   {"fieldname": "candidate_count", "fieldtype": "Int", "label": "Candidate Pair Count", "read_only": 1},
   {"fieldname": "candidate_truncated", "fieldtype": "Check", "label": "Candidate Truncated", "read_only": 1},
@@ -33,6 +36,10 @@
   {"fieldname": "active_count", "fieldtype": "Int", "label": "Active", "read_only": 1},
   {"fieldname": "reversed_count", "fieldtype": "Int", "label": "Reversed", "read_only": 1},
   {"fieldname": "superseded_count", "fieldtype": "Int", "label": "Superseded", "read_only": 1},
+  {"fieldname": "exception_component_count", "fieldtype": "Int", "label": "Exception Components", "read_only": 1},
+  {"fieldname": "exception_review_complete_count", "fieldtype": "Int", "label": "Exception Reviews Complete", "read_only": 1},
+  {"fieldname": "qc_sample_count", "fieldtype": "Int", "label": "Random QC Sample", "read_only": 1},
+  {"fieldname": "qc_review_complete_count", "fieldtype": "Int", "label": "QC Reviews Complete", "read_only": 1},
   {"fieldname": "summary_json", "fieldtype": "Code", "label": "Aggregate Safety Summary", "options": "JSON", "read_only": 1},
   {"fieldname": "error_summary", "fieldtype": "Small Text", "label": "Error Summary", "read_only": 1}
  ],
