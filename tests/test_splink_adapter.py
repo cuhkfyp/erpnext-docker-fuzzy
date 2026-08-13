@@ -1,6 +1,9 @@
 import unittest
 
-from fuzzy_matching.splink_adapter import _null_missing_comparison_values
+from fuzzy_matching.splink_adapter import (
+    _null_missing_comparison_values,
+    score_requested_pairs,
+)
 
 
 class SplinkAdapterTests(unittest.TestCase):
@@ -24,6 +27,12 @@ class SplinkAdapterTests(unittest.TestCase):
         self.assertIsNone(converted["email"])
         self.assertEqual(converted["global_id"], "")
         self.assertEqual(original["chi_full"], "")
+
+    def test_empty_requested_pair_set_does_not_train_or_require_splink(self):
+        self.assertEqual(
+            score_requested_pairs([], [], [], minimum_probability=0.5),
+            [],
+        )
 
 
 if __name__ == "__main__":

@@ -97,6 +97,12 @@ formula:
 - Its approved `0.938995074` cutoff is the first-priority band, not a
   Same/Different boundary. Lower-scored deterministic Review/Conflict pairs
   remain review candidates when capacity or operational need permits.
+- The separate `CCD Match Review Candidate` queue excludes Tiered High and
+  previously human-used pairs. Every queued row stays model tier `Review` and
+  requires a human decision; it cannot link or merge records.
+- The current optional pool contains 11,177 priority candidates from 816,534
+  eligible scored pairs. It is for capacity-based/on-demand review, not a new
+  mandatory workload.
 
 ### 8. Requested next decision — 1 minute
 
@@ -150,6 +156,12 @@ approved/activated.
     3,528-pair mandatory workload.
 12. Show that the preview did not modify production match fields, then stop
     before pressing **Approve Recommendations**.
+13. Open the latest `Ready` `CCD Match Review Queue Run` and show aggregate
+    counts only: 821,592 governed candidates; 3,961 Tiered High and 1,097 prior
+    human-used pairs excluded; 816,534 scored; 11,177 queued at or above
+    `0.938995074`; zero stale training endpoints. Use **View Review Candidates**
+    to explain priority ordering, but do not open a real pair in a recorded or
+    general-audience presentation.
 
 ### What the ERPNext `Metrics` field means
 
@@ -213,6 +225,8 @@ discarded. Only human review can confirm Same or Different in this tier.
 
 Yes. It becomes `Human Confirmed Same`; the original model tier remains
 unchanged for audit. A human confirmation is not misreported as model High.
+Two independent `Same` submissions are required. The confirmation is stored in
+the review register and still does not itself merge or link CCD records.
 
 ### “Are the other models abandoned?”
 

@@ -18,6 +18,7 @@ class SplinkUnavailable(RuntimeError):
 
 RANDOM_MATCH_PRIOR = 0.0001
 MAX_DIRECT_SCORING_PAIRS = 5_000
+REQUESTED_PAIR_BATCH_SIZE = 20_000
 SPLINK_ADAPTER_VERSION = "pilot-splink-1.1"
 COMPARISON_FIELDS = ("chi_full", "eng_full", "birthday", "phone", "email")
 
@@ -70,6 +71,9 @@ def fit_predict(
     max_block_size: int = 10_000,
     max_prediction_pairs: int = 500_000,
     requested_pairs: Iterable[tuple[str, str]] | None = None,
+    scoring_records: Iterable[dict[str, Any]] | None = None,
+    batch_requested_pairs: bool = False,
+    requested_min_probability: float | None = None,
 ) -> list[ProbabilityPrediction]:
     """Train an unsupervised link-only model and return local predictions.
 
@@ -208,11 +212,15 @@ def fit_predict(
             linker.training.estimate_parameters_using_expectation_maximisation(rule)
         except Exception:
             continue
-    predictions = linker.inference.predict(threshold_match_weight=-20).as_pandas_dataframe()
+    predictions = (
+        None
+        if batch_requested_pairs
+        else linker.inference.predict(threshold_match_weight=-20).as_pandas_dataframe()
+    )
 
     output: list[ProbabilityPrediction] = []
     predicted_keys: set[tuple[str, str]] = set()
-    for row in predictions.to_dict("records"):
+    for row in predictions.to_dict("records") if predictions is not None else []:
         left = str(row.get("record_id_l") or row.get("unique_id_l") or "")
         right = str(row.get("record_id_r") or row.get("unique_id_r") or "")
         if not left or not right:
@@ -232,9 +240,21 @@ def fit_predict(
     # missing pairs directly with the trained model so the statistical model
     # can be calibrated on the same governed labels. This never creates new
     # production candidates and is bounded by the caller's review sample.
+    scoring_rows = _null_missing_comparison_values(
+        scoring_records if scoring_records is not None else frame.to_dict("records")
+    )
+    # The trained settings retain opaque working block columns for diagnostics.
+    # Requested-pair scoring does not use them for joining, but Splink still
+    # selects them in its comparison pipeline, so supply harmless empty values.
+    working_block_columns = [
+        str(column) for column in frame.columns if str(column).startswith("__block_")
+    ]
+    for row in scoring_rows:
+        for column in working_block_columns:
+            row.setdefault(column, "")
     row_by_id = {
         str(row.get("record_id") or ""): row
-        for row in frame.to_dict("records")
+        for row in scoring_rows
         if row.get("record_id")
     }
     direct_pairs = {
@@ -242,7 +262,19 @@ def fit_predict(
         for left, right in (requested_pairs or ())
         if left and right and left != right
     }
-    for left, right in sorted(direct_pairs - predicted_keys)[:MAX_DIRECT_SCORING_PAIRS]:
+    missing_requested = sorted(direct_pairs - predicted_keys)
+    if batch_requested_pairs:
+        output.extend(
+            _batch_score_requested_pairs(
+                linker,
+                row_by_id,
+                missing_requested,
+                minimum_probability=requested_min_probability,
+            )
+        )
+        return output
+
+    for left, right in missing_requested[:MAX_DIRECT_SCORING_PAIRS]:
         left_row = row_by_id.get(left)
         right_row = row_by_id.get(right)
         if not left_row or not right_row:
@@ -269,3 +301,216 @@ def fit_predict(
             # model's valid predictions for the remainder of the review set.
             continue
     return output
+
+
+def _batch_score_requested_pairs(
+    linker: Any,
+    row_by_id: dict[str, dict[str, Any]],
+    requested_pairs: list[tuple[str, str]],
+    *,
+    minimum_probability: float | None = None,
+    batch_size: int = REQUESTED_PAIR_BATCH_SIZE,
+) -> list[ProbabilityPrediction]:
+    """Score exact requested pairs in bounded SQL batches with one trained model.
+
+    Splink's public ``compare_two_records`` method creates a Cartesian product
+    when given multiple rows. This pinned-version adapter uses the same
+    comparison/TF pipeline but joins the two temporary inputs on an opaque pair
+    sequence. Every requested pair must yield exactly one score before threshold
+    filtering; otherwise generation fails closed instead of publishing a partial
+    Review queue.
+    """
+    try:
+        import pandas as pd
+        from splink.internals.find_matches_to_new_records import (
+            add_unique_id_and_source_dataset_cols_if_needed,
+        )
+        from splink.internals.misc import ascii_uid
+        from splink.internals.pipeline import CTEPipeline
+        from splink.internals.predict import (
+            predict_from_comparison_vectors_sqls_using_settings,
+        )
+        from splink.internals.term_frequencies import (
+            _join_new_table_to_df_concat_with_tf_sql,
+            colname_to_tf_tablename,
+        )
+    except Exception as exc:
+        raise SplinkUnavailable(
+            "The pinned Splink batch-scoring internals are unavailable"
+        ) from exc
+
+    output: list[ProbabilityPrediction] = []
+    for start in range(0, len(requested_pairs), max(1, int(batch_size))):
+        batch = requested_pairs[start : start + max(1, int(batch_size))]
+        left_rows = []
+        right_rows = []
+        pair_by_sequence: dict[str, tuple[str, str]] = {}
+        for offset, (left_id, right_id) in enumerate(batch):
+            left = row_by_id.get(left_id)
+            right = row_by_id.get(right_id)
+            if left is None or right is None:
+                raise ValueError("A requested Splink pair references a missing record")
+            sequence = str(start + offset)
+            pair_by_sequence[sequence] = (left_id, right_id)
+            left_row = dict(left)
+            right_row = dict(right)
+            left_row["record_id"] = f"{sequence}:L"
+            right_row["record_id"] = f"{sequence}:R"
+            left_row["__pair_sequence"] = sequence
+            right_row["__pair_sequence"] = sequence
+            left_rows.append(left_row)
+            right_rows.append(right_row)
+
+        uid = ascii_uid(8)
+        left_table = linker.table_management.register_table(
+            pd.DataFrame(left_rows),
+            f"__splink__requested_left_{uid}",
+            overwrite=True,
+        )
+        right_table = linker.table_management.register_table(
+            pd.DataFrame(right_rows),
+            f"__splink__requested_right_{uid}",
+            overwrite=True,
+        )
+        left_table.templated_name = "__splink__requested_left"
+        right_table.templated_name = "__splink__requested_right"
+        pipeline = CTEPipeline([left_table, right_table])
+        cache = linker._intermediate_table_cache
+        if "__splink__df_concat_with_tf" in cache:
+            pipeline.append_input_dataframe(
+                cache.get_with_logging("__splink__df_concat_with_tf")
+            )
+        for tf_col in linker._settings_obj._term_frequency_columns:
+            table_name = colname_to_tf_tablename(tf_col)
+            if table_name in cache:
+                pipeline.append_input_dataframe(cache.get_with_logging(table_name))
+
+        pipeline.enqueue_sql(
+            _join_new_table_to_df_concat_with_tf_sql(
+                linker, "__splink__requested_left", left_table
+            ),
+            "__splink__requested_left_with_tf",
+        )
+        pipeline.enqueue_sql(
+            _join_new_table_to_df_concat_with_tf_sql(
+                linker, "__splink__requested_right", right_table
+            ),
+            "__splink__requested_right_with_tf",
+        )
+        pipeline = add_unique_id_and_source_dataset_cols_if_needed(
+            linker,
+            left_table,
+            pipeline,
+            in_tablename="__splink__requested_left_with_tf",
+            out_tablename="__splink__requested_left_with_tf_uid_fix",
+            uid_str="_left",
+        )
+        pipeline = add_unique_id_and_source_dataset_cols_if_needed(
+            linker,
+            right_table,
+            pipeline,
+            in_tablename="__splink__requested_right_with_tf",
+            out_tablename="__splink__requested_right_with_tf_uid_fix",
+            uid_str="_right",
+        )
+        select_expr = ", ".join(
+            linker._settings_obj._columns_to_select_for_blocking
+        )
+        pipeline.enqueue_sql(
+            f"""SELECT {select_expr}, 0 AS match_key
+                FROM __splink__requested_left_with_tf_uid_fix AS l
+                INNER JOIN __splink__requested_right_with_tf_uid_fix AS r
+                    ON l.__pair_sequence = r.__pair_sequence""",
+            "__splink__compare_two_records_blocked",
+        )
+        select_expr = ", ".join(
+            linker._settings_obj._columns_to_select_for_comparison_vector_values
+        )
+        pipeline.enqueue_sql(
+            f"""SELECT {select_expr}
+                FROM __splink__compare_two_records_blocked""",
+            "__splink__df_comparison_vectors",
+        )
+        pipeline.enqueue_list_of_sqls(
+            predict_from_comparison_vectors_sqls_using_settings(
+                linker._settings_obj,
+                sql_infinity_expression=linker._infinity_expression,
+            )
+        )
+        prediction_table = linker._db_api.sql_pipeline_to_splink_dataframe(
+            pipeline, use_cache=False
+        )
+        prediction_frame = prediction_table.as_pandas_dataframe()
+        if len(prediction_frame) != len(batch):
+            raise ValueError(
+                "Splink batch scoring did not return exactly one score per requested pair"
+            )
+        seen_sequences = set()
+        for row in prediction_frame.to_dict("records"):
+            encoded_left = str(row.get("record_id_l") or row.get("unique_id_l") or "")
+            encoded_right = str(row.get("record_id_r") or row.get("unique_id_r") or "")
+            sequence = encoded_left.split(":", 1)[0]
+            if not sequence or encoded_right.split(":", 1)[0] != sequence:
+                raise ValueError("Splink batch output lost its requested-pair sequence")
+            pair = pair_by_sequence.get(sequence)
+            if pair is None or sequence in seen_sequences:
+                raise ValueError("Splink batch output contains an unknown or duplicate pair")
+            seen_sequences.add(sequence)
+            probability = float(row["match_probability"])
+            if minimum_probability is None or probability >= minimum_probability:
+                output.append(
+                    ProbabilityPrediction(
+                        pair[0],
+                        pair[1],
+                        probability,
+                        (
+                            float(row["match_weight"])
+                            if row.get("match_weight") is not None
+                            else None
+                        ),
+                    )
+                )
+        if len(seen_sequences) != len(batch):
+            raise ValueError("Splink batch scoring omitted a requested pair")
+        prediction_table.drop_table_from_database_and_remove_from_cache()
+        left_table.drop_table_from_database_and_remove_from_cache(
+            force_non_splink_table=True
+        )
+        right_table.drop_table_from_database_and_remove_from_cache(
+            force_non_splink_table=True
+        )
+    return output
+
+
+def score_requested_pairs(
+    training_records: Iterable[dict[str, Any]],
+    scoring_records: Iterable[dict[str, Any]],
+    requested_pairs: Iterable[tuple[str, str]],
+    *,
+    minimum_probability: float,
+    max_block_size: int = 10_000,
+    max_prediction_pairs: int = 500_000,
+) -> list[ProbabilityPrediction]:
+    """Train once and return only requested pairs at/above a governed cutoff."""
+    requested = {
+        tuple(sorted((str(left), str(right))))
+        for left, right in requested_pairs
+        if left and right and left != right
+    }
+    if not requested:
+        return []
+    predictions = fit_predict(
+        training_records,
+        max_block_size=max_block_size,
+        max_prediction_pairs=max_prediction_pairs,
+        requested_pairs=requested,
+        scoring_records=scoring_records,
+        batch_requested_pairs=True,
+        requested_min_probability=float(minimum_probability),
+    )
+    output = {}
+    for prediction in predictions:
+        key = tuple(sorted((prediction.left_id, prediction.right_id)))
+        if key in requested and prediction.probability >= minimum_probability:
+            output[key] = prediction
+    return [output[key] for key in sorted(output)]

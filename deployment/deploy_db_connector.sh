@@ -64,6 +64,7 @@ for container in "${containers[@]}"; do
 			db_connector/api_ccd_fuzzy.py \
 			db_connector/api_fuzzy_evaluation.py \
 			db_connector/api_fuzzy_canary.py \
+			db_connector/api_fuzzy_review_queue.py \
 			db_connector/api_ccd_fuzzy.md \
 			db_connector/MATCHING_PILOT.md \
 			db_connector/requirements.txt \

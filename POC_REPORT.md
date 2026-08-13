@@ -256,6 +256,38 @@ cases with `All Same`, `Partial Match`, `All Different`, and `Unsure` decisions.
 Human submissions are independent and auditable. A separate deterministic
 100-pair sample supports ongoing QC of Proposed recommendations.
 
+### Optional Splink Review queue
+
+The approved maximum-F1 operating point is now implemented as a separate,
+capacity-based human-review pool. It does not share `Proposed`/`Exception`
+statuses with deterministic High recommendations:
+
+| Measure | Queue result |
+| --- | ---: |
+| Governed candidate pairs | 821,592 |
+| Tiered High pairs excluded | 3,961 |
+| Previously human-used pairs excluded | 1,097 |
+| Eligible pairs scored exactly once | 816,534 |
+| Reproduced training records / stale endpoints | 5,000 / 0 |
+| Approved maximum-F1 cutoff | 0.938995074 |
+| Candidates stored at or above cutoff | 11,177 |
+| Candidate generation truncated / skipped blocks | No / 0 |
+| Automatic High decisions | 0 |
+
+Every stored row remains model tier `Review` and is ranked from highest score
+downward. The observed queued range is 0.940477224 to 0.999996923; the minimum
+is above the approved cutoff simply because no eligible score occurred between
+those values. A score below the cutoff remains lower priority, not `Different`.
+
+The integrity audit found no overlap with Tiered High or prior human-used pairs,
+no duplicate pair key, no prefilled human label, and no CCD Master change after
+queue start. Ordinary reviewers see masked values without record IDs or scores.
+Sensitive Reviewers/System Managers retain permitted full-value links, while
+individual probabilities remain System Manager-only. `Same` requires two
+independent confirmations; `Unsure` and disagreement require adjudication.
+The 11,177 candidates are an optional pool whose assignment must be limited by
+operational capacity, not a mandatory backlog.
+
 ## Important quality findings during the POC
 
 The POC tested the surrounding workflow as well as the matching rules. It found
@@ -307,6 +339,7 @@ prioritization.
 | Valid general probabilistic High threshold | Not met; Splink remains review-ranking only |
 | Management approval of deterministic High evidence | Passed |
 | Reversible recommendation-only preview | Passed: 3,528 Proposed, 433 Exception, 0 Active |
+| Optional Splink Review-priority queue | Passed: all 816,534 eligible pairs scored; 11,177 queued; no automatic High |
 | Production automation approval | Not part of this POC |
 
 ## Recommended operating model
@@ -320,9 +353,9 @@ separate rollout authorization:
    source-coverage, and data-quality gates.
 4. Activate safe High recommendation records only after aggregate approval.
 5. Route only exceptions and a periodic random QC sample to humans.
-6. Use Splink to rank optional/on-demand Review work. Treat `0.938995074` as a
-   proposed first-priority band, not a Same/Different boundary, and do not make
-   the whole Review population a mandatory backlog.
+6. Use the deployed Splink queue to rank optional/on-demand Review work. Treat
+   its 11,177 current rows as a capacity-based pool, not a mandatory backlog;
+   `0.938995074` is a first-priority band, not a Same/Different boundary.
 7. Store human-confirmed Review pairs separately from model High predictions.
 
 ```mermaid

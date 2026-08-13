@@ -1,8 +1,8 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "as_of": "2026-08-13",
   "privacy": "sanitized aggregate results only; no client or source-system identifiers",
-  "poc_status": "completed; recommendation-only canary preview ready",
+  "poc_status": "completed; recommendation-only canary preview and optional Splink Review queue ready",
   "policy_lifecycle_status_at_poc_evaluation": "Draft",
   "current_policy_lifecycle_status": "Pilot",
   "approved_scope": "pilot-1.6 deterministic exact-name-plus-independent-evidence High validation",
@@ -78,6 +78,33 @@
     "recommendation_approval_recorded": false,
     "review_interface": "deployed; masked ordinary view, role-gated sensitive view, component decisions and random QC"
   },
+  "splink_review_queue": {
+    "status": "Ready",
+    "model_tier": "Review",
+    "review_threshold": 0.938995074,
+    "threshold_objective": "maximum calibration F1",
+    "governed_record_count": 251520,
+    "candidate_pair_count": 821592,
+    "candidate_truncated": false,
+    "skipped_block_count": 0,
+    "tiered_high_excluded_count": 3961,
+    "prior_human_used_excluded_count": 1097,
+    "eligible_scored_pair_count": 816534,
+    "reproduced_training_record_count": 5000,
+    "stale_training_endpoint_count": 0,
+    "queued_candidate_count": 11177,
+    "queued_score_min": 0.9404772243925443,
+    "queued_score_max": 0.999996923285307,
+    "automatic_high_enabled": false,
+    "mandatory_backlog": false,
+    "human_reviews_complete": 0,
+    "tiered_high_overlap_count": 0,
+    "prior_human_pair_overlap_count": 0,
+    "duplicate_pair_key_count": 0,
+    "post_queue_start_ccd_master_modification_count": 0,
+    "production_matching_changed": false,
+    "review_interface": "deployed; masked ordinary view, role-gated sensitive links, manager-only scores, immutable review labels"
+  },
   "models": {
     "baseline_current_flag": {
       "all_labeled_precision": 0.2875816993464052,
@@ -141,6 +168,7 @@
     }
   },
   "next_authorizations": [
-    "inspect the aggregate canary preview and separately approve Proposed recommendation records; approval is reversible and does not link, merge, or mutate Is Matched"
+    "inspect the aggregate canary preview and separately approve Proposed recommendation records; approval is reversible and does not link, merge, or mutate Is Matched",
+    "set operational capacity and assignment rules before treating any part of the optional 11177-row Splink Review pool as staff work"
   ]
 }

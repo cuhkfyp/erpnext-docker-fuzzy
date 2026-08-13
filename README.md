@@ -18,6 +18,10 @@ This repository contains two deliberately separate paths:
   versioned, reversible recommendation records. It applies full-population
   cluster and source-coverage gates and still never merges CCD records or
   modifies production match fields.
+- `api_fuzzy_review_queue.py` creates a separate optional human-review queue
+  for eligible candidate pairs at or above the approved maximum-F1 Splink
+  cutoff. Every row remains model tier `Review`; human decisions are stored
+  separately and never turn the probability into automatic High.
 
 ## Management POC
 
@@ -45,6 +49,12 @@ passed all gates as `Proposed`; 433 were isolated as one-to-many source
 conflicts. No recommendation is `Active`, and no production match field or CCD
 record was changed. See the sanitized aggregate result in
 [`POC_RESULTS.json`](POC_RESULTS.json).
+
+The separate optional Splink queue is also `Ready`. It excluded all 3,961
+Tiered High pairs and 1,097 previously human-used pairs, scored all remaining
+816,534 governed candidates, and stored 11,177 at or above the approved
+`0.938995074` maximum-F1 cutoff. All remain model tier `Review`; none is an
+automatic match, and the queue made no CCD Master change.
 
 ## Install the pilot
 
@@ -198,15 +208,41 @@ only dedicated recommendation statuses from `Proposed` to `Active` and appends
 audit events. It does not link or merge CCD records, set `Is Matched?`, or
 populate Matching Score.
 
-The approved Splink cutoff is stored with the canary for future Review-queue
-ordering. This first canary emits Tiered High recommendations only; it does not
-turn Splink scores into automatic High decisions.
+## Optional Splink Review queue
+
+From a `Ready` or `Active` canary, a System Manager can press **Create Splink
+Review Queue**, or run:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_review_queue.install_review_queue \
+  --kwargs '{"canary_name":"<canary-run>"}'
+```
+
+The queue reuses the canary's frozen data and policy and the approved threshold
+evaluation's `pilot-splink-1.1` model/cutoff. Eligible pairs are complete
+governed candidates after excluding every Tiered High recommendation and every
+pair already used by human evaluation or an earlier queue. Each eligible pair
+must receive exactly one score; a changed/unreproducible frozen canary,
+truncated/skipped candidate generation, stale calibration records, or
+incomplete scoring fails the run without publishing a partial queue.
+
+Only pairs at or above the approved maximum-calibration-F1 cutoff are stored,
+ordered from highest probability downward. A lower score means lower priority,
+not `Different`. Candidate forms show protected side-by-side evidence:
+ordinary reviewers see masked values and no CCD record keys; Sensitive
+Reviewers and System Managers see full permitted values and links. Individual
+probabilities and blocking diagnostics are restricted to System Managers.
+
+Reviewers submit `Same`, `Different`, or `Unsure`. `Same` requires two
+independent confirmations; `Unsure` and disagreements require adjudication.
+The recorded model tier stays `Review`, and neither queue generation nor human
+review links, merges, or modifies CCD Master.
 
 ## Development validation
 
 ```bash
 python -m unittest discover -s tests -v
-python -m compileall -q api_ccd_fuzzy.py api_fuzzy_evaluation.py fuzzy_matching db_connector/doctype tests
+python -m compileall -q api_ccd_fuzzy.py api_fuzzy_evaluation.py api_fuzzy_canary.py api_fuzzy_review_queue.py fuzzy_matching db_connector/doctype tests
 ```
 
 Real client records, model databases, logs, exports, credentials, and secrets
