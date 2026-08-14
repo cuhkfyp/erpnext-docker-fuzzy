@@ -1,6 +1,6 @@
 {
-  "schema_version": 4,
-  "as_of": "2026-08-13",
+  "schema_version": 5,
+  "as_of": "2026-08-14",
   "privacy": "sanitized aggregate results only; no client or source-system identifiers",
   "poc_status": "completed; recommendation-only canary preview and optional Splink Review queue ready",
   "policy_lifecycle_status_at_poc_evaluation": "Draft",
@@ -105,6 +105,45 @@
     "production_matching_changed": false,
     "review_interface": "deployed; masked ordinary view, role-gated sensitive links, manager-only scores, immutable review labels"
   },
+  "splink_training_size_experiment": {
+    "experiment_version": "pilot-splink-training-size-1.0",
+    "execution_date": "2026-08-14",
+    "read_only": true,
+    "frozen_evaluation_reproduced": true,
+    "governed_record_count": 251520,
+    "labeled_pair_count": 500,
+    "same_label_count": 70,
+    "different_label_count": 430,
+    "unique_labeled_endpoint_count": 784,
+    "splink_runtime_version": "4.0.16",
+    "duckdb_runtime_version": "1.4.5",
+    "declared_duckdb_requirement": "1.5.5",
+    "runtime_dependency_alignment": false,
+    "random_u_pair_budget": 250000,
+    "em_prediction_pair_budget": 250000,
+    "control_5000": {
+      "status": "Completed",
+      "actual_training_records": 5000,
+      "scored_pairs": 500,
+      "average_precision": 0.624209361525527,
+      "roc_auc": 0.8713787375415283,
+      "top_30_precision": 0.7333333333333333,
+      "top_50_precision": 0.54,
+      "top_100_precision": 0.45,
+      "automatic_high_threshold": null
+    },
+    "candidate_20000": {
+      "status": "ResourceLimitExceeded",
+      "requested_training_records": 20000,
+      "process_exit_code": 137,
+      "accuracy_metrics_available": false,
+      "automatic_high_threshold": null
+    },
+    "approved_adapter_changed": false,
+    "approved_review_threshold_changed": false,
+    "existing_review_queue_changed": false,
+    "conclusion": "5000 remains the safe in-place training bound; 20000 requires isolated higher-memory execution or redesign, deterministic dependency precedence, and fresh validation before consideration"
+  },
   "models": {
     "baseline_current_flag": {
       "all_labeled_precision": 0.2875816993464052,
@@ -169,6 +208,7 @@
   },
   "next_authorizations": [
     "inspect the aggregate canary preview and separately approve Proposed recommendation records; approval is reversible and does not link, merge, or mutate Is Matched",
-    "set operational capacity and assignment rules before treating any part of the optional 11177-row Splink Review pool as staff work"
+    "set operational capacity and assignment rules before treating any part of the optional 11177-row Splink Review pool as staff work",
+    "run any future model larger than 5000 records only on an isolated higher-memory worker, then require frozen-label comparison and fresh human validation before changing a threshold"
   ]
 }

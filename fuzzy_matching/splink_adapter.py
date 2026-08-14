@@ -19,6 +19,7 @@ class SplinkUnavailable(RuntimeError):
 RANDOM_MATCH_PRIOR = 0.0001
 MAX_DIRECT_SCORING_PAIRS = 5_000
 REQUESTED_PAIR_BATCH_SIZE = 20_000
+U_RANDOM_MAX_PAIRS = 1_000_000
 SPLINK_ADAPTER_VERSION = "pilot-splink-1.1"
 COMPARISON_FIELDS = ("chi_full", "eng_full", "birthday", "phone", "email")
 
@@ -74,6 +75,7 @@ def fit_predict(
     scoring_records: Iterable[dict[str, Any]] | None = None,
     batch_requested_pairs: bool = False,
     requested_min_probability: float | None = None,
+    u_random_max_pairs: int = U_RANDOM_MAX_PAIRS,
 ) -> list[ProbabilityPrediction]:
     """Train an unsupervised link-only model and return local predictions.
 
@@ -206,7 +208,10 @@ def fit_predict(
         db_api=DuckDBAPI(),
         input_table_aliases=source_aliases,
     )
-    linker.training.estimate_u_using_random_sampling(max_pairs=1_000_000, seed=0)
+    linker.training.estimate_u_using_random_sampling(
+        max_pairs=max(1, int(u_random_max_pairs)),
+        seed=0,
+    )
     for rule in blocking_rules[:3]:
         try:
             linker.training.estimate_parameters_using_expectation_maximisation(rule)
@@ -490,6 +495,7 @@ def score_requested_pairs(
     minimum_probability: float,
     max_block_size: int = 10_000,
     max_prediction_pairs: int = 500_000,
+    u_random_max_pairs: int = U_RANDOM_MAX_PAIRS,
 ) -> list[ProbabilityPrediction]:
     """Train once and return only requested pairs at/above a governed cutoff."""
     requested = {
@@ -507,6 +513,7 @@ def score_requested_pairs(
         scoring_records=scoring_records,
         batch_requested_pairs=True,
         requested_min_probability=float(minimum_probability),
+        u_random_max_pairs=u_random_max_pairs,
     )
     output = {}
     for prediction in predictions:

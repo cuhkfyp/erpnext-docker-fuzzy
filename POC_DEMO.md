@@ -83,6 +83,10 @@ formula:
   still did not support a probabilistic automatic High threshold.
 - The latest `pilot-1.6` run generated 821,592 candidates without truncation or
   an oversized skipped block.
+- A same-worker training-size experiment reproduced the 5,000-record control
+  but found that 20,000 records exceed the current worker memory limit even
+  with reduced pair budgets. It generated no 20,000-record accuracy claim and
+  changed neither the approved cutoff nor the live Review queue.
 
 ### 7. Feasible operating workload — 2 minutes
 

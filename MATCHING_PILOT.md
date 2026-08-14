@@ -77,6 +77,35 @@ retained human-review pairs. Full-population blocking and the deterministic
 models remain governed by the policy candidate limits. The run records both
 the statistical training limit and actual training count.
 
+### Controlled training-size feasibility check
+
+On 2026-08-14, a read-only experiment reproduced the approved 500-pair frozen
+evaluation and scored all 500 pairs from the same 784 endpoints. Both model
+sizes ran on the same long worker with Splink 4.0.16, DuckDB 1.4.5, a
+250,000-pair random-u sample, and a 250,000-pair EM/prediction budget.
+
+The 5,000-record control completed: average precision was 0.6242, ROC AUC was
+0.8714, and top-30/top-50/top-100 precision was 73.33%/54%/45%. It still had no
+valid automatic High threshold. The 20,000-record model was killed by the
+worker memory limit before scoring, even with those reduced budgets. It has no
+accuracy result and cannot be claimed to improve the model.
+
+Earlier 20,000-record attempts also exceeded memory when either the full
+random-u sample or larger scoring population was retained. Further large-model
+research therefore requires an isolated higher-memory worker or a redesigned
+training strategy. It must compare against the same frozen labels and receive
+fresh human validation before any new threshold is considered. This
+experiment did not change `pilot-splink-1.1`, the approved `0.938995074` Review
+cutoff, or the existing Review queue.
+
+The experiment also exposed a deployment reproducibility issue: although
+`requirements.txt` declares DuckDB 1.5.5, the long worker selected DuckDB 1.4.5
+from its image environment because that path currently precedes the persistent
+dependency target. Both experiment arms used 1.4.5, so their resource comparison
+is internally consistent. No new probability model or threshold may be promoted
+until dependency precedence is made deterministic and the model is recalibrated
+under the resulting new adapter/runtime version.
+
 After bounded training, ordinary Splink predictions remain restricted to the
 safeguarded population blocking rules. The adapter then uses the same trained
 model to directly score only the already-selected review pairs that were not

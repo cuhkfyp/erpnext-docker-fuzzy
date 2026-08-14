@@ -202,6 +202,29 @@ Same-pair yield. The final operating queue size should therefore be governed by
 review capacity and an explicit recall-versus-precision objective, while the
 stored probability remains a ranking value.
 
+#### 5,000 versus 20,000 training feasibility
+
+A 2026-08-14 read-only experiment held the approved 500 labels, frozen data,
+worker, Splink 4.0.16, DuckDB 1.4.5, and both 250,000-pair compute budgets
+constant. The 5,000-record control scored all 500 pairs with average precision
+0.6242, ROC AUC 0.8714, and top-30 precision 73.33%; it still produced no valid
+automatic High threshold. The 20,000-record run exceeded the worker memory
+limit before it could score the labels, so no performance comparison can be
+made and no larger model is proposed.
+
+This is a capacity boundary, not evidence that 20,000 would be more or less
+accurate. Testing it responsibly requires an isolated higher-memory worker or
+a more memory-efficient training design, followed by comparison on the same
+frozen labels and fresh human validation. The approved v1.1 model, Review
+cutoff, live 11,177-row queue, and production matching state were unchanged.
+
+The run also found that the worker loaded DuckDB 1.4.5 while the repository
+declares 1.5.5. Both experiment arms used the same runtime, but this dependency
+precedence drift must be corrected and versioned before a future probability
+model is eligible for promotion. Correcting it may change scores, so it must be
+treated as a new adapter/runtime calibration rather than silently applied to
+the existing cutoff.
+
 ### Targeted deterministic High validation
 
 - Deterministic uniform sample from 3,950 previously unseen High predictions.
@@ -340,6 +363,7 @@ prioritization.
 | Management approval of deterministic High evidence | Passed |
 | Reversible recommendation-only preview | Passed: 3,528 Proposed, 433 Exception, 0 Active |
 | Optional Splink Review-priority queue | Passed: all 816,534 eligible pairs scored; 11,177 queued; no automatic High |
+| 20,000-record Splink shadow training on current worker | Resource limit exceeded; no accuracy result and no model change |
 | Production automation approval | Not part of this POC |
 
 ## Recommended operating model

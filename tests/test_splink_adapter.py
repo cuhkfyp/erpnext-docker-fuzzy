@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 from fuzzy_matching.splink_adapter import (
+    ProbabilityPrediction,
     _null_missing_comparison_values,
     score_requested_pairs,
 )
@@ -33,6 +35,21 @@ class SplinkAdapterTests(unittest.TestCase):
             score_requested_pairs([], [], [], minimum_probability=0.5),
             [],
         )
+
+    @patch("fuzzy_matching.splink_adapter.fit_predict")
+    def test_experimental_u_pair_budget_is_forwarded(self, fit_predict):
+        fit_predict.return_value = [ProbabilityPrediction("R1", "R2", 0.75)]
+
+        predictions = score_requested_pairs(
+            [{"record_id": "R1"}, {"record_id": "R2"}],
+            [{"record_id": "R1"}, {"record_id": "R2"}],
+            [("R1", "R2")],
+            minimum_probability=0.5,
+            u_random_max_pairs=123_456,
+        )
+
+        self.assertEqual(len(predictions), 1)
+        self.assertEqual(fit_predict.call_args.kwargs["u_random_max_pairs"], 123_456)
 
 
 if __name__ == "__main__":

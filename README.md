@@ -22,6 +22,9 @@ This repository contains two deliberately separate paths:
   for eligible candidate pairs at or above the approved maximum-F1 Splink
   cutoff. Every row remains model tier `Review`; human decisions are stored
   separately and never turn the probability into automatic High.
+- `api_fuzzy_splink_experiment.py` reproduces an approved frozen evaluation
+  for read-only training-size research. It returns sanitized aggregates, makes
+  no database writes, and cannot replace the approved model or queue.
 
 ## Management POC
 
@@ -55,6 +58,14 @@ Tiered High pairs and 1,097 previously human-used pairs, scored all remaining
 816,534 governed candidates, and stored 11,177 at or above the approved
 `0.938995074` maximum-F1 cutoff. All remain model tier `Review`; none is an
 automatic match, and the queue made no CCD Master change.
+
+A controlled 2026-08-14 shadow experiment reproduced the approved 500 labels
+on one worker with Splink 4.0.16, DuckDB 1.4.5, and equal 250,000-pair sampling
+budgets. The 5,000-record control completed with average precision 0.6242, ROC
+AUC 0.8714, and 73.33% precision in its top 30, but still produced no valid
+automatic High threshold. The equivalent 20,000-record run exceeded the
+worker's memory limit, so it produced no comparable accuracy result and is not
+a candidate model. The approved v1.1 cutoff and 11,177-row queue are unchanged.
 
 ## Install the pilot
 
