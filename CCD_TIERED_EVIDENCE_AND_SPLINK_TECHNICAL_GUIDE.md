@@ -292,7 +292,7 @@ This produces a deterministic reasoning model with the following principles:
 
 - Evidence types have different meanings and are **not** freely interchangeable.
 - The model uses an **ordered decision tree**, not one compensating weighted score that sums every signal together.
-- Repeated representations of the same name are not independent corroboration. Exact Chinese name and exact English name for the same person description still count as name evidence, not two separate safety approvals.
+- Repeated representations of the same name are not independent corroboration. Exact Chinese name and exact English name for the same person still count as name evidence, not two separate safety approvals.
 - Exact `birthday`, `phone`, or `email` is treated as independent corroboration for an exact full name because it comes from a different evidence family.
 - `Missing` evidence is neutral: it withholds support, but it is distinct from an explicit disagreement.
 - Safety-critical contradictions cannot be numerically cancelled by weaker agreements elsewhere.
@@ -1044,7 +1044,7 @@ The Hybrid approach applied deterministic identifier safety gates around a calib
 
 ### 25.3 Legacy Baseline Formula
 
-The existing `fuzzymachingscript` weighted formula is retained as the control path. It evaluates each registration's current fuzzy logic in its own direction and reports the maximum directional score.
+The existing `fuzzymachingscript` weighted formula (using the system's existing field name) is retained as the control path. It evaluates each registration's current fuzzy logic in its own direction and reports the maximum directional score.
 
 **POC conclusion:** The current flagged pairs from the baseline had low precision. The score is not a calibrated identity probability. No new automatic decisions are authorized from the baseline formula. It is retained as the current/control path for comparison purposes.
 
