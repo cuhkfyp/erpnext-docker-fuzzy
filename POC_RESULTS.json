@@ -1,16 +1,47 @@
 {
-  "schema_version": 5,
-  "as_of": "2026-08-14",
+  "schema_version": 6,
+  "as_of": "2026-08-19",
   "privacy": "sanitized aggregate results only; no client or source-system identifiers",
-  "poc_status": "completed; recommendation-only canary preview and optional Splink Review queue ready",
+  "poc_status": "completed; management approved the limited follow-up workflow on 2026-08-19; recommendation canary and optional Splink Review queue remain Ready and unactivated",
   "policy_lifecycle_status_at_poc_evaluation": "Draft",
   "current_policy_lifecycle_status": "Pilot",
-  "approved_scope": "pilot-1.6 deterministic exact-name-plus-independent-evidence High validation",
-  "management_decision": "High Tier Validation evidence approved; policy separately promoted to Pilot for a reversible recommendation-only canary",
+  "approved_scope": "follow-up workflow only: pilot-1.6 Tiered Evidence for reversible safety-gated recommendations and Splink above the selected cutoff for optional human-review ordering",
+  "management_decision": "Before 2026-08-19 approvals were recorded by the project operator, not management; management reviewed the results and demonstration on 2026-08-19 and approved the limited follow-up workflow, but no formal ERPNext recommendation approval or activation is recorded",
+  "approval_history": {
+    "pre_2026_08_19_erpnext_approvals": "recorded by project operator; not management approval",
+    "management_workflow_approval_date": "2026-08-19",
+    "management_workflow_scope": "Tiered Evidence for reversible safety-gated recommendations; Splink above the selected cutoff for optional human-review ordering",
+    "formal_erpnext_canary_approval_recorded": false,
+    "current_recommendations_activated": false,
+    "automatic_splink_high_approved": false,
+    "production_merge_or_match_mutation_approved": false
+  },
   "production_matching_changed": false,
   "data_profile": {
     "governed_record_count": 251520,
     "governed_source_count": 10,
+    "environment_breakdown": {
+      "classification_snapshot_at": "2026-08-12 16:49:33.969453",
+      "production": {
+        "records": 161112,
+        "ratio": 0.6405534351145038,
+        "source_count": 4
+      },
+      "uat": {
+        "records": 89377,
+        "ratio": 0.3553474872773537,
+        "source_count": 4
+      },
+      "fake_test": {
+        "records": 1031,
+        "ratio": 0.0040990776081415,
+        "source_count": 2
+      },
+      "ambiguous_records": 0,
+      "unclassified_records": 0,
+      "classification_rules": "management-supplied source-name and physical-hostname rules; identifying values omitted from this sanitized artifact",
+      "interpretation": "record proportions only; evaluation metrics are mixed-environment and are not a Production-only estimate"
+    },
     "candidate_pair_count": 821592,
     "eligible_unseen_candidate_pair_count": 820886,
     "eligible_unseen_deterministic_high_count": 3950,
@@ -164,7 +195,7 @@
       "targeted_high_predictions": 100,
       "targeted_high_precision": 1.0,
       "targeted_high_precision_wilson_lower": 0.9630051925239981,
-      "approved_scope": "reversible recommendation canary subject to safety gates"
+      "approved_scope": "management approved the follow-up recommendation workflow on 2026-08-19; formal approval/activation of the current canary remains unrecorded"
     },
     "recoverable_conflict": {
       "representative_conflict_pairs": 2,
@@ -177,7 +208,7 @@
       "adapter_version": "pilot-splink-1.1",
       "representative_available_pairs": 490,
       "representative_unavailable_pairs": 10,
-      "approved_review_priority_threshold": 0.938995074,
+      "review_priority_threshold": 0.938995074,
       "threshold_selection_objective": "maximum calibration F1",
       "calibration_review_precision": 0.6666666666666666,
       "calibration_review_recall": 0.6122448979591837,
@@ -196,7 +227,7 @@
       "research_high_held_out_precision": 1.0,
       "minimum_high_samples": 30,
       "automatic_high_threshold": null,
-      "review_priority_approval_status": "approved for optional human-review prioritization only",
+      "review_priority_approval_status": "selected and initially accepted by the project operator; management approved its optional human-review ordering role on 2026-08-19; no probabilistic automatic High approved",
       "role": "review ranking; scores below the proposed cutoff are lower priority, not Different"
     },
     "hybrid": {
@@ -207,7 +238,7 @@
     }
   },
   "next_authorizations": [
-    "inspect the aggregate canary preview and separately approve Proposed recommendation records; approval is reversible and does not link, merge, or mutate Is Matched",
+    "record the exact scope of management's 2026-08-19 workflow approval in ERPNext before activating any of the current 3528 Proposed recommendation records; activation remains reversible and does not link, merge, or mutate Is Matched",
     "set operational capacity and assignment rules before treating any part of the optional 11177-row Splink Review pool as staff work",
     "run any future model larger than 5000 records only on an isolated higher-memory worker, then require frozen-label comparison and fresh human validation before changing a threshold"
   ]

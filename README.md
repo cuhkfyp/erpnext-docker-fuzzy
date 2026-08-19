@@ -19,7 +19,7 @@ This repository contains two deliberately separate paths:
   cluster and source-coverage gates and still never merges CCD records or
   modifies production match fields.
 - `api_fuzzy_review_queue.py` creates a separate optional human-review queue
-  for eligible candidate pairs at or above the approved maximum-F1 Splink
+  for eligible candidate pairs at or above the selected maximum-F1 Splink
   cutoff. Every row remains model tier `Review`; human decisions are stored
   separately and never turn the probability into automatic High.
 - `api_fuzzy_splink_experiment.py` reproduces an approved frozen evaluation
@@ -39,23 +39,29 @@ The completed, sanitized proof-of-concept package is available in:
 - [`POC_RESULTS.json`](POC_RESULTS.json) — machine-readable, non-identifying
   aggregate results.
 
-The POC approves evidence for a narrow deterministic High recommendation rule.
-It does not authorize automatic record merging, `Is Matched?` changes, or a
-general Splink probability threshold. The package also includes the latest
-`pilot-1.6` representative recalibration as of 2026-08-13: Splink has a
-management-approved review-priority operating point, but still has no validated
-automatic High threshold.
+Before 2026-08-19, the ERPNext evaluation approvals and Pilot promotion were
+recorded by the project operator, not management. Management reviewed the POC
+results and live demonstration on 2026-08-19 and approved the limited follow-up
+workflow: Tiered Evidence for reversible safety-gated recommendations, and
+Splink above the selected cutoff for optional human-review ordering. This does
+not authorize automatic record merging, `Is Matched?` changes, or a general
+Splink probability threshold.
 
-The separately authorized recommendation-canary preview is now `Ready`. On the
-same 251,520-record governed snapshot, 3,528 of 3,961 Tiered High candidates
-passed all gates as `Proposed`; 433 were isolated as one-to-many source
-conflicts. No recommendation is `Active`, and no production match field or CCD
-record was changed. See the sanitized aggregate result in
+The locked 251,520-record POC snapshot contains 161,112 Production records
+(64.06%), 89,377 UAT records (35.53%), and 1,031 Fake/test records (0.41%). The
+POC metrics therefore describe a mixed governed population, not a separately
+measured Production-only result.
+
+The project-operator-initiated recommendation-canary preview is now `Ready`.
+On the same 251,520-record governed snapshot, 3,528 of 3,961 Tiered High
+candidates passed all gates as `Proposed`; 433 were isolated as one-to-many
+source conflicts. No recommendation is `Active`, and no production match field
+or CCD record was changed. See the sanitized aggregate result in
 [`POC_RESULTS.json`](POC_RESULTS.json).
 
 The separate optional Splink queue is also `Ready`. It excluded all 3,961
 Tiered High pairs and 1,097 previously human-used pairs, scored all remaining
-816,534 governed candidates, and stored 11,177 at or above the approved
+816,534 governed candidates, and stored 11,177 at or above the selected
 `0.938995074` maximum-F1 cutoff. All remain model tier `Review`; none is an
 automatic match, and the queue made no CCD Master change.
 
@@ -237,7 +243,7 @@ must receive exactly one score; a changed/unreproducible frozen canary,
 truncated/skipped candidate generation, stale calibration records, or
 incomplete scoring fails the run without publishing a partial queue.
 
-Only pairs at or above the approved maximum-calibration-F1 cutoff are stored,
+Only pairs at or above the selected maximum-calibration-F1 cutoff are stored,
 ordered from highest probability downward. A lower score means lower priority,
 not `Different`. Candidate forms show protected side-by-side evidence:
 ordinary reviewers see masked values and no CCD record keys; Sensitive

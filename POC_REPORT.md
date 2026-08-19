@@ -2,9 +2,19 @@
 
 ## Executive decision
 
-**POC status:** Completed. The High Tier Validation evidence was
-management-approved for the deterministic High recommendation rule evaluated
-from `pilot-1.6`.
+**POC status:** Completed. Before 2026-08-19, the ERPNext evaluation approvals
+and Pilot promotion were recorded by the project operator; they were not
+management approvals. On 2026-08-19, management reviewed the POC results and
+live follow-up demonstration and approved this follow-up workflow:
+
+1. Tiered Evidence may create reversible, safety-gated High recommendations.
+2. Splink scores at or above the selected Review cutoff may prioritize optional
+   human review only.
+
+This is workflow-level management approval. It is not approval for record
+merging, automatic `Is Matched?`, a probabilistic automatic High tier, or any
+other production mutation. The current recommendation canary remains `Ready`
+with no formal ERPNext approval/activation recorded.
 
 The `pilot-1.6` policy document itself remained in `Draft` when its evidence was
 evaluated. Approval of an evaluation run did not promote the policy. It was
@@ -16,7 +26,7 @@ records represent the same person. This POC therefore compared five approaches
 in a recommendation-only shadow workflow, locked the evaluated data snapshots,
 and used blinded human labels as ground truth.
 
-The approved result is deliberately narrow:
+The validated result is deliberately narrow:
 
 > An exact full Chinese or English name plus exact independent evidence
 > (phone, birthday, or email), with no trusted-identifier conflict, may be
@@ -27,16 +37,17 @@ sampled unseen High predictions. Estimated precision is 100%, with a Wilson
 95% confidence interval of 96.30% to 100%. This exceeds the policy target of
 95% at the lower confidence bound.
 
-Approval does **not** authorize record merging, automatic `Is Matched?`
-updates, or a general probability threshold. The completed preview has also
-not had its recommendations approved. Those actions remain separate management
-decisions.
+Management's 2026-08-19 workflow approval does **not** authorize record
+merging, automatic `Is Matched?` updates, or a general probability threshold.
+Formal approval/activation of the current 3,528 `Proposed` recommendation
+records has not been recorded in ERPNext.
 
 The latest `pilot-1.6` representative recalibration was finalized on
 2026-08-13. It improved Splink's usefulness for prioritizing human review but
 still did not produce a validated probabilistic High threshold. Its proposed
-review-priority cutoff was subsequently approved for human-review ordering
-only.
+review-priority cutoff was initially selected and recorded by the project
+operator. Management approved its role in the optional human-review workflow
+on 2026-08-19 only; it is not a Same/Different boundary.
 
 ## Business problem
 
@@ -120,7 +131,7 @@ measurement.
 | Method | Purpose | POC conclusion | Automatic use |
 | --- | --- | --- | --- |
 | Existing baseline formula | Reproduce each registration's current fuzzy logic as the control | Current flagged pairs had low precision; the score is not a probability | No new automatic decisions; retain temporarily as the control/current path |
-| Tiered Evidence (gated) | Apply deterministic evidence meaning and block trusted-ID conflicts | Its narrow exact-name-plus-independent-evidence High population passed targeted validation | Approved for a reversible High recommendation canary, subject to safety gates |
+| Tiered Evidence (gated) | Apply deterministic evidence meaning and block trusted-ID conflicts | Its narrow exact-name-plus-independent-evidence High population passed targeted validation | Follow-up reversible recommendation workflow management-approved on 2026-08-19; formal canary activation pending |
 | Recoverable-Conflict Tier | Test whether strong secondary evidence can recover a trusted-ID conflict | Useful for moving some conflicts to ordinary Review; it never promotes a conflict directly to High | Human exception routing only |
 | Splink probability | Learn local Fellegi-Sunter agreement/disagreement weights | Useful for ranking Review candidates; no probability threshold met automatic High requirements | Ranking, diagnosis, and future recalibration only |
 | Hybrid | Apply deterministic safety gates around calibrated Splink scores | Cannot add automatic High decisions without a validated probabilistic High threshold | Shadow/review prioritization only |
@@ -137,6 +148,9 @@ future research.
 | --- | ---: |
 | CCD Master records in the locked governed snapshot | 251,520 |
 | Governed registered sources | 10 |
+| Production records | 161,112 (64.06%) |
+| UAT records | 89,377 (35.53%) |
+| Fake/test records | 1,031 (0.41%) |
 | Candidate pairs after phone-quality correction | 821,592 |
 | Eligible unseen candidate pairs | 820,886 |
 | Eligible unseen deterministic High pairs | 3,950 |
@@ -145,6 +159,29 @@ future research.
 
 Three unregistered source labels contained one record each. They were excluded
 rather than having field mappings guessed.
+
+The environment classification was reproduced from the frozen snapshot at
+2026-08-12 16:49:33 UTC using the management-supplied source-name and physical-
+hostname rules. All ten governed sources matched exactly one rule, with no
+ambiguous or unclassified records. The identifying rule values, source labels,
+and hostnames are intentionally omitted from this sanitized GitHub POC.
+
+These proportions describe records, not candidate pairs or labeled pairs.
+Because 35.53% of the governed records are UAT, the current validation is a
+mixed-environment POC result and must not be described as a production-only
+performance estimate. A production-only claim requires a separately stratified
+evaluation.
+
+### POC result summary for management
+
+| Follow-up path | Measured POC result | Current operational result |
+| --- | --- | --- |
+| Tiered Evidence recommendation | Targeted validation: 100/100 Same; 100% precision; Wilson 95% lower bound 96.30%; recall not estimated | 3,961 High candidates; 3,528 passed safety gates as `Proposed`; 433 remain inactive exceptions; 0 Active |
+| Splink-prioritized human Review | At cutoff `0.938995074`: calibration precision/recall 66.67%/61.22%; held-out precision/recall 56.52%/61.90%; no automatic High threshold | 816,534 eligible pairs scored; 11,177 queued as model `Review`; 0 human reviews complete |
+
+The first row is a reversible model recommendation path. The second is only a
+human-work ordering path. Neither row reports merged people or production match
+changes, because none occurred.
 
 ### Latest `pilot-1.6` representative threshold evaluation
 
@@ -171,8 +208,8 @@ Current five-method observations:
 | Tiered Evidence High, all labeled (16 predictions) | 100% | 22.86% | No false positives observed; targeted validation below provides the stronger precision evidence |
 | Tiered Evidence High, held-out (3 predictions) | 100% | 14.29% | Correct but deliberately narrow |
 | Recoverable-Conflict High | Same as Tiered High | Same as Tiered High | Two observed conflicts stayed Conflict Review and both were Different |
-| Splink approved Review cutoff, calibration | 66.67% | 61.22% | Cutoff `0.938995074`, selected by maximum calibration F1 |
-| Splink approved Review cutoff, held-out | 56.52% | 61.90% | Approved for prioritization, not automatic matching |
+| Splink Review cutoff, calibration | 66.67% | 61.22% | Cutoff `0.938995074`, selected by maximum calibration F1 |
+| Splink Review cutoff, held-out | 56.52% | 61.90% | Human-review prioritization only, not automatic matching |
 | Hybrid High | No predictions | 0% | Disabled because Splink has no validated High cutoff |
 | Hybrid Review queue, held-out | 10.82% | 100% | Preserves deterministic Review signals but is too broad to be a mandatory backlog |
 
@@ -184,7 +221,7 @@ It therefore remains unapproved for automatic High.
 
 #### How to interpret the Splink Review cutoff
 
-The approved `0.938995074` cutoff is a first-priority operating point, not a
+The selected `0.938995074` cutoff is a first-priority operating point, not a
 Same/Different boundary:
 
 - It prioritized 68/490 scored pairs: 43 Same and 25 Different.
@@ -234,7 +271,9 @@ the existing cutoff.
 - Precision: 100%.
 - Wilson 95% precision interval: 96.30% to 100%.
 - Recall was not estimated because every sampled pair was model-predicted High.
-- Management decision: Approved as validation evidence.
+- Approval history: the run was first approved in ERPNext by the project
+  operator. Management reviewed this result on 2026-08-19 and approved its use
+  in the follow-up recommendation workflow.
 
 The near-zero kappa in this High-only cohort is a prevalence artifact: almost
 every ordinary label was `Same`, and the two `Different` labels occurred on
@@ -281,7 +320,7 @@ Human submissions are independent and auditable. A separate deterministic
 
 ### Optional Splink Review queue
 
-The approved maximum-F1 operating point is now implemented as a separate,
+The selected maximum-F1 operating point is now implemented as a separate,
 capacity-based human-review pool. It does not share `Proposed`/`Exception`
 statuses with deterministic High recommendations:
 
@@ -299,7 +338,7 @@ statuses with deterministic High recommendations:
 
 Every stored row remains model tier `Review` and is ranked from highest score
 downward. The observed queued range is 0.940477224 to 0.999996923; the minimum
-is above the approved cutoff simply because no eligible score occurred between
+is above the selected cutoff simply because no eligible score occurred between
 those values. A score below the cutoff remains lower priority, not `Different`.
 
 The integrity audit found no overlap with Tiered High or prior human-used pairs,
@@ -329,8 +368,9 @@ and corrected several issues before approval:
 5. Previous human-used pairs are excluded from later validation cohorts.
 
 The latest `pilot-1.6` 500-pair recalibration still produced no valid automatic
-High threshold. Management approved `0.938995074` only for optional Review
-prioritization.
+High threshold. The project operator initially accepted `0.938995074` for
+optional Review prioritization; management approved that limited workflow role
+on 2026-08-19.
 
 ## Safety and governance controls
 
@@ -360,7 +400,8 @@ prioritization.
 | Deterministic High precision lower confidence bound at least 95% | Passed: 96.30% |
 | No truncation or oversized block in corrected High run | Passed |
 | Valid general probabilistic High threshold | Not met; Splink remains review-ranking only |
-| Management approval of deterministic High evidence | Passed |
+| Management approval of the follow-up Tiered recommendation workflow | Passed on 2026-08-19; formal ERPNext canary approval/activation remains unrecorded |
+| Management approval of Splink's optional human-review ordering role | Passed on 2026-08-19; no probabilistic automatic High approved |
 | Reversible recommendation-only preview | Passed: 3,528 Proposed, 433 Exception, 0 Active |
 | Optional Splink Review-priority queue | Passed: all 816,534 eligible pairs scored; 11,177 queued; no automatic High |
 | 20,000-record Splink shadow training on current worker | Resource limit exceeded; no accuracy result and no model change |
@@ -451,7 +492,9 @@ on the evaluated governed data. It does not prove that all fuzzy candidates
 should be matched, that every possible duplicate is discoverable, or that a
 probabilistic score can replace governance and human exception handling.
 
-The next requested authorization should therefore be:
+The follow-up workflow was approved by management on 2026-08-19. The remaining
+governance step is to record the exact activation scope in ERPNext before any
+status changes. If the approval includes the current frozen preview, record:
 
 > Activate the 3,528 safety-gated `Proposed` records as reversible
 > recommendations, leave all 433 exceptions inactive, sample the active cohort

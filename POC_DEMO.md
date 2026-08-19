@@ -10,6 +10,8 @@ phones, emails, birthdays, source keys, or credentials.
 
 - CCD Master contains approximately 251,000 governed records from multiple
   sources.
+- Frozen environment mix: 161,112 Production (64.06%), 89,377 UAT (35.53%),
+  and 1,031 Fake/test (0.41%). No governed source was ambiguous or unclassified.
 - The existing fuzzy percentage looks authoritative but is not a probability.
 - Reviewing every record or candidate pair is operationally impossible.
 - POC objective: prove a narrow automatic recommendation tier and leave humans
@@ -34,7 +36,7 @@ Suggested statement:
 | Method | Simple explanation | Outcome |
 | --- | --- | --- |
 | Baseline | Existing weighted fuzzy percentage | Control only; insufficient precision |
-| Tiered Evidence | Rules based on evidence meaning | Narrow High rule approved |
+| Tiered Evidence | Rules based on evidence meaning | Narrow High rule validated; follow-up recommendation workflow management-approved on 2026-08-19 |
 | Recoverable Conflict | Tests safe handling of identifier conflicts | Human routing only |
 | Splink | Local statistical record linkage | Review ranking only |
 | Hybrid | Splink inside deterministic safety gates | Shadow only without a probability High threshold |
@@ -59,16 +61,28 @@ Lead with the conclusion:
 
 - Latest baseline current flag: 23.64% held-out precision.
 - General Splink model: no validated automatic High threshold.
-- Approved Splink first-priority Review cutoff: `0.938995074`, with 56.52%
+- Selected Splink first-priority Review cutoff: `0.938995074`, with 56.52%
   held-out precision and 61.90% held-out recall.
 - Tiered High targeted validation: 100/100 Same.
 - Precision: 100%; 95% confidence lower bound: 96.30%.
-- Management approved the validation evidence.
+- Before 2026-08-19, ERPNext approvals were recorded by the project operator,
+  not management. Management reviewed these results and approved the limited
+  follow-up workflow on 2026-08-19.
+
+Show the two follow-up outputs separately:
+
+| Path | POC result | Current state |
+| --- | --- | --- |
+| Tiered Evidence recommendation | 100/100 targeted High pairs were Same; Wilson 95% lower bound 96.30% | 3,528 `Proposed`, 433 inactive exceptions, 0 Active |
+| Splink-prioritized Review | Cutoff held-out precision 56.52%, recall 61.90%; no automatic High threshold | 816,534 eligible pairs scored, 11,177 queued for optional human review, 0 reviews complete |
 
 State the statistical limitation:
 
 > This establishes conditional precision for the High rule. It does not claim
 > that the rule finds every duplicate, and it does not guarantee zero errors.
+
+Also state that these metrics cover the mixed governed snapshot. They are not
+a separately measured Production-only result.
 
 ### 6. Quality-control discoveries — 2 minutes
 
@@ -86,7 +100,7 @@ formula:
 - A same-worker training-size experiment reproduced the 5,000-record control
   but found that 20,000 records exceed the current worker memory limit even
   with reduced pair budgets. It generated no 20,000-record accuracy claim and
-  changed neither the approved cutoff nor the live Review queue.
+  changed neither the selected cutoff nor the live Review queue.
 
 ### 7. Feasible operating workload — 2 minutes
 
@@ -98,7 +112,7 @@ formula:
   unvalidated source groups, and small random QC samples.
 - Splink ranks optional Review work; it does not turn every Review candidate
   into a mandatory task.
-- Its approved `0.938995074` cutoff is the first-priority band, not a
+- The selected `0.938995074` cutoff is the first-priority band, not a
   Same/Different boundary. Lower-scored deterministic Review/Conflict pairs
   remain review candidates when capacity or operational need permits.
 - The separate `CCD Match Review Candidate` queue excludes Tiered High and
@@ -108,9 +122,13 @@ formula:
   eligible scored pairs. It is for capacity-based/on-demand review, not a new
   mandatory workload.
 
-### 8. Requested next decision — 1 minute
+### 8. Management decision and remaining formal step — 1 minute
 
-Ask management to authorize only:
+Record the 2026-08-19 decision accurately: management approved the follow-up
+workflow—Tiered Evidence for reversible recommendations and Splink for optional
+human-review ordering. ERPNext still shows the canary as `Ready`, with no
+formal recommendation approval or activation recorded. If management's scope
+includes activating this frozen preview, formally record:
 
 > Approval of the 3,528 safety-gated `Proposed` records inside the reversible
 > recommendation register. This does not merge records, set `Is Matched?`, or
@@ -118,16 +136,18 @@ Ask management to authorize only:
 
 ## Presentation and live-demo checklist
 
-The policy document and its evaluation run have separate lifecycles. At the
-time the evaluation evidence was prepared, `pilot-1.6` was **Draft**, while its
-High Tier Validation run was **Completed / Approved**. It was subsequently and
-separately promoted to **Pilot** to create the recommendation-only preview. It
-has not been promoted to `Approved`, and its recommendations have not been
-approved/activated.
+The policy document, evaluation run, management decision, and canary activation
+have separate lifecycles. At the time the evidence was prepared, `pilot-1.6`
+was **Draft**, while its High Tier Validation run was **Completed / Approved by
+the project operator**. It was subsequently promoted to **Pilot** by the
+project operator to create the preview. Management first approved the limited
+follow-up workflow on 2026-08-19. The policy has not been promoted to
+`Approved`, and the current recommendations have not been formally approved or
+activated in ERPNext.
 
 1. In ERPNext, open `pilot-1.6` and identify it as the **Pilot policy whose
    unchanged frozen snapshot was evaluated before promotion**.
-2. In ERPNext, open the approved High Tier Validation run and show its header:
+2. In ERPNext, open the operator-approved High Tier Validation run and show its header:
    purpose `High Tier Validation`, status `Completed`, approval status
    `Approved`, sampled pairs `100`, and double-review count `100`. Keep its
    internal document ID out of public slides and recordings.
@@ -181,7 +201,7 @@ Its main sections are:
 | `high_tier_validation` | The decisive conditional-precision result for a High-only validation run |
 | `models` | Confusion-matrix and calibration diagnostics for the five shadow outputs |
 
-For the approved High run, `automatic_matching_readiness.ready` is `false` with reason
+For the operator-approved High run, `automatic_matching_readiness.ready` is `false` with reason
 `high_tier_validation_nonrepresentative`. This is expected: the run sampled
 only predictions already classified High. It validates precision conditional
 on that narrow rule, but cannot estimate population recall or calibrate a
