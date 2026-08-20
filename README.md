@@ -39,6 +39,13 @@ The completed, sanitized proof-of-concept package is available in:
 - [`POC_RESULTS.json`](POC_RESULTS.json) — machine-readable, non-identifying
   aggregate results.
 
+The proposed follow-up implementation is specified in
+[`IDENTITY_RESOLUTION_WORKFLOW_PLAN.md`](IDENTITY_RESOLUTION_WORKFLOW_PLAN.md).
+It defines reversible identity groups and memberships, Tiered and human-review
+materialization, continuous QC, optional review batches, deliberate rollout
+holds, bulk-approval testing, and the next management demo. It describes the
+target design; those identity-link features are not yet live.
+
 Before 2026-08-19, the ERPNext evaluation approvals and Pilot promotion were
 recorded by the project operator, not management. Management reviewed the POC
 results and live demonstration on 2026-08-19 and approved the limited follow-up
