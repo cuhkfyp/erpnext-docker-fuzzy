@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# This repository is commonly reached through the backend SSHFS mount.  The
+# final backend restart/remount invalidates scripts that are still being read
+# from that mount, so execute a staged copy before doing any deployment work.
+if [[ "${DB_CONNECTOR_DEPLOY_STAGED:-0}" != "1" ]]; then
+	deploy_stage="$(mktemp /tmp/db-connector-deploy.XXXXXX)"
+	cp -- "$0" "$deploy_stage"
+	chmod 0755 "$deploy_stage"
+	DB_CONNECTOR_DEPLOY_STAGED=1 \
+		DB_CONNECTOR_DEPLOY_STAGE_PATH="$deploy_stage" \
+		exec "$deploy_stage" "$@"
+elif [[ -n "${DB_CONNECTOR_DEPLOY_STAGE_PATH:-}" ]]; then
+	# The staged shell already holds this file open, so unlinking it now avoids
+	# leaving temporary copies behind on success or on an early exit.
+	rm -f -- "$DB_CONNECTOR_DEPLOY_STAGE_PATH"
+	unset DB_CONNECTOR_DEPLOY_STAGE_PATH
+fi
+
 ROOT_DIR="${ERPNEXT_VOLUME_ROOT:-/root/erpnext_docker_volume}"
 LIVE_APP="$ROOT_DIR/backend/apps/db_connector"
 PERSISTENT_APP="$ROOT_DIR/persistent_apps/db_connector"
@@ -66,11 +83,19 @@ for container in "${containers[@]}"; do
 			db_connector/api_fuzzy_canary.py \
 			db_connector/api_fuzzy_review_queue.py \
 			db_connector/api_fuzzy_splink_experiment.py \
+			db_connector/api_identity_activation.py \
+			db_connector/api_identity_human.py \
+			db_connector/api_identity_qc.py \
+			db_connector/api_identity_resolution.py \
+			db_connector/api_identity_review_batch.py \
+			db_connector/identity_resolution_setup.py \
+			db_connector/hooks.py \
 			db_connector/api_ccd_fuzzy.md \
 			db_connector/MATCHING_PILOT.md \
 			db_connector/requirements.txt \
 			db_connector/fuzzy_matching \
 			db_connector/db_connector \
+			db_connector/public \
 			db_connector/deployment; do
 			docker cp "$PERSISTENT_APP/$relative" "$container:$APP_IN_CONTAINER/$(dirname "$relative")/"
 		done
@@ -125,7 +150,7 @@ if (( ! CODE_ONLY )); then
 	if docker cp \
 		frappe_docker-backend-1:/home/frappe/frappe-bench/sites/assets/db_connector \
 		"$asset_stage/" 2>/dev/null; then
-		if ! docker exec frappe_docker-frontend-1 mkdir -p \
+		if ! docker exec -u root frappe_docker-frontend-1 mkdir -p \
 				/home/frappe/frappe-bench/sites/assets/db_connector \
 			|| ! docker cp "$asset_stage/db_connector/." \
 				frappe_docker-frontend-1:/home/frappe/frappe-bench/sites/assets/db_connector/; then

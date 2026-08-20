@@ -3,7 +3,7 @@ frappe.ui.form.on("CCD Match Recommendation", {
 		if (frm.is_new()) return;
 		load_recommendation_evidence(frm);
 		if (!frappe.user.has_role("System Manager")) return;
-		if (["Proposed", "Active"].includes(frm.doc.status)) {
+		if (frm.doc.status === "Proposed" && !frm.doc.identity_decision) {
 			frm.add_custom_button(__("Withdraw Recommendation"), () => {
 				frappe.prompt(
 					[{ fieldname: "reason", fieldtype: "Small Text", label: __("Withdrawal Reason"), reqd: 1 }],
@@ -15,6 +15,25 @@ frappe.ui.form.on("CCD Match Recommendation", {
 					__("Withdraw Recommendation"),
 				);
 			});
+			if (frm.doc.rollout_state === "Held") {
+				frm.add_custom_button(__("Release Complete Component Hold"), () => frappe.call({
+					method: "db_connector.api_identity_activation.release_component_hold",
+					args: { recommendation_name: frm.doc.name },
+					callback: () => frm.reload_doc(),
+				}));
+			} else {
+				frm.add_custom_button(__("Hold Complete Component for Later/Demo"), () => {
+					frappe.prompt(
+						[{ fieldname: "reason", fieldtype: "Small Text", label: __("Hold Reason"), reqd: 1 }],
+						(values) => frappe.call({
+							method: "db_connector.api_identity_activation.hold_component",
+							args: { recommendation_name: frm.doc.name, reason: values.reason },
+							callback: () => frm.reload_doc(),
+						}),
+						__("Hold complete component"),
+					);
+				});
+			}
 		}
 	},
 });
@@ -59,7 +78,9 @@ function render_recommendation_evidence(frm, payload) {
 		: "";
 	const qc = payload.qc_selected
 		? `<div class="alert alert-secondary"><b>${__("Random QC sample")}</b>: ${esc(payload.qc_review_status || "Unreviewed")}` +
-			`${payload.qc_final_label ? ` — ${esc(payload.qc_final_label)}` : ""}</div>`
+			`${payload.qc_final_label ? ` — ${esc(payload.qc_final_label)}` : ""}` +
+			`${payload.qc_due_at ? `<br>${__("Due")}: ${esc(payload.qc_due_at)}` : ""}` +
+			`${payload.qc_failure_action ? `<br><strong>${__("Circuit breaker")}</strong>: ${esc(payload.qc_failure_action)}` : ""}</div>`
 		: "";
 	frm.fields_dict.evidence_html.$wrapper.html(
 		privacy + stale + component + qc +

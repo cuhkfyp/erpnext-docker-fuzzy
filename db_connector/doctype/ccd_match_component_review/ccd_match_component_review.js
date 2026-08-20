@@ -36,8 +36,13 @@ function render_component(frm, payload) {
 		? `<div class="alert alert-success"><b>${__("Final grouping")}</b>: ` +
 			payload.final_groups.map((group) => component_esc(group.join(" = "))).join("; ") + "</div>"
 		: "";
+	const materialization = payload.materialization_status && payload.materialization_status !== "Not Final"
+		? `<div class="alert alert-secondary"><b>${__("Identity materialization")}</b>: ${component_esc(payload.materialization_status)}` +
+			`${payload.identity_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(payload.identity_decision)}">${__("open decision")}</a>` : ""}` +
+			`${payload.materialization_error ? `<br>${component_esc(payload.materialization_error)}` : ""}</div>`
+		: "";
 	frm.fields_dict.evidence_html.$wrapper.html(
-		privacy + stale + groups +
+		privacy + stale + groups + materialization +
 		`<p><b>${__("Review status")}</b>: ${component_esc(payload.status)} ` +
 		`${payload.final_decision ? `— ${component_esc(payload.final_decision)}` : ""}</p>` +
 		`<p><b>${__("Tiered High candidate edges")}</b>: ${edges || __("None")}</p>` +
@@ -55,6 +60,14 @@ function load_component_evidence(frm) {
 			render_component(frm, payload);
 			if (payload.can_submit) add_component_buttons(frm, payload, false);
 			if (payload.can_adjudicate) add_component_buttons(frm, payload, true);
+			if (payload.can_materialize) {
+				frm.add_custom_button(__("Retry Identity Materialization"), () => frappe.call({
+					method: "db_connector.api_identity_human.materialize_component_review",
+					args: { review_name: frm.doc.name },
+					freeze: true,
+					callback: () => frm.reload_doc(),
+				}), __("Identity Resolution"));
+			}
 		},
 	});
 }

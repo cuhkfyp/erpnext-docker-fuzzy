@@ -4,16 +4,19 @@
 
 | Item | Value |
 | --- | --- |
-| Status | Proposed implementation specification; not yet implemented |
+| Status | Implemented and deployed in guarded, default-off mode; live activation not yet authorized |
 | Plan date | 2026-08-20 |
 | POC policy | `pilot-1.6` |
 | Management decision | Limited follow-up workflow approved on 2026-08-19 |
 | Approved workflow scope | Tiered Evidence for reversible safety-gated recommendations; Splink above the selected cutoff for optional human-review ordering |
 | Explicitly not authorized | Destructive record merging, automatic `Is Matched?`, legacy Matching Score writes, or probabilistic automatic High |
 
-This plan consolidates the decisions made after the POC. It is the design for
-the next implementation phase, not a statement that identity links, activation
-batches, continuous QC controls, or review batches already exist.
+This plan consolidates the decisions made after the POC and remains the design
+contract for the implementation. The schema, services, controls, and user
+interfaces are now deployed. Materialization remains disabled and no live
+identity links, activation batches, holds, review assignments, or QC
+investigations have been created. See `IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`
+for the verified deployment state.
 
 ## 1. Outcome
 
@@ -842,3 +845,28 @@ This plan is complete when the system can:
 - approve all, approve controlled waves, and deliberately hold complete
   components without using false reversals; and
 - keep legacy Matching Score and `Is Matched?` outside the new workflow.
+
+## 24. Implementation update — 2026-08-20
+
+The planned feature set is implemented and deployed to the `frontend` site in
+guarded mode. The deployment added the append-only decision, identity group,
+membership, exclusion, event, activation batch, review batch, and QC
+investigation models; one shared materialization service; the CCD Master
+Identity Resolution view; activation preview/hold/release controls; optional
+Splink assignment batches; and asynchronous QC/circuit-breaker controls.
+
+The live boundary was deliberately preserved:
+
+- `materialization_enabled` is `0` and `automation_paused` is `0`;
+- every new identity, activation, review-batch, and QC-investigation table has
+  zero records;
+- all 11,177 Splink candidates remain optional and unassigned;
+- no CCD Master record, legacy Matching Score, or `Is Matched?` field was
+  mutated; and
+- no real activation or demonstration reversal was performed.
+
+The zero-write **Preview Approve All** for frozen canary `p1mucmhogd` selected
+3,528 recommendations across 3,520 complete components, planned 3,520 identity
+groups and 7,044 memberships, and reported zero unsafe, stale, or conflicting
+components. Applying any batch remains impossible until a System Manager makes
+the separate, explicit decision to enable materialization.

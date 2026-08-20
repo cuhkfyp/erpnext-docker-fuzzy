@@ -6,7 +6,7 @@
  "field_order": [
   "canary_run", "review_key", "cluster_fingerprint", "cluster_size", "recommendation_count",
   "review_status", "final_decision", "stale", "finalized_at", "finalized_by",
-  "final_groups_json", "review_submissions", "evidence_html"
+  "final_groups_json", "review_submissions", "materialization_status", "identity_decision", "identity_groups_json", "materialization_error", "evidence_html"
  ],
  "fields": [
   {"fieldname": "canary_run", "fieldtype": "Link", "in_list_view": 1, "label": "Canary Run", "options": "CCD Match Canary Run", "read_only": 1, "reqd": 1},
@@ -21,6 +21,10 @@
   {"fieldname": "finalized_by", "fieldtype": "Link", "label": "Finalized By", "options": "User", "read_only": 1},
   {"fieldname": "final_groups_json", "fieldtype": "Code", "hidden": 1, "label": "Final Identity Groups", "options": "JSON", "permlevel": 1, "read_only": 1},
   {"fieldname": "review_submissions", "fieldtype": "Table", "hidden": 1, "label": "Review Submissions", "options": "CCD Match Component Review Submission", "permlevel": 2, "read_only": 1},
+  {"default": "Not Final", "fieldname": "materialization_status", "fieldtype": "Select", "in_list_view": 1, "label": "Identity Materialization", "options": "Not Final\nPending\nApplied\nException\nStale", "read_only": 1},
+  {"fieldname": "identity_decision", "fieldtype": "Link", "label": "Identity Decision", "options": "CCD Identity Decision", "read_only": 1},
+  {"fieldname": "identity_groups_json", "fieldtype": "Code", "hidden": 1, "label": "Identity Groups", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "materialization_error", "fieldtype": "Small Text", "label": "Materialization Safety Outcome", "read_only": 1},
   {"fieldname": "evidence_html", "fieldtype": "HTML", "label": "Protected Component Evidence"}
  ],
  "index_web_pages_for_search": 0,

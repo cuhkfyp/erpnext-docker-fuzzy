@@ -26,6 +26,7 @@ from db_connector.fuzzy_matching.blocking import (
     generate_candidate_pairs,
 )
 from db_connector.fuzzy_matching.models import build_evidence
+from db_connector.fuzzy_matching.identity import identity_fingerprint
 from db_connector.fuzzy_matching.policy import MatchingPolicy
 from db_connector.fuzzy_matching.security import mask_identifier
 from db_connector.fuzzy_matching.splink_adapter import (
@@ -284,6 +285,8 @@ def _bulk_write_candidates(
         "right_source",
         "left_modified_at",
         "right_modified_at",
+        "left_identity_fingerprint",
+        "right_identity_fingerprint",
         "source_pair",
         "blocking_routes",
         "model_tier",
@@ -293,6 +296,7 @@ def _bulk_write_candidates(
         "review_status",
     ]
     now = frappe.utils.now_datetime()
+    policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
     values = []
     for rank, prediction in enumerate(predictions, 1):
         pair_key = _ordered_pair(prediction.left_id, prediction.right_id)
@@ -316,6 +320,8 @@ def _bulk_write_candidates(
                 right["source"],
                 left["source_modified"],
                 right["source_modified"],
+                identity_fingerprint(left, policy),
+                identity_fingerprint(right, policy),
                 pair.source_pair,
                 ", ".join(pair.blocking_routes),
                 "Review",
@@ -566,6 +572,9 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
         "stale": stale,
         "review_status": "Stale" if stale else candidate.review_status,
         "final_label": candidate.final_label or "",
+        "materialization_status": candidate.materialization_status or "Not Final",
+        "identity_decision": candidate.identity_decision or "",
+        "materialization_error": candidate.materialization_error or "",
         "priority_rank": candidate.priority_rank,
         "can_submit": bool(
             not stale
@@ -576,6 +585,11 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
             "System Manager" in set(frappe.get_roles())
             and not stale
             and candidate.review_status == "Needs Adjudication"
+        ),
+        "can_materialize": bool(
+            "System Manager" in set(frappe.get_roles())
+            and candidate.review_status in FINAL_REVIEW_STATUSES
+            and candidate.materialization_status in {"Pending", "Exception"}
         ),
     }
     if sensitive:
@@ -658,9 +672,19 @@ def submit_candidate_review(
     else:
         _update_candidate_review_state(candidate)
     candidate.save(ignore_permissions=True)
+    from db_connector.api_identity_human import materialize_final_candidate_if_enabled
+
+    materialization = materialize_final_candidate_if_enabled(candidate.name)
+    from db_connector.api_identity_review_batch import refresh_review_batch_for_candidate
+
+    refresh_review_batch_for_candidate(candidate.name)
     _refresh_review_counts(candidate.queue_run)
     frappe.db.commit()
-    return {"candidate": candidate.name, "status": candidate.review_status}
+    return {
+        "candidate": candidate.name,
+        "status": candidate.review_status,
+        "materialization_status": materialization.get("status", "Not Final"),
+    }
 
 
 @frappe.whitelist()
@@ -689,12 +713,19 @@ def adjudicate_candidate_review(
     )
     _update_candidate_review_state(candidate)
     candidate.save(ignore_permissions=True)
+    from db_connector.api_identity_human import materialize_final_candidate_if_enabled
+
+    materialization = materialize_final_candidate_if_enabled(candidate.name)
+    from db_connector.api_identity_review_batch import refresh_review_batch_for_candidate
+
+    refresh_review_batch_for_candidate(candidate.name)
     _refresh_review_counts(candidate.queue_run)
     frappe.db.commit()
     return {
         "candidate": candidate.name,
         "status": candidate.review_status,
         "final_label": candidate.final_label or "",
+        "materialization_status": materialization.get("status", "Not Final"),
     }
 
 

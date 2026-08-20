@@ -1,0 +1,33 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["investigation_key", "canary_run", "recommendation", "identity_decision", "identity_group", "pause_scope", "status", "reason", "opened_at", "opened_by", "resolved_at", "resolved_by", "resolution_notes"],
+ "fields": [
+  {"fieldname": "investigation_key", "fieldtype": "Data", "hidden": 1, "label": "Investigation Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "canary_run", "fieldtype": "Link", "in_list_view": 1, "label": "Canary Run", "options": "CCD Match Canary Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "recommendation", "fieldtype": "Link", "in_list_view": 1, "label": "QC Recommendation", "options": "CCD Match Recommendation", "read_only": 1, "reqd": 1},
+  {"fieldname": "identity_decision", "fieldtype": "Link", "label": "Identity Decision", "options": "CCD Identity Decision", "read_only": 1},
+  {"fieldname": "identity_group", "fieldtype": "Link", "label": "Identity Group", "options": "CCD Identity Group", "read_only": 1},
+  {"fieldname": "pause_scope", "fieldtype": "Data", "label": "Paused Rule or Source Scope", "read_only": 1, "reqd": 1},
+  {"default": "Open", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Open\nResolved", "reqd": 1},
+  {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason", "read_only": 1, "reqd": 1},
+  {"fieldname": "opened_at", "fieldtype": "Datetime", "label": "Opened At", "read_only": 1, "reqd": 1},
+  {"fieldname": "opened_by", "fieldtype": "Link", "label": "Opened By", "options": "User", "read_only": 1, "reqd": 1},
+  {"fieldname": "resolved_at", "fieldtype": "Datetime", "label": "Resolved At", "read_only": 1},
+  {"fieldname": "resolved_by", "fieldtype": "Link", "label": "Resolved By", "options": "User", "read_only": 1},
+  {"fieldname": "resolution_notes", "fieldtype": "Small Text", "label": "Resolution Notes"}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Identity QC Investigation",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "write": 1},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "sort_field": "opened_at",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

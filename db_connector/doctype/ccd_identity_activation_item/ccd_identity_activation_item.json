@@ -1,0 +1,24 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": ["component_fingerprint", "recommendation_count", "record_count", "status", "recommendation_names_json", "planned_group_key", "identity_decision", "identity_group", "error_code"],
+ "fields": [
+  {"fieldname": "component_fingerprint", "fieldtype": "Data", "in_list_view": 1, "label": "Component Fingerprint", "read_only": 1, "reqd": 1},
+  {"fieldname": "recommendation_count", "fieldtype": "Int", "in_list_view": 1, "label": "Recommendations", "read_only": 1},
+  {"fieldname": "record_count", "fieldtype": "Int", "in_list_view": 1, "label": "Records", "read_only": 1},
+  {"default": "Planned", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Planned\nApplied\nStale\nException\nAlready Applied\nFailed", "read_only": 1},
+  {"fieldname": "recommendation_names_json", "fieldtype": "Code", "hidden": 1, "label": "Recommendation Names", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "planned_group_key", "fieldtype": "Data", "hidden": 1, "label": "Planned Group Key", "read_only": 1},
+  {"fieldname": "identity_decision", "fieldtype": "Link", "label": "Identity Decision", "options": "CCD Identity Decision", "read_only": 1},
+  {"fieldname": "identity_group", "fieldtype": "Link", "label": "Identity Group", "options": "CCD Identity Group", "read_only": 1},
+  {"fieldname": "error_code", "fieldtype": "Small Text", "label": "Error Code", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Identity Activation Item",
+ "permissions": []
+}

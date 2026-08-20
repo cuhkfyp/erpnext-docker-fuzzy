@@ -1,0 +1,28 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["materialization_enabled", "automation_paused", "pause_scope", "pause_reason", "initial_pilot_wave_components", "demo_holdout_components", "qc_cases_per_week", "rolling_qc_window", "qc_sla_days", "default_review_batch_size"],
+ "fields": [
+  {"default": "0", "description": "Default-off safety switch. Preview remains available; no Identity Decision, Group, Membership, or Exclusion can be created while disabled.", "fieldname": "materialization_enabled", "fieldtype": "Check", "label": "Live Identity Materialization Enabled"},
+  {"default": "0", "fieldname": "automation_paused", "fieldtype": "Check", "label": "New Automatic Materialization Paused"},
+  {"fieldname": "pause_scope", "fieldtype": "Data", "label": "Paused Rule or Source Scope"},
+  {"fieldname": "pause_reason", "fieldtype": "Small Text", "label": "Pause Reason"},
+  {"default": "100", "fieldname": "initial_pilot_wave_components", "fieldtype": "Int", "label": "Initial Pilot Wave Components"},
+  {"default": "10", "fieldname": "demo_holdout_components", "fieldtype": "Int", "label": "Demo Holdout Components"},
+  {"default": "10", "fieldname": "qc_cases_per_week", "fieldtype": "Int", "label": "QC Cases per Week"},
+  {"default": "100", "fieldname": "rolling_qc_window", "fieldtype": "Int", "label": "Rolling QC Window"},
+  {"default": "14", "fieldname": "qc_sla_days", "fieldtype": "Int", "label": "QC SLA Days"},
+  {"default": "100", "fieldname": "default_review_batch_size", "fieldtype": "Int", "label": "Suggested Review Batch Size"}
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Identity Resolution Settings",
+ "permissions": [
+  {"read": 1, "write": 1, "role": "System Manager"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "track_changes": 1
+}

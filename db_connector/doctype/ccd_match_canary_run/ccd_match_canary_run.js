@@ -1,70 +1,115 @@
 frappe.ui.form.on("CCD Match Canary Run", {
 	refresh(frm) {
 		if (frm.is_new()) return;
-		frm.add_custom_button(__("View All Recommendations"), () => {
-			frappe.set_route("List", "CCD Match Recommendation", {
-				canary_run: frm.doc.name,
-			});
-		}, __("Review"));
-		if (frm.doc.exception_component_count) {
-			frm.add_custom_button(__("Review Exception Components"), () => {
-				frappe.set_route("List", "CCD Match Component Review", {
-					canary_run: frm.doc.name,
-				});
-			}, __("Review"));
-		}
-		if (frm.doc.qc_sample_count) {
-			frm.add_custom_button(__("Review Random QC Sample"), () => {
-				frappe.set_route("List", "CCD Match Recommendation", {
-					canary_run: frm.doc.name,
-					qc_selected: 1,
-				});
-			}, __("Review"));
-		}
+		add_review_navigation(frm);
 		if (!frappe.user.has_role("System Manager")) return;
-		if (["Ready", "Active"].includes(frm.doc.status)) {
-			frm.add_custom_button(__("Create Splink Review Queue"), () => {
-				frappe.confirm(
-					__("Create a separate human-review queue for eligible candidate pairs at or above the approved maximum-F1 Splink cutoff? Tiered High pairs and previously reviewed pairs are excluded. This does not link, merge, or update CCD Master."),
-					() => frappe.call({
-						method: "db_connector.api_fuzzy_review_queue.enqueue_review_queue",
-						args: { canary_name: frm.doc.name },
-						freeze: true,
-						callback(response) {
-							if (response.message && response.message.run) {
-								frappe.set_route("Form", "CCD Match Review Queue Run", response.message.run);
-							}
-						},
-					}),
-				);
-			}, __("Review"));
-		}
-		if (frm.doc.status === "Ready") {
-			frm.add_custom_button(__("Approve Recommendations"), () => {
-				frappe.confirm(
-					__("Approve only the safety-gated Proposed recommendation records? This changes recommendation status and appends audit events only. It does not link or merge CCD records, set Is Matched, or populate Matching Score. All exceptions remain inactive."),
-					() => frappe.call({
-						method: "db_connector.api_fuzzy_canary.approve_canary_recommendations",
-						args: { run_name: frm.doc.name },
-						freeze: true,
-						callback: () => frm.reload_doc(),
-					}),
-				);
-			}, __("Recommendation Status Only"));
-		}
-		if (frm.doc.status === "Active") {
-			frm.add_custom_button(__("Withdraw Approved Recommendations"), () => {
-				frappe.prompt(
-					[{ fieldname: "reason", fieldtype: "Small Text", label: __("Withdrawal Reason"), reqd: 1 }],
-					(values) => frappe.call({
-						method: "db_connector.api_fuzzy_canary.reverse_canary",
-						args: { run_name: frm.doc.name, reason: values.reason },
-						freeze: true,
-						callback: () => frm.reload_doc(),
-					}),
-					__("Withdraw Approved Recommendations"),
-				);
-			}, __("Recommendation Status Only"));
-		}
+		add_manager_actions(frm);
 	},
 });
+
+function add_review_navigation(frm) {
+	frm.add_custom_button(__("View All Recommendations"), () => {
+		frappe.set_route("List", "CCD Match Recommendation", { canary_run: frm.doc.name });
+	}, __("Review"));
+	if (frm.doc.exception_component_count) {
+		frm.add_custom_button(__("Review Exception Components"), () => {
+			frappe.set_route("List", "CCD Match Component Review", { canary_run: frm.doc.name });
+		}, __("Review"));
+	}
+	if (frm.doc.qc_sample_count) {
+		frm.add_custom_button(__("Review QC Cohort"), () => {
+			frappe.set_route("List", "CCD Match Recommendation", { canary_run: frm.doc.name, qc_selected: 1 });
+		}, __("Review"));
+	}
+	frm.add_custom_button(__("View Activation Batches"), () => {
+		frappe.set_route("List", "CCD Identity Activation Batch", { canary_run: frm.doc.name });
+	}, __("Identity Rollout"));
+}
+
+function add_manager_actions(frm) {
+	if (["Ready", "Active"].includes(frm.doc.status)) {
+		frm.add_custom_button(__("Create Splink Review Queue"), () => {
+			frappe.confirm(
+				__("Create the optional full Review Pool ranked by the approved Splink cutoff? This assigns no human work and creates no identity links."),
+				() => frappe.call({
+					method: "db_connector.api_fuzzy_review_queue.enqueue_review_queue",
+					args: { canary_name: frm.doc.name },
+					freeze: true,
+					callback(response) {
+						if (response.message?.run) frappe.set_route("Form", "CCD Match Review Queue Run", response.message.run);
+					},
+				}),
+			);
+		}, __("Review"));
+
+		frm.add_custom_button(__("Preview Approve All"), () => {
+			frappe.call({
+				method: "db_connector.api_identity_activation.preview_approve_all",
+				args: { run_name: frm.doc.name },
+				freeze: true,
+				callback(response) {
+					const result = response.message || {};
+					frappe.msgprint({
+						title: __("Zero-write activation preview"),
+						indicator: result.unsafe_component_count ? "orange" : "green",
+						message: `<p>${__("Complete components")}: ${result.selected_component_count || 0}</p>` +
+							`<p>${__("Recommendations")}: ${result.selected_recommendation_count || 0}</p>` +
+							`<p>${__("Planned groups / memberships")}: ${result.planned_identity_group_count || 0} / ${result.planned_membership_count || 0}</p>` +
+							`<p>${__("Unsafe components")}: ${result.unsafe_component_count || 0}</p>` +
+							`<p><strong>${__("No records were written.")}</strong></p>`,
+					});
+				},
+			});
+		}, __("Identity Rollout"));
+
+		frm.add_custom_button(__("Create Pilot Wave"), () => create_wave(frm), __("Identity Rollout"));
+		frm.add_custom_button(__("Create Approve-All Batch"), () => create_all_batch(frm), __("Identity Rollout"));
+		frm.add_custom_button(__("Assign Next QC Cases"), () => {
+			frappe.prompt(
+				[{ fieldname: "count", fieldtype: "Int", label: __("QC cases"), default: 10, reqd: 1 }],
+				(values) => frappe.call({
+					method: "db_connector.api_identity_qc.assign_qc_cases",
+					args: { run_name: frm.doc.name, count: values.count },
+					freeze: true,
+					callback: () => frm.reload_doc(),
+				}),
+				__("Assign asynchronous QC work"),
+			);
+		}, __("Quality Control"));
+	}
+}
+
+function create_wave(frm) {
+	frappe.prompt(
+		[
+			{ fieldname: "component_limit", fieldtype: "Int", label: __("Complete components"), default: 100, reqd: 1 },
+			{ fieldname: "is_demonstration", fieldtype: "Check", label: __("Synthetic demonstration batch only"), default: 0 },
+		],
+		(values) => create_activation_batch(frm, "Explicit Wave", values.component_limit, values.is_demonstration),
+		__("Create component-atomic Pilot Wave"),
+	);
+}
+
+function create_all_batch(frm) {
+	frappe.confirm(
+		__("Freeze every currently available Proposed component into one reviewed Activation Batch? Deliberately held components remain Proposed and are excluded. Creating the batch does not create identity links."),
+		() => create_activation_batch(frm, "Approve All Eligible", null, 0),
+	);
+}
+
+function create_activation_batch(frm, selectionMethod, componentLimit, demonstration) {
+	frappe.call({
+		method: "db_connector.api_identity_activation.create_activation_batch",
+		args: {
+			run_name: frm.doc.name,
+			selection_method: selectionMethod,
+			component_limit: componentLimit,
+			is_pilot_wave: selectionMethod === "Explicit Wave" ? 1 : 0,
+			is_demonstration: demonstration || 0,
+		},
+		freeze: true,
+		callback(response) {
+			if (response.message?.batch) frappe.set_route("Form", "CCD Identity Activation Batch", response.message.batch);
+		},
+	});
+}

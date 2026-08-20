@@ -1,0 +1,36 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["membership_key", "identity_group", "ccd_master", "governed_source", "identity_fingerprint", "status", "valid_from", "valid_to", "last_validated_at", "originating_decision", "ended_reason", "ended_by"],
+ "fields": [
+  {"fieldname": "membership_key", "fieldtype": "Data", "hidden": 1, "label": "Membership Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "identity_group", "fieldtype": "Link", "in_list_view": 1, "label": "Identity Group", "options": "CCD Identity Group", "read_only": 1, "reqd": 1},
+  {"fieldname": "ccd_master", "fieldtype": "Link", "in_list_view": 1, "label": "CCD Master", "options": "CCD Master", "permlevel": 1, "read_only": 1, "reqd": 1},
+  {"fieldname": "governed_source", "fieldtype": "Data", "label": "Governed Source", "read_only": 1},
+  {"fieldname": "identity_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Identity Fingerprint", "permlevel": 2, "read_only": 1, "reqd": 1},
+  {"default": "Active", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Active\nNeeds Revalidation\nEnded", "read_only": 1, "reqd": 1},
+  {"fieldname": "valid_from", "fieldtype": "Datetime", "label": "Valid From", "read_only": 1, "reqd": 1},
+  {"fieldname": "valid_to", "fieldtype": "Datetime", "label": "Valid To", "read_only": 1},
+  {"fieldname": "last_validated_at", "fieldtype": "Datetime", "label": "Last Validated At", "read_only": 1},
+  {"fieldname": "originating_decision", "fieldtype": "Link", "label": "Originating Decision", "options": "CCD Identity Decision", "read_only": 1, "reqd": 1},
+  {"fieldname": "ended_reason", "fieldtype": "Small Text", "label": "Ended Reason", "read_only": 1},
+  {"fieldname": "ended_by", "fieldtype": "Link", "label": "Ended By", "options": "User", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Identity Membership",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "report": 1, "role": "CCD Match Reviewer"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "valid_from",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

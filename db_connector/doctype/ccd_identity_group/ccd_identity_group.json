@@ -1,0 +1,32 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["group_key", "group_version", "status", "originating_decision", "group_fingerprint", "active_member_count", "same_source_duplicate_warning", "created_at", "last_validation_at", "supersedes", "superseded_by"],
+ "fields": [
+  {"fieldname": "group_key", "fieldtype": "Data", "hidden": 1, "label": "Group Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"default": "1", "fieldname": "group_version", "fieldtype": "Int", "label": "Group Version", "read_only": 1, "reqd": 1},
+  {"default": "Active", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Active\nNeeds Revalidation\nEnded", "read_only": 1, "reqd": 1},
+  {"fieldname": "originating_decision", "fieldtype": "Link", "in_list_view": 1, "label": "Originating Decision", "options": "CCD Identity Decision", "read_only": 1, "reqd": 1},
+  {"fieldname": "group_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Group Fingerprint", "read_only": 1, "reqd": 1},
+  {"default": "0", "fieldname": "active_member_count", "fieldtype": "Int", "in_list_view": 1, "label": "Active Members", "read_only": 1},
+  {"default": "0", "fieldname": "same_source_duplicate_warning", "fieldtype": "Check", "label": "Contains Human-Confirmed Same-Source Duplicates", "read_only": 1},
+  {"fieldname": "created_at", "fieldtype": "Datetime", "label": "Created At", "read_only": 1, "reqd": 1},
+  {"fieldname": "last_validation_at", "fieldtype": "Datetime", "label": "Last Validated At", "read_only": 1},
+  {"fieldname": "supersedes", "fieldtype": "Link", "label": "Supersedes Group", "options": "CCD Identity Group", "read_only": 1},
+  {"fieldname": "superseded_by", "fieldtype": "Link", "label": "Superseded By Group", "options": "CCD Identity Group", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Identity Group",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "report": 1, "role": "CCD Match Reviewer"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "sort_field": "created_at",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

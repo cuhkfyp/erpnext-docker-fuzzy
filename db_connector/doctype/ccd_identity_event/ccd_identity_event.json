@@ -1,0 +1,35 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["event_key", "entity_doctype", "entity_name", "identity_decision", "identity_group", "identity_membership", "event_type", "from_status", "to_status", "reason", "event_at", "actor", "is_demonstration", "metadata_json"],
+ "fields": [
+  {"fieldname": "event_key", "fieldtype": "Data", "hidden": 1, "label": "Event Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "entity_doctype", "fieldtype": "Link", "label": "Entity DocType", "options": "DocType", "read_only": 1, "reqd": 1},
+  {"fieldname": "entity_name", "fieldtype": "Dynamic Link", "in_list_view": 1, "label": "Entity", "options": "entity_doctype", "read_only": 1, "reqd": 1},
+  {"fieldname": "identity_decision", "fieldtype": "Link", "label": "Identity Decision", "options": "CCD Identity Decision", "read_only": 1},
+  {"fieldname": "identity_group", "fieldtype": "Link", "label": "Identity Group", "options": "CCD Identity Group", "read_only": 1},
+  {"fieldname": "identity_membership", "fieldtype": "Link", "label": "Identity Membership", "options": "CCD Identity Membership", "read_only": 1},
+  {"fieldname": "event_type", "fieldtype": "Select", "in_list_view": 1, "label": "Event Type", "options": "Create\nApprove\nActivate\nHold\nRelease\nRevalidate\nNeeds Revalidation\nEnd\nWithdraw\nSplit\nSupersede\nPause\nResume\nQC Failure", "read_only": 1, "reqd": 1},
+  {"fieldname": "from_status", "fieldtype": "Data", "label": "From Status", "read_only": 1},
+  {"fieldname": "to_status", "fieldtype": "Data", "label": "To Status", "read_only": 1},
+  {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason", "read_only": 1, "reqd": 1},
+  {"fieldname": "event_at", "fieldtype": "Datetime", "label": "Event At", "read_only": 1, "reqd": 1},
+  {"fieldname": "actor", "fieldtype": "Link", "label": "Actor", "options": "User", "read_only": 1, "reqd": 1},
+  {"default": "0", "fieldname": "is_demonstration", "fieldtype": "Check", "label": "Demonstration Event", "read_only": 1},
+  {"fieldname": "metadata_json", "fieldtype": "Code", "label": "Metadata", "options": "JSON", "permlevel": 2, "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Identity Event",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "event_at",
+ "sort_order": "DESC",
+ "track_changes": 0
+}

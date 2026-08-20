@@ -5,9 +5,9 @@
  "engine": "InnoDB",
  "field_order": [
   "queue_run", "pair_key", "pair_fingerprint", "left_record", "right_record", "left_source", "right_source",
-  "left_modified_at", "right_modified_at", "source_pair", "blocking_routes", "model_section",
+  "left_modified_at", "right_modified_at", "left_identity_fingerprint", "right_identity_fingerprint", "source_pair", "blocking_routes", "model_section",
   "model_tier", "probabilistic_score", "review_threshold", "priority_rank",
-  "review_section", "review_status", "final_label", "stale", "review_labels", "evidence_html"
+  "assignment_section", "assigned_review_batch", "assigned_to", "assigned_at", "due_at", "review_section", "review_status", "final_label", "stale", "review_labels", "materialization_status", "identity_decision", "identity_groups_json", "materialization_error", "evidence_html"
  ],
  "fields": [
   {"fieldname": "queue_run", "fieldtype": "Link", "in_list_view": 1, "label": "Review Queue Run", "options": "CCD Match Review Queue Run", "read_only": 1, "reqd": 1},
@@ -19,6 +19,8 @@
   {"fieldname": "right_source", "fieldtype": "Data", "label": "Right Source", "read_only": 1},
   {"fieldname": "left_modified_at", "fieldtype": "Datetime", "hidden": 1, "label": "Left Modified At", "read_only": 1},
   {"fieldname": "right_modified_at", "fieldtype": "Datetime", "hidden": 1, "label": "Right Modified At", "read_only": 1},
+  {"fieldname": "left_identity_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Left Identity Fingerprint", "permlevel": 2, "read_only": 1},
+  {"fieldname": "right_identity_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Right Identity Fingerprint", "permlevel": 2, "read_only": 1},
   {"fieldname": "source_pair", "fieldtype": "Data", "label": "Source Pair", "read_only": 1},
   {"fieldname": "blocking_routes", "fieldtype": "Small Text", "label": "Blocking Routes", "permlevel": 2, "read_only": 1},
   {"fieldname": "model_section", "fieldtype": "Section Break", "label": "Splink Review Ranking"},
@@ -26,11 +28,20 @@
   {"fieldname": "probabilistic_score", "fieldtype": "Float", "in_list_view": 1, "label": "Splink Probability", "permlevel": 2, "precision": "12", "read_only": 1},
   {"fieldname": "review_threshold", "fieldtype": "Float", "label": "Approved Review Cutoff", "permlevel": 2, "precision": "12", "read_only": 1},
   {"fieldname": "priority_rank", "fieldtype": "Int", "in_list_view": 1, "label": "Priority Rank", "read_only": 1},
+  {"fieldname": "assignment_section", "fieldtype": "Section Break", "label": "Optional Review Assignment"},
+  {"fieldname": "assigned_review_batch", "fieldtype": "Link", "in_list_view": 1, "label": "Assigned Review Batch", "options": "CCD Match Review Batch", "read_only": 1},
+  {"fieldname": "assigned_to", "fieldtype": "Link", "label": "Assigned To", "options": "User", "read_only": 1},
+  {"fieldname": "assigned_at", "fieldtype": "Datetime", "label": "Assigned At", "read_only": 1},
+  {"fieldname": "due_at", "fieldtype": "Datetime", "label": "Due At", "read_only": 1},
   {"fieldname": "review_section", "fieldtype": "Section Break", "label": "Human Review"},
   {"default": "Unreviewed", "fieldname": "review_status", "fieldtype": "Select", "in_list_view": 1, "label": "Review Status", "options": "Unreviewed\nPartially Reviewed\nPositive Confirmation Required\nNeeds Adjudication\nAgreed\nAdjudicated\nStale", "read_only": 1},
   {"fieldname": "final_label", "fieldtype": "Select", "in_list_view": 1, "label": "Human Final Label", "options": "\nSame\nDifferent", "read_only": 1},
   {"default": "0", "fieldname": "stale", "fieldtype": "Check", "label": "Stale", "read_only": 1},
   {"fieldname": "review_labels", "fieldtype": "Table", "hidden": 1, "label": "Review Labels", "options": "CCD Match Review Label", "permlevel": 2, "read_only": 1},
+  {"default": "Not Final", "fieldname": "materialization_status", "fieldtype": "Select", "in_list_view": 1, "label": "Identity Materialization", "options": "Not Final\nPending\nApplied\nException\nStale", "read_only": 1},
+  {"fieldname": "identity_decision", "fieldtype": "Link", "label": "Identity Decision", "options": "CCD Identity Decision", "read_only": 1},
+  {"fieldname": "identity_groups_json", "fieldtype": "Code", "hidden": 1, "label": "Identity Groups", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "materialization_error", "fieldtype": "Small Text", "label": "Materialization Safety Outcome", "read_only": 1},
   {"fieldname": "evidence_html", "fieldtype": "HTML", "label": "Protected Side-by-Side Evidence"}
  ],
  "index_web_pages_for_search": 0,

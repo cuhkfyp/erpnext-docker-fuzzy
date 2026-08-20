@@ -41,12 +41,17 @@ function render_candidate_evidence(frm, payload) {
 		? `<div class="alert alert-light">${__("System Manager audit view")}: ${__("Splink probability")} ${esc(payload.probabilistic_score)}; ` +
 			`${__("approved cutoff")} ${esc(payload.review_threshold)}; ${__("blocking routes")} ${esc(payload.blocking_routes)}</div>`
 		: "";
+	const materialization = payload.materialization_status && payload.materialization_status !== "Not Final"
+		? `<div class="alert alert-secondary"><b>${__("Identity materialization")}</b>: ${esc(payload.materialization_status)}` +
+			`${payload.identity_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(payload.identity_decision)}">${__("open decision")}</a>` : ""}` +
+			`${payload.materialization_error ? `<br>${esc(payload.materialization_error)}` : ""}</div>`
+		: "";
 	const rows = (payload.attributes || []).map((row) =>
 		`<tr><td>${esc(row.attribute)}</td><td>${esc(row.left)}</td>` +
 		`<td>${esc(row.right)}</td><td>${esc(comparison_label(row.comparison))}</td></tr>`
 	).join("");
 	frm.fields_dict.evidence_html.$wrapper.html(
-		privacy + purpose + stale + score +
+		privacy + purpose + stale + score + materialization +
 		`<div class="table-responsive"><table class="table table-bordered"><thead><tr>` +
 		`<th>${__("Evidence")}</th><th>${record_heading(payload.left)}</th>` +
 		`<th>${record_heading(payload.right)}</th><th>${__("Comparison")}</th>` +
@@ -63,6 +68,14 @@ function load_candidate_evidence(frm) {
 			render_candidate_evidence(frm, payload);
 			if (payload.can_submit) add_review_buttons(frm);
 			if (payload.can_adjudicate) add_adjudication_buttons(frm);
+			if (payload.can_materialize) {
+				frm.add_custom_button(__("Retry Identity Materialization"), () => frappe.call({
+					method: "db_connector.api_identity_human.materialize_review_candidate",
+					args: { candidate_name: frm.doc.name },
+					freeze: true,
+					callback: () => frm.reload_doc(),
+				}), __("Identity Resolution"));
+			}
 		},
 	});
 }

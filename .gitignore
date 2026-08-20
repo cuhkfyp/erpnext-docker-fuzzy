@@ -1,4 +1,5 @@
-# This repository intentionally tracks only the fuzzy-matching component.
+# This repository intentionally tracks only the fuzzy-matching and identity-
+# resolution component.
 *
 
 !.gitignore
@@ -12,6 +13,13 @@
 !api_fuzzy_canary.py
 !api_fuzzy_review_queue.py
 !api_fuzzy_splink_experiment.py
+!api_identity_activation.py
+!api_identity_human.py
+!api_identity_qc.py
+!api_identity_resolution.py
+!api_identity_review_batch.py
+!identity_resolution_setup.py
+!hooks.py
 
 # Implementation packages added after the baseline commit.
 !fuzzy_matching/
@@ -30,8 +38,14 @@
 !POC_SYNTHETIC_EXAMPLES.md
 !POC_RESULTS.json
 !IDENTITY_RESOLUTION_WORKFLOW_PLAN.md
+!IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md
 !deployment/
 !deployment/**
+!public/
+public/*
+!public/js/
+public/js/*
+!public/js/ccd_master_identity_resolution.js
 
 # Never track generated or sensitive runtime material.
 **/__pycache__/

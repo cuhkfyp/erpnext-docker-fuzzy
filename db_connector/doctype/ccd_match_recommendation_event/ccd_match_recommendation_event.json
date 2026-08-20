@@ -7,7 +7,7 @@
  "fields": [
   {"fieldname": "recommendation", "fieldtype": "Link", "in_list_view": 1, "label": "Recommendation", "options": "CCD Match Recommendation", "read_only": 1, "reqd": 1},
   {"fieldname": "canary_run", "fieldtype": "Link", "label": "Canary Run", "options": "CCD Match Canary Run", "read_only": 1, "reqd": 1},
-  {"fieldname": "event_type", "fieldtype": "Select", "in_list_view": 1, "label": "Event Type", "options": "Created\nApproved\nActivated\nReversed\nSuperseded\nSafety Exception", "read_only": 1, "reqd": 1},
+  {"fieldname": "event_type", "fieldtype": "Select", "in_list_view": 1, "label": "Event Type", "options": "Created\nApproved\nHeld\nReleased\nWithdrawn\nSuperseded\nSafety Exception\nLegacy Activated\nLegacy Reversed", "read_only": 1, "reqd": 1},
   {"fieldname": "from_status", "fieldtype": "Data", "label": "From Status", "read_only": 1},
   {"fieldname": "to_status", "fieldtype": "Data", "label": "To Status", "read_only": 1, "reqd": 1},
   {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason", "read_only": 1, "reqd": 1},

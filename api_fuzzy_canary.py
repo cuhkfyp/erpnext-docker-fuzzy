@@ -33,6 +33,7 @@ from db_connector.fuzzy_matching.canary import (
     identity_partition_fingerprint,
     ordered_pair,
 )
+from db_connector.fuzzy_matching.identity import identity_fingerprint
 from db_connector.fuzzy_matching.models import build_evidence, tiered_result
 from db_connector.fuzzy_matching.policy import MatchingPolicy
 from db_connector.fuzzy_matching.security import mask_identifier
@@ -324,8 +325,8 @@ def _refresh_run_counts(run_name: str) -> dict[str, int]:
     values = {
         "proposed_count": counts.get("Proposed", 0),
         "exception_count": counts.get("Exception", 0),
-        "active_count": counts.get("Active", 0),
-        "reversed_count": counts.get("Reversed", 0),
+        "active_count": counts.get("Approved", 0) + counts.get("Active", 0),
+        "reversed_count": counts.get("Withdrawn", 0) + counts.get("Reversed", 0),
         "superseded_count": counts.get("Superseded", 0),
     }
     frappe.db.set_value(RUN_DOCTYPE, run_name, values, update_modified=False)
@@ -589,6 +590,8 @@ def run_canary(run_name: str) -> None:
                     "source_pair": edge.source_pair,
                     "left_modified_at": left["source_modified"],
                     "right_modified_at": right["source_modified"],
+                    "left_identity_fingerprint": identity_fingerprint(left, policy),
+                    "right_identity_fingerprint": identity_fingerprint(right, policy),
                     "model_tier": "High",
                     "blocking_routes": ", ".join(edge.blocking_routes),
                     "reason_codes_json": _json(edge.reason_codes),
@@ -706,6 +709,9 @@ def _pair_evidence_payload(recommendation: Any) -> dict[str, Any]:
         "qc_selected": bool(recommendation.qc_selected),
         "qc_review_status": recommendation.qc_review_status or "",
         "qc_final_label": recommendation.qc_final_label or "",
+        "qc_assigned_at": recommendation.qc_assigned_at or "",
+        "qc_due_at": recommendation.qc_due_at or "",
+        "qc_failure_action": recommendation.qc_failure_action or "",
     }
     if sensitive:
         payload["left"]["record_id"] = recommendation.left_record
@@ -951,6 +957,9 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
         "status": "Stale" if stale else review.review_status,
         "final_decision": review.final_decision or "",
         "final_groups": final_groups,
+        "materialization_status": review.materialization_status or "Not Final",
+        "identity_decision": review.identity_decision or "",
+        "materialization_error": review.materialization_error or "",
         "records": records,
         "attributes": list(policy.attributes()),
         "candidate_pairs": candidate_pairs,
@@ -966,6 +975,11 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
             "System Manager" in set(frappe.get_roles())
             and not stale
             and review.review_status == "Needs Adjudication"
+        ),
+        "can_materialize": bool(
+            "System Manager" in set(frappe.get_roles())
+            and review.review_status in FINAL_REVIEW_STATUSES
+            and review.materialization_status in {"Pending", "Exception"}
         ),
     }
 
@@ -1036,9 +1050,16 @@ def submit_component_review(
         else:
             review.review_status = "Needs Adjudication"
     review.save(ignore_permissions=True)
+    from db_connector.api_identity_human import materialize_final_component_if_enabled
+
+    materialization = materialize_final_component_if_enabled(review.name)
     _refresh_review_workflow_counts(review.canary_run)
     frappe.db.commit()
-    return {"review": review.name, "status": review.review_status}
+    return {
+        "review": review.name,
+        "status": review.review_status,
+        "materialization_status": materialization.get("status", "Not Final"),
+    }
 
 
 @frappe.whitelist()
@@ -1080,9 +1101,16 @@ def adjudicate_component_review(
             review, decision, submission.groups_json, "Adjudicated"
         )
     review.save(ignore_permissions=True)
+    from db_connector.api_identity_human import materialize_final_component_if_enabled
+
+    materialization = materialize_final_component_if_enabled(review.name)
     _refresh_review_workflow_counts(review.canary_run)
     frappe.db.commit()
-    return {"review": review.name, "status": review.review_status}
+    return {
+        "review": review.name,
+        "status": review.review_status,
+        "materialization_status": materialization.get("status", "Not Final"),
+    }
 
 
 def _update_qc_review_state(recommendation: Any) -> None:
@@ -1154,6 +1182,9 @@ def submit_recommendation_qc(
         _update_qc_review_state(recommendation)
     recommendation.save(ignore_permissions=True)
     _refresh_review_workflow_counts(recommendation.canary_run)
+    from db_connector.api_identity_qc import refresh_qc_monitor
+
+    refresh_qc_monitor(recommendation.canary_run)
     frappe.db.commit()
     return {
         "recommendation": recommendation.name,
@@ -1188,6 +1219,9 @@ def adjudicate_recommendation_qc(
     _update_qc_review_state(recommendation)
     recommendation.save(ignore_permissions=True)
     _refresh_review_workflow_counts(recommendation.canary_run)
+    from db_connector.api_identity_qc import refresh_qc_monitor
+
+    refresh_qc_monitor(recommendation.canary_run)
     frappe.db.commit()
     return {
         "recommendation": recommendation.name,
@@ -1217,7 +1251,7 @@ def _change_recommendation_status(
                 "activated_by": actor,
             }
         )
-    if to_status in {"Reversed", "Superseded"}:
+    if to_status in {"Withdrawn", "Reversed", "Superseded"}:
         values.update({"ended_at": now, "ended_by": actor, "end_reason": reason})
     frappe.db.set_value(
         RECOMMENDATION_DOCTYPE,
@@ -1262,8 +1296,11 @@ def _stale_recommendation_names(run_name: str) -> list[str]:
 
 @frappe.whitelist()
 def approve_canary_recommendations(run_name: str) -> dict[str, Any]:
-    """Approve reversible recommendation records without linking CCD records."""
+    """Retired status-only approval endpoint retained for explicit safety."""
     _require_manager()
+    frappe.throw(
+        "Status-only recommendation approval has been retired. Use Preview Approve All and an approved CCD Identity Activation Batch."
+    )
     run = frappe.get_doc(RUN_DOCTYPE, run_name)
     if run.status != "Ready":
         frappe.throw("Only a Ready canary may have its recommendations approved")
@@ -1362,8 +1399,11 @@ def approve_canary_recommendations(run_name: str) -> dict[str, Any]:
 
 @frappe.whitelist()
 def activate_canary(run_name: str) -> dict[str, Any]:
-    """Backward-compatible alias; approval still creates no CCD identity link."""
-    return approve_canary_recommendations(run_name)
+    """Retired legacy alias; it must never bypass the governed materializer."""
+    _require_manager()
+    frappe.throw(
+        "Legacy canary activation is disabled. Use a governed CCD Identity Activation Batch."
+    )
 
 
 @frappe.whitelist()
@@ -1372,44 +1412,27 @@ def reverse_recommendation(recommendation_name: str, reason: str) -> dict[str, s
     if not str(reason or "").strip():
         frappe.throw("A reversal reason is required")
     recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, recommendation_name)
-    if recommendation.status not in {"Proposed", "Active"}:
-        frappe.throw("Only a Proposed or Active recommendation may be reversed")
+    if recommendation.status != "Proposed" or recommendation.identity_decision:
+        frappe.throw(
+            "Only an unmaterialized Proposed recommendation may be withdrawn here. End or supersede Identity Memberships through the Identity Resolution workflow."
+        )
     _change_recommendation_status(
         recommendation,
-        "Reversed",
-        "Reversed",
+        "Withdrawn",
+        "Withdrawn",
         str(reason).strip(),
     )
     _refresh_run_counts(recommendation.canary_run)
     frappe.db.commit()
-    return {"recommendation": recommendation.name, "status": "Reversed"}
+    return {"recommendation": recommendation.name, "status": "Withdrawn"}
 
 
 @frappe.whitelist()
 def reverse_canary(run_name: str, reason: str) -> dict[str, Any]:
     _require_manager()
-    if not str(reason or "").strip():
-        frappe.throw("A reversal reason is required")
-    run = frappe.get_doc(RUN_DOCTYPE, run_name)
-    if run.status != "Active":
-        frappe.throw("Only an Active canary may be reversed")
-    rows = frappe.get_all(
-        RECOMMENDATION_DOCTYPE,
-        filters={"canary_run": run.name, "status": "Active"},
-        fields=["name", "status", "canary_run"],
-        limit_page_length=100_000,
+    frappe.throw(
+        "Bulk status reversal is retired because approved recommendations may own live Identity Memberships. End or supersede memberships through the Identity Resolution workflow."
     )
-    for recommendation in rows:
-        _change_recommendation_status(
-            recommendation,
-            "Reversed",
-            "Reversed",
-            str(reason).strip(),
-        )
-    counts = _refresh_run_counts(run.name)
-    run.db_set("status", "Completed", update_modified=False)
-    frappe.db.commit()
-    return {"run": run.name, "status": "Completed", "reversed": counts["reversed_count"]}
 
 
 @frappe.whitelist()

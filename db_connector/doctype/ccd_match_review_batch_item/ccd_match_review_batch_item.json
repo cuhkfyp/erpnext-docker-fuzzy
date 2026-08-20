@@ -1,0 +1,21 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": ["review_candidate", "priority_rank", "assigned_to", "assigned_at", "due_at", "status"],
+ "fields": [
+  {"fieldname": "review_candidate", "fieldtype": "Link", "in_list_view": 1, "label": "Review Candidate", "options": "CCD Match Review Candidate", "permlevel": 1, "read_only": 1, "reqd": 1},
+  {"fieldname": "priority_rank", "fieldtype": "Int", "in_list_view": 1, "label": "Priority Rank", "read_only": 1},
+  {"fieldname": "assigned_to", "fieldtype": "Link", "in_list_view": 1, "label": "Assigned To", "options": "User", "read_only": 1},
+  {"fieldname": "assigned_at", "fieldtype": "Datetime", "label": "Assigned At", "read_only": 1},
+  {"fieldname": "due_at", "fieldtype": "Datetime", "label": "Due At", "read_only": 1},
+  {"default": "Assigned", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Assigned\nPartially Reviewed\nCompleted\nStale", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Match Review Batch Item",
+ "permissions": []
+}

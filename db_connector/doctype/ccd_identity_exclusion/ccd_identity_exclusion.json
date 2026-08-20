@@ -1,0 +1,35 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["exclusion_key", "left_record", "right_record", "left_fingerprint", "right_fingerprint", "originating_decision", "status", "reason", "decided_at", "decided_by", "superseded_by"],
+ "fields": [
+  {"fieldname": "exclusion_key", "fieldtype": "Data", "hidden": 1, "label": "Exclusion Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "left_record", "fieldtype": "Link", "in_list_view": 1, "label": "Left CCD Master", "options": "CCD Master", "permlevel": 1, "read_only": 1, "reqd": 1},
+  {"fieldname": "right_record", "fieldtype": "Link", "in_list_view": 1, "label": "Right CCD Master", "options": "CCD Master", "permlevel": 1, "read_only": 1, "reqd": 1},
+  {"fieldname": "left_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Left Identity Fingerprint", "permlevel": 2, "read_only": 1, "reqd": 1},
+  {"fieldname": "right_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Right Identity Fingerprint", "permlevel": 2, "read_only": 1, "reqd": 1},
+  {"fieldname": "originating_decision", "fieldtype": "Link", "label": "Originating Decision", "options": "CCD Identity Decision", "read_only": 1, "reqd": 1},
+  {"default": "Active", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Active\nSuperseded", "read_only": 1, "reqd": 1},
+  {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason", "read_only": 1, "reqd": 1},
+  {"fieldname": "decided_at", "fieldtype": "Datetime", "label": "Decided At", "read_only": 1, "reqd": 1},
+  {"fieldname": "decided_by", "fieldtype": "Link", "label": "Decided By", "options": "User", "read_only": 1, "reqd": 1},
+  {"fieldname": "superseded_by", "fieldtype": "Link", "label": "Superseded By", "options": "CCD Identity Exclusion", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Identity Exclusion",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "report": 1, "role": "CCD Match Reviewer"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "decided_at",
+ "sort_order": "DESC",
+ "track_changes": 0
+}
