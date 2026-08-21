@@ -156,6 +156,14 @@ fresh explicit backup before any higher-risk boundary:
 - generating and approving a new production canary; or
 - applying any material identity activation wave.
 
+Likewise, an ordinary single `CCD Master` insert does not require its own full
+backup. Protect normal day-to-day changes with the verified scheduled backup;
+take an explicit checkpoint before a bulk import, schema/policy change, or
+activation Apply. Merely turning Materialization on or off writes no Identity
+Group or Membership, so the write boundary that needs the checkpoint is
+**Apply Approved Batch** (or a human finalization that materializes while the
+global switch is on), not the switch by itself.
+
 A new centre changes the matching population and usually the policy/source
 profile. Do not add it to an old frozen canary. Create a new policy version or
 reviewed source-profile snapshot, rerun the required evaluation/validation, and
@@ -783,6 +791,16 @@ policy/snapshot, component items, and zero unsafe/stale conflicts before using
 **Approve Batch**. Approval is a separate recorded action and still creates no
 Membership. Only **Apply Approved Batch** writes identity objects.
 
+In **Complete Components**, each item shows its source pair(s) and a **Review
+Pair(s)** button. The protected review dialog lists the frozen `R1`, `R2`, …
+CCD records, links to each permitted CCD Master and Match Recommendation, and
+the current pair evidence with an explicit stale warning if a CCD record changed
+after the canary snapshot. The selected record pairs are frozen; raw evidence
+values are deliberately not duplicated into the batch document. This is the
+human-readable review surface; the component fingerprint remains the tamper-
+evident stable key. Only a System Manager or Sensitive Reviewer can load this
+detail, and the ordinary recommendation evidence masking rules remain in force.
+
 ### 11.3 Development-server flow rehearsal
 
 A development rehearsal may use five complete two-record Tiered Proposed
@@ -809,9 +827,26 @@ component must be excluded, open one of its Proposed recommendations and use
 **Hold Complete Component for Later/Demo** before batch creation. The hold
 applies to the entire component.
 
+The component limit is counted *after* held components are excluded. Therefore:
+
+- hold `0`, enter `5` → 5 pilot components and no deliberate holdout;
+- hold `2`, enter `5` → 5 different pilot components plus 2 held components;
+- hold `2`, enter `3` → 3 pilot components plus 2 held components, for a
+  five-component pilot/holdout comparison set.
+
+Materialization being enabled does not process the held components or the
+unselected backlog. **Apply Approved Batch** processes only the exact frozen
+items in that approved batch. A held component cannot be included in a newly
+created batch, and holding a selected component after batch creation makes
+Apply stop instead of silently changing the frozen scope.
+
 Do not check **Synthetic demonstration batch only** for real development CCD
 records. That flag marks the resulting audit events as demonstration events; it
-does not turn Apply into a dry run. Preview is the zero-write operation.
+does not turn Apply into a dry run. With Materialization enabled, Apply still
+creates real active Identity Decisions, Groups, and Memberships on that site.
+Use the flag only when every selected CCD record is deliberately synthetic/fake
+and the resulting audit trail must be labelled as a demonstration. Preview is
+the zero-write operation.
 
 Administrator may perform the System Manager steps if its resolved roles
 include the exact `System Manager` role. The existing `CCD Match Reviewer` and
@@ -834,6 +869,15 @@ rehearsal if the team accepts losing changes made since that backup. A fresh
 pre-Apply backup is still preferred because it provides an exact rollback
 point. Remote backup storage satisfies the independence requirement; verify
 that the backup completed, is non-empty, and has a practiced restore procedure.
+
+It is safe to create, inspect, and approve the frozen batch before taking that
+fresh checkpoint: those steps write only the governance/batch document and do
+not create live identity links. Once the exact batch is approved and the team
+is ready for the short write window, take the backup so it includes the latest
+site state and is as close as practical to Apply. Then enable Materialization,
+apply that one batch, turn Materialization off, and verify. If rollback is
+needed, that checkpoint returns the site to the state immediately before the
+identity Groups and Memberships were created.
 
 ## 12. Sign-off checklist
 

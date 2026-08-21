@@ -245,6 +245,9 @@ create reversible identity links, and it remains blocked while live
 materialization is disabled or automatic materialization is paused. An
 unmaterialized Proposed recommendation may be withdrawn, while a materialized
 relationship must be ended or superseded through Identity Membership history.
+Each frozen component row includes source pair(s) and a protected **Review
+Pair(s)** dialog with permitted CCD Master links and the evidence needed to
+inspect the exact selected records before approval.
 
 ## Optional Splink Review queue
 

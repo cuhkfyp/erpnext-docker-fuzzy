@@ -78,6 +78,9 @@ def _migrate_recommendation_terms() -> dict[str, int]:
 
 
 def install_identity_resolution() -> dict[str, object]:
+    from db_connector.api_identity_activation import (
+        backfill_activation_item_source_pairs,
+    )
     from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
     create_custom_fields(_identity_custom_fields(), update=True)
@@ -86,6 +89,7 @@ def install_identity_resolution() -> dict[str, object]:
     # Reading the Single creates no business data and preserves the default-off
     # materialization switch established in the DocType schema.
     settings = frappe.get_single("CCD Identity Resolution Settings")
+    activation_item_source_backfill = backfill_activation_item_source_pairs()
     return {
         "custom_fields": [
             "CCD Master-ccd_identity_resolution_tab",
@@ -93,6 +97,7 @@ def install_identity_resolution() -> dict[str, object]:
         ],
         "materialization_enabled": bool(settings.materialization_enabled),
         "recommendation_term_migration": migration,
+        "activation_item_source_backfill": activation_item_source_backfill,
     }
 
 

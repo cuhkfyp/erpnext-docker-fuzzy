@@ -4,7 +4,7 @@
 
 | Item | Verified state |
 | --- | --- |
-| Date | 2026-08-20 UTC |
+| Date | 2026-08-21 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
@@ -33,6 +33,10 @@ the predecessor's compacted conversational reasoning.
   component-partition gates before writes.
 - Component-atomic activation batches with zero-write preview, explicit
   review/approval/application, deliberate hold, and release.
+- A protected **Review Pair(s)** action on every frozen Activation Batch item,
+  showing source pair(s), permitted CCD Master/Recommendation links, current
+  evidence, and stale status without duplicating raw identity values into the
+  batch document.
 - Optional non-zero Splink Review Batches. Creating no batch correctly leaves
   assigned work at zero.
 - Asynchronous QC sampling, rolling Wilson precision monitoring, overdue-case
@@ -71,7 +75,7 @@ the predecessor's compacted conversational reasoning.
 | Identity groups | 0 |
 | Identity memberships | 0 |
 | Identity exclusions/events | 0 |
-| Activation batches | 0 |
+| Activation batches | 1 (`Reviewed`; 5 components, not approved/applied) |
 | Review batches | 0 |
 | QC investigations | 0 |
 
@@ -106,9 +110,10 @@ requires explicit management authorization and should be bounded:
 
 1. select complete components for a small pilot wave and any deliberate
    holdout;
-2. take the normal ERPNext backup;
-3. enable materialization through Identity Resolution Settings;
-4. create, review, approve, and apply the frozen pilot activation batch; and
+2. create, inspect, and approve the frozen pilot activation batch;
+3. take a fresh ERPNext backup immediately before the write window;
+4. enable materialization through Identity Resolution Settings and apply that
+   one approved batch; and
 5. verify memberships, audit events, masking, QC assignments, and rollback
    behavior before any wider wave.
 

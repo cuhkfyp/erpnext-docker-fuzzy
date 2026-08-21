@@ -3,9 +3,11 @@
  "doctype": "DocType",
  "editable_grid": 0,
  "engine": "InnoDB",
- "field_order": ["component_fingerprint", "recommendation_count", "record_count", "status", "recommendation_names_json", "planned_group_key", "identity_decision", "identity_group", "error_code"],
+ "field_order": ["component_fingerprint", "source_pairs", "review_component", "recommendation_count", "record_count", "status", "recommendation_names_json", "planned_group_key", "identity_decision", "identity_group", "error_code"],
  "fields": [
   {"fieldname": "component_fingerprint", "fieldtype": "Data", "in_list_view": 1, "label": "Component Fingerprint", "read_only": 1, "reqd": 1},
+  {"fieldname": "source_pairs", "fieldtype": "Data", "in_list_view": 1, "label": "Source Pair(s)", "read_only": 1},
+  {"fieldname": "review_component", "fieldtype": "Button", "in_list_view": 1, "label": "Review Pair(s)"},
   {"fieldname": "recommendation_count", "fieldtype": "Int", "in_list_view": 1, "label": "Recommendations", "read_only": 1},
   {"fieldname": "record_count", "fieldtype": "Int", "in_list_view": 1, "label": "Records", "read_only": 1},
   {"default": "Planned", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Planned\nApplied\nStale\nException\nAlready Applied\nFailed", "read_only": 1},

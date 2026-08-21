@@ -11,9 +11,11 @@ import frappe
 
 from db_connector.api_fuzzy_canary import (
     _change_recommendation_status,
+    _pair_evidence_payload,
     _refresh_run_counts,
     _snapshot_hash,
 )
+from db_connector.api_fuzzy_evaluation import SENSITIVE_ROLE
 from db_connector.api_identity_resolution import (
     materialize_identity,
     preview_materialization,
@@ -34,6 +36,15 @@ def _require_manager() -> None:
         frappe.throw("System Manager role is required", frappe.PermissionError)
 
 
+def _require_batch_reader() -> None:
+    roles = set(frappe.get_roles())
+    if "System Manager" not in roles and SENSITIVE_ROLE not in roles:
+        frappe.throw(
+            "System Manager or CCD Match Sensitive Reviewer role is required",
+            frappe.PermissionError,
+        )
+
+
 def _run(run_name: str) -> Any:
     run = frappe.get_doc(RUN_DOCTYPE, run_name)
     if run.status not in {"Ready", "Active"}:
@@ -52,6 +63,9 @@ def _component_rows(run_name: str) -> dict[str, list[Any]]:
             "cluster_fingerprint",
             "left_record",
             "right_record",
+            "left_source",
+            "right_source",
+            "source_pair",
             "left_modified_at",
             "right_modified_at",
             "left_identity_fingerprint",
@@ -68,6 +82,68 @@ def _component_rows(run_name: str) -> dict[str, list[Any]]:
     for row in rows:
         output[str(row.cluster_fingerprint)].append(row)
     return dict(sorted(output.items()))
+
+
+def _source_pair_labels(rows: Iterable[Any]) -> list[str]:
+    labels: set[str] = set()
+    for row in rows:
+        label = str(row.get("source_pair") or "").strip()
+        if not label:
+            sources = sorted(
+                {
+                    str(row.get("left_source") or "").strip(),
+                    str(row.get("right_source") or "").strip(),
+                }
+                - {""}
+            )
+            label = " ↔ ".join(sources)
+        if label:
+            labels.add(label)
+    return sorted(labels)
+
+
+def backfill_activation_item_source_pairs() -> dict[str, int]:
+    """Populate the non-sensitive source summary for batches created earlier."""
+    item_doctype = "CCD Identity Activation Item"
+    if not frappe.db.table_exists(item_doctype) or not frappe.db.table_exists(
+        RECOMMENDATION_DOCTYPE
+    ):
+        return {"updated": 0, "skipped": 0}
+    updated = skipped = 0
+    for item in frappe.get_all(
+        item_doctype,
+        fields=["name", "source_pairs", "recommendation_names_json"],
+        limit_page_length=100_000,
+    ):
+        if str(item.source_pairs or "").strip():
+            continue
+        try:
+            recommendation_names = json.loads(item.recommendation_names_json or "[]")
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
+        if not recommendation_names:
+            skipped += 1
+            continue
+        rows = frappe.get_all(
+            RECOMMENDATION_DOCTYPE,
+            filters={"name": ["in", recommendation_names]},
+            fields=["left_source", "right_source", "source_pair"],
+            limit_page_length=100_000,
+        )
+        labels = _source_pair_labels(rows)
+        if not labels:
+            skipped += 1
+            continue
+        frappe.db.set_value(
+            item_doctype,
+            item.name,
+            "source_pairs",
+            ", ".join(labels),
+            update_modified=False,
+        )
+        updated += 1
+    return {"updated": updated, "skipped": skipped}
 
 
 def _record_modified_values(record_ids: Iterable[str]) -> dict[str, str]:
@@ -311,6 +387,7 @@ def create_activation_batch(
                 "component_fingerprint": component_key,
                 "recommendation_count": len(rows),
                 "record_count": len(context["record_ids"]),
+                "source_pairs": ", ".join(_source_pair_labels(rows)),
                 "status": "Planned",
                 "recommendation_names_json": _json(context["recommendations"]),
                 "planned_group_key": hashlib.sha256(
@@ -321,6 +398,92 @@ def create_activation_batch(
     batch.insert(ignore_permissions=True)
     frappe.db.commit()
     return {"batch": batch.name, "status": batch.status, **{k: v for k, v in preview.items() if k != "components"}}
+
+
+@frappe.whitelist()
+def get_activation_batch_component(batch_name: str, item_name: str) -> dict[str, Any]:
+    """Return the frozen component with role-protected records and pair evidence."""
+    _require_batch_reader()
+    batch = frappe.get_doc(BATCH_DOCTYPE, batch_name)
+    item = next((row for row in batch.items if str(row.name) == str(item_name)), None)
+    if not item:
+        frappe.throw("The selected component is not an item in this Activation Batch")
+
+    try:
+        recommendation_names = json.loads(item.recommendation_names_json or "[]")
+    except (TypeError, ValueError):
+        frappe.throw("The frozen recommendation selection is corrupt")
+    if (
+        not isinstance(recommendation_names, list)
+        or not recommendation_names
+        or any(not isinstance(name, str) or not name for name in recommendation_names)
+    ):
+        frappe.throw("The frozen recommendation selection is corrupt")
+
+    recommendations = [
+        frappe.get_doc(RECOMMENDATION_DOCTYPE, name)
+        for name in recommendation_names
+    ]
+    component_fingerprint = str(item.component_fingerprint)
+    if any(
+        str(row.canary_run) != str(batch.canary_run)
+        or str(row.cluster_fingerprint) != component_fingerprint
+        for row in recommendations
+    ):
+        frappe.throw("A frozen recommendation no longer belongs to this component")
+
+    record_sources: dict[str, str] = {}
+    for row in recommendations:
+        for record_id, source in (
+            (str(row.left_record), str(row.left_source or "")),
+            (str(row.right_record), str(row.right_source or "")),
+        ):
+            existing = record_sources.get(record_id)
+            if existing is not None and existing != source:
+                frappe.throw("A frozen component has inconsistent record sources")
+            record_sources[record_id] = source
+    aliases = {
+        record_id: f"R{index}"
+        for index, record_id in enumerate(sorted(record_sources), start=1)
+    }
+    if len(recommendations) != int(item.recommendation_count or 0):
+        frappe.throw("The frozen recommendation count does not match the batch item")
+    if len(record_sources) != int(item.record_count or 0):
+        frappe.throw("The frozen record count does not match the batch item")
+
+    pair_payloads: list[dict[str, Any]] = []
+    sensitive_values_visible = False
+    for recommendation in recommendations:
+        payload = _pair_evidence_payload(recommendation)
+        sensitive_values_visible = bool(payload["sensitive_values_visible"])
+        payload["left"]["alias"] = aliases[str(recommendation.left_record)]
+        payload["right"]["alias"] = aliases[str(recommendation.right_record)]
+        pair_payloads.append(payload)
+
+    records = []
+    for record_id in sorted(record_sources):
+        record = {
+            "alias": aliases[record_id],
+            "source": record_sources[record_id],
+        }
+        if sensitive_values_visible:
+            record["record_id"] = record_id
+        records.append(record)
+
+    return {
+        "batch": batch.name,
+        "batch_status": batch.status,
+        "item": item.name,
+        "item_status": item.status,
+        "component_fingerprint": component_fingerprint,
+        "source_pairs": _source_pair_labels(recommendations),
+        "recommendation_count": len(recommendations),
+        "record_count": len(records),
+        "records": records,
+        "recommendations": pair_payloads,
+        "sensitive_values_visible": sensitive_values_visible,
+        "is_demonstration": bool(batch.is_demonstration),
+    }
 
 
 @frappe.whitelist()
