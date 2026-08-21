@@ -93,6 +93,12 @@ For canary `p1mucmhogd`, **Preview Approve All** returned:
 The preview made zero writes. A subsequent read-only check confirmed every new
 operational table was still empty.
 
+The 3,520 components are 3,516 two-record components containing one
+recommendation each and four three-record components containing three
+recommendations each. Thus the eight-count difference between recommendations
+and components is an edge-count difference; those four triplets account for 12
+of the 7,044 planned member records.
+
 ## Next controlled decision
 
 No production activation is implicit in this implementation. The next action
@@ -108,3 +114,8 @@ requires explicit management authorization and should be bounded:
 
 Until that decision is made, the deployed system is observable and testable
 but cannot create live identity links.
+
+Server transfer, clean-target installation, backup/restore, cutover, rollback,
+and new-centre onboarding are covered in
+`ERPNext_SERVER_MIGRATION_RUNBOOK.md`. Identity activation remains a separate
+operation after a successful transfer.

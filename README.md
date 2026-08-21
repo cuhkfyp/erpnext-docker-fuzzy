@@ -39,12 +39,15 @@ The completed, sanitized proof-of-concept package is available in:
 - [`POC_RESULTS.json`](POC_RESULTS.json) — machine-readable, non-identifying
   aggregate results.
 
-The proposed follow-up implementation is specified in
+The deployed follow-up implementation is specified in
 [`IDENTITY_RESOLUTION_WORKFLOW_PLAN.md`](IDENTITY_RESOLUTION_WORKFLOW_PLAN.md).
 It defines reversible identity groups and memberships, Tiered and human-review
 materialization, continuous QC, optional review batches, deliberate rollout
-holds, bulk-approval testing, and the next management demo. It describes the
-target design; those identity-link features are not yet live.
+holds, bulk-approval testing, and the next management demo. The code, schema,
+and UI are deployed in guarded default-off mode; no live identity links have
+been materialized. See
+[`IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`](IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md)
+for the verified boundary.
 
 Before 2026-08-19, the ERPNext evaluation approvals and Pilot promotion were
 recorded by the project operator, not management. Management reviewed the POC
@@ -122,6 +125,14 @@ Restart the backend and workers after installing dependencies. Splink and
 DuckDB run locally on CPU; this is not an LLM, needs no Ollama, needs no API key,
 and sends no client data to an external service.
 
+For a complete transfer to another ERPNext server, do not use this section or
+the Docker helper alone. The repository contains the versioned matching and
+identity component, while the target also needs the complete private
+`db_connector` app, the app that owns `CCD Master`/`CCD Registration`, matching
+Frappe/ERPNext versions, and—when moving the existing site—the database, files,
+site configuration, encryption key, and every installed app. Follow
+[`ERPNext_SERVER_MIGRATION_RUNBOOK.md`](ERPNext_SERVER_MIGRATION_RUNBOOK.md).
+
 ## Safe first run
 
 1. Create a `CCD Matching Policy` with status `Draft` or `Pilot`.
@@ -177,7 +188,7 @@ score thresholds or alter production matching. Pilot 1.6 also discards
 malformed and obvious sequential Hong Kong phone placeholders before blocking
 or scoring.
 
-## Recommendation-only canary
+## Recommendation canary and guarded materialization
 
 After the unchanged policy has both an approved High Tier Validation and an
 approved Threshold Evaluation, promote it from Draft to Pilot:
@@ -213,7 +224,11 @@ or `Unsure`. Partial Match stores a canonical partition of the component.
 Two independent matching submissions finalize an agreement; disagreements and
 Unsure go to manager adjudication, and a positive adjudication still requires
 an independent matching confirmation. These human decisions never rewrite the
-model's `Exception` status or modify CCD Master.
+model's `Exception` status or modify CCD Master. When live materialization is
+disabled, a final decision remains `Pending`; when enabled, a finalized All
+Same/Partial Match/All Different decision is passed through the shared safety
+service to create reversible Groups/Memberships or fingerprint-scoped
+Different exclusions.
 
 A deterministic 100-pair sample of passing Proposed recommendations is marked
 `Selected for QC` and uses the same blinded `Same` / `Different` / `Unsure`
@@ -222,15 +237,14 @@ queue.
 
 Each recommendation stores the frozen policy version, source-record snapshot,
 reason codes, safety status, and opaque pair/cluster fingerprints. Separate
-immutable events retain Created, Approved, Reversed, and Superseded history.
-Approval is a distinct System Manager action after aggregate inspection.
-Both individual recommendations and the complete active canary can be
-reversed with a required reason.
-
-The Desk button is deliberately named **Approve Recommendations**. It changes
-only dedicated recommendation statuses from `Proposed` to `Active` and appends
-audit events. It does not link or merge CCD records, set `Is Matched?`, or
-populate Matching Score.
+immutable events retain Created, Approved, Withdrawn, and Superseded history.
+The former status-only **Approve Recommendations** path is retired. A System
+Manager now uses zero-write preview and a frozen, component-atomic
+`CCD Identity Activation Batch`; only the separately confirmed Apply action can
+create reversible identity links, and it remains blocked while live
+materialization is disabled or automatic materialization is paused. An
+unmaterialized Proposed recommendation may be withdrawn, while a materialized
+relationship must be ended or superseded through Identity Membership history.
 
 ## Optional Splink Review queue
 
@@ -259,14 +273,17 @@ probabilities and blocking diagnostics are restricted to System Managers.
 
 Reviewers submit `Same`, `Different`, or `Unsure`. `Same` requires two
 independent confirmations; `Unsure` and disagreements require adjudication.
-The recorded model tier stays `Review`, and neither queue generation nor human
-review links, merges, or modifies CCD Master.
+The recorded model tier stays `Review`, and queue generation never links,
+merges, or modifies CCD Master. A finalized human Same/Different decision may
+create reversible identity objects only when live materialization is enabled;
+otherwise its materialization state remains Pending. Splink probability itself
+never becomes automatic High.
 
 ## Development validation
 
 ```bash
 python -m unittest discover -s tests -v
-python -m compileall -q api_ccd_fuzzy.py api_fuzzy_evaluation.py api_fuzzy_canary.py api_fuzzy_review_queue.py fuzzy_matching db_connector/doctype tests
+python -m compileall -q api_ccd_fuzzy.py api_fuzzy_evaluation.py api_fuzzy_canary.py api_fuzzy_review_queue.py api_identity_*.py identity_resolution_setup.py fuzzy_matching db_connector/doctype tests
 ```
 
 Real client records, model databases, logs, exports, credentials, and secrets

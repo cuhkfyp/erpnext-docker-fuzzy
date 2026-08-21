@@ -352,6 +352,15 @@ Approval is component-atomic. If three recommendation edges form one connected
 identity component, a rollout batch must select the whole component or none of
 it.
 
+Component-atomic selection defines the **scope of one decision**, not the
+partition that a human must choose. An exception-component reviewer must see
+and decide every record in `{A, B, C}`, but may still return the complete
+partition `({A, B}, {C})`. By contrast, a Proposed Tiered component contains
+only safety-gated Same edges and is eligible for one automatic group; selecting
+only `A–B` while leaving the connected `B–C` edge outside the batch would leave
+one transitive model case partly approved and could make `B` support two
+incompatible rollout states.
+
 ## 10. Deliberate holdout and bulk approval
 
 A hold temporarily removes a complete Proposed component from rollout
@@ -870,3 +879,8 @@ The zero-write **Preview Approve All** for frozen canary `p1mucmhogd` selected
 groups and 7,044 memberships, and reported zero unsafe, stale, or conflicting
 components. Applying any batch remains impossible until a System Manager makes
 the separate, explicit decision to enable materialization.
+
+The component aggregate consists of 3,516 two-record/one-recommendation
+components and four three-record/three-recommendation components. The numeric
+difference `3,528 - 3,520 = 8` is therefore eight extra pair edges above one
+edge per component, not eight omitted CCD records.
