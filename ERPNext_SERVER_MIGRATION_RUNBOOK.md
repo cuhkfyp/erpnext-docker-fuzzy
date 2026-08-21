@@ -6,11 +6,11 @@
 | --- | --- |
 | Purpose | Move the guarded CCD matching and identity-resolution setup to another ERPNext server |
 | Runbook date | 2026-08-21 UTC |
-| Implementation code checkpoint | Git commit `a0ae535` or a reviewed successor |
+| Implementation code checkpoint | Git commit `903688b` or a reviewed successor |
 | Source site at writing | `frontend` |
 | Source framework baseline | Frappe 15.73.0 / ERPNext 15.70.0 |
 | Required activation state during transfer | Live materialization disabled |
-| Includes | Feature-only installation, full-site transfer, validation, cutover, rollback, and new-centre guidance |
+| Includes | Feature-only installation, full-site transfer, complete matching-evidence rebuild, validation, cutover, rollback, and new-centre guidance |
 | Does not authorize | Identity activation, destructive CCD merge, or deletion of audit history |
 
 This runbook is the authoritative portability guide for the identity-resolution
@@ -362,6 +362,236 @@ Do not reuse the source canary on different data. On the target:
 7. run zero-write preview; and
 8. seek separate activation authorization.
 
+The following sections provide the complete procedure. Tiered Gated does not
+have a statistical training step. It applies the frozen deterministic policy
+and safety gates when the canary is generated. Splink fitting is automatic
+inside the Threshold Evaluation and optional Review Queue jobs; there is no
+portable model file or separate `train-splink` command.
+
+### 7.5 Decide whether to preserve or rebuild matching evidence
+
+| Transfer condition | Required action |
+| --- | --- |
+| Exact full-site restore with the same database, files, app revisions, policy, and CCD population | Preserve the restored evaluations, labels, canary, recommendations, and optional Review Queue; verify them rather than retraining merely because the host changed |
+| Feature-only installation into a site with its own CCD population | Build all policy/evaluation/canary evidence on the target; do not import source-site matching rows |
+| New centre, material population import, source mapping change, normalization/comparator change, Splink adapter change, or policy change | Create a new Draft policy/snapshot and repeat evaluation, validation, approval, canary, and any optional Review Queue |
+| Existing frozen canary whose CCD records changed after its snapshot | Treat it as stale; generate a new governed canary instead of editing the old snapshot |
+
+A server move by itself does not improve or invalidate the statistical model.
+The deciding factor is whether the governed data, code, model definitions, and
+policy snapshot remain identical.
+
+### 7.6 Install roles, settings, dependencies, and a Draft policy
+
+Before creating evidence, confirm that every web and worker runtime imports the
+pinned dependencies and the long queue is healthy. The important frozen
+implementation values at this checkpoint are:
+
+| Setting | Checkpoint value | Meaning |
+| --- | --- | --- |
+| Policy version | `pilot-1.6` | Current approved deterministic policy code/configuration |
+| Splink adapter | `pilot-splink-1.1` | Comparison definitions and fitting implementation |
+| Maximum Splink training records | 5,000 | Bounded fitting cohort, not the scored population |
+| Review scoring batch | 20,000 requested pairs | Bounded DuckDB scoring batch |
+| Random-match prior | 0.0001 | Splink prior frozen by the adapter |
+| Current Review cutoff | `0.938995074` | Review-priority cutoff for the approved snapshot only; never an automatic Same threshold |
+| Materialization | Off | Must remain off throughout evidence generation and review |
+| Automation paused | Normally 0 | Zero means the QC circuit breaker has not tripped |
+
+Create the roles and default Draft policy idempotently when this is a fresh
+feature installation:
+
+```bash
+cd /home/frappe/frappe-bench
+bench --site <target-site> execute db_connector.api_fuzzy_evaluation.install_matching_roles
+bench --site <target-site> execute db_connector.api_fuzzy_evaluation.install_default_pilot_policy
+```
+
+The required human roles are:
+
+- `System Manager` for policy management, approvals, canary/batch creation,
+  materialization settings, Apply, and adjudication;
+- `CCD Match Reviewer` for masked pair/QC review; and
+- `CCD Match Sensitive Reviewer` when full permitted evidence and CCD links are
+  operationally required.
+
+`Administrator` normally resolves to System Manager, but a custom role named
+`Sys Admin` is not accepted by these APIs unless that user also has the exact
+`System Manager` role.
+
+In **CCD Identity Resolution Settings**, keep:
+
+```text
+Live Identity Materialization Enabled = off
+New Automatic Materialization Paused  = off, unless an investigation requires pause
+```
+
+The pilot-wave, holdout, QC cadence, QC window, SLA, and review-batch fields are
+workflow defaults. They do not train either model and do not automatically
+select or assign records.
+
+### 7.7 Import and govern CCD source mappings
+
+Open the Draft **CCD Matching Policy** and use **Import Registration Mappings**,
+or call the manager-protected method:
+
+```bash
+bench --site <target-site> execute db_connector.api_fuzzy_evaluation.sync_policy_source_profiles \
+  --kwargs '{"policy_name":"<draft-policy>"}'
+```
+
+This replaces the Draft policy's source-profile child rows using the live
+`CCD Registration.fieldmatch` mappings for sources present in `CCD Master`.
+Review rather than merely accepting the import:
+
+1. every governed `ccd_reg_source` has an existing CCD Registration;
+2. canonical name, phone, email, birthday, HKSR number, and HKID mappings point
+   to the intended CCD Master fields;
+3. fields absent from a source are disabled rather than guessed;
+4. identifier scope is explicitly governed;
+5. only complete, check-digit-valid HKID values can use the current global-ID
+   path; and
+6. no operational/non-identity field has accidentally entered the policy.
+
+Source mappings can be synchronized only while the policy is Draft. If the
+population or mappings changed after promotion, create a new version instead
+of mutating the already evaluated Pilot policy.
+
+### 7.8 Run, review, and approve the required evaluations
+
+Two approved evaluation purposes with the exact same policy snapshot are
+mandatory before a canary can start.
+
+#### A. Threshold Evaluation — Splink calibration and held-out validation
+
+Start a representative run from **CCD Matching Policy → Start Shadow
+Evaluation**, normally with sample size 500 and double-review count 100, or:
+
+```bash
+bench --site <target-site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
+  --kwargs '{"policy_name":"<draft-policy>","sample_size":500,"double_review_count":100}'
+```
+
+The long-queue job profiles the frozen governed population, generates candidate
+pairs, selects the evaluation sample, fits Splink on a deterministic bounded
+cohort of at most 5,000 records, and scores the sample. Fitting estimates the
+Splink m/u probabilities and term frequencies; it does not create Identity
+Groups or modify legacy matching fields.
+
+Review every non-stale evaluation pair as Same, Different, or Unsure. Same
+requires two distinct reviewers. Random double-review cases require their
+independent reviews, and disagreements/Unsure require System Manager
+adjudication. Then:
+
+1. click **Finalize Evaluation**;
+2. inspect calibration and held-out metrics, warnings, source-pair coverage,
+   candidate truncation, skipped blocks, and adapter version; and
+3. record **Management Decision → Approved** only if the evidence is accepted.
+
+The current approved Splink result supplies a Review-priority cutoff only. It
+did not validate a probabilistic automatic High threshold.
+
+#### B. High Tier Validation — deterministic Tiered Gated precision
+
+Start a fresh High-only validation sample:
+
+```bash
+bench --site <target-site> execute db_connector.api_fuzzy_evaluation.install_high_tier_validation_run \
+  --kwargs '{"policy_name":"<draft-policy>","sample_size":100}'
+```
+
+Every sampled pair is independently double-reviewed. Finalize and approve only
+after the High precision target and minimum sample safeguards pass. At the
+current checkpoint, 100/100 reviewed High pairs were Same, giving a Wilson 95%
+lower bound of 96.30%, above the configured 95% target. This is high confidence,
+not a guarantee that every future pair is correct.
+
+The separate Positive Benchmark is optional diagnostic evidence for blocking
+recall and is not a canary prerequisite:
+
+```bash
+bench --site <target-site> execute db_connector.api_fuzzy_evaluation.install_positive_benchmark_run \
+  --kwargs '{"policy_name":"<draft-policy>","sample_size":100,"double_review_count":20}'
+```
+
+### 7.9 Promote the policy and generate Tiered Evidence
+
+Only after both required evaluation runs are Completed and Approved against
+the unchanged policy snapshot, promote the Draft policy in Desk with **Promote
+to Pilot**, or use the bench-only deployment helper:
+
+```bash
+bench --site <target-site> execute db_connector.api_fuzzy_canary.install_promote_policy_to_pilot \
+  --kwargs '{"policy_name":"<draft-policy>"}'
+```
+
+Start the recommendation canary from **CCD Matching Policy → Start
+Recommendation Canary**, or:
+
+```bash
+bench --site <target-site> execute db_connector.api_fuzzy_canary.install_canary_run \
+  --kwargs '{"policy_name":"<pilot-policy>"}'
+```
+
+The long-queue job freezes the CCD population, regenerates the complete
+governed candidate set, evaluates Tiered Gated evidence, applies source
+coverage/staleness/one-to-many/transitive/cluster-safety gates, and writes only:
+
+- `Proposed` Tiered recommendations for safe High components;
+- `Exception` recommendations and component-review work for blocked High
+  components; and
+- the random Tiered QC cohort.
+
+It does not create Identity Decisions, Groups, Memberships, Exclusions, change
+`CCD Master`, set `Is Matched?`, or write the legacy Matching Score table.
+Before proceeding, the canary must be Ready and its record/candidate counts,
+skipped/truncated blocks, policy hash, Proposed/Exception distribution, and QC
+sample must be understood.
+
+### 7.10 Generate the optional Splink Review Pool
+
+Splink is optional human-review prioritization; it is not part of Tiered
+activation. From a Ready/Active canary, use **Create Splink Review Queue**, or:
+
+```bash
+bench --site <target-site> execute db_connector.api_fuzzy_review_queue.install_review_queue \
+  --kwargs '{"canary_name":"<canary-run>"}'
+```
+
+This job does not reuse a portable binary model. It verifies the approved
+Threshold Evaluation and adapter, reproduces the frozen canary population and
+candidate count, reconstructs the bounded fitting cohort, fits Splink, excludes
+Tiered High and previously human-used pairs, scores every remaining governed
+pair in 20,000-pair batches, and stores only pairs at or above the approved
+Review cutoff. Any stale record, missing endpoint, changed candidate count,
+truncated/skipped block, adapter mismatch, or missing/duplicate score fails the
+whole run closed.
+
+The resulting `CCD Match Review Candidate` rows are an optional ranked pool.
+Creating the pool assigns no reviewer work and creates no identity links.
+Review assignments should be bounded by capacity; Same still requires two
+distinct reviewers and disagreement/Unsure requires adjudication.
+
+### 7.11 Evidence-rebuild acceptance record
+
+Record the following in the target migration evidence package:
+
+- policy name/version and policy snapshot SHA-256;
+- source-profile count and any skipped/unmapped CCD Registrations;
+- Threshold Evaluation name, snapshot, labels, approval, Splink adapter,
+  training-record count, calibration/held-out metrics, and Review cutoff;
+- High Tier Validation name, sample result, Wilson interval, and approval;
+- optional Positive Benchmark result;
+- canary name, record/candidate counts, Proposed/Exception/component/QC counts,
+  skipped/truncated-block result, and snapshot time;
+- optional Splink Review Queue name, eligible/scored/stored counts and cutoff;
+- proof that materialization remained off throughout; and
+- the exact component and complete private-app revisions.
+
+Never copy the current numeric checkpoint counts or cutoff into a new data
+population as if they were configuration constants. The target must produce and
+approve its own values whenever the evidence is rebuilt.
+
 ## 8. Mode C — this managed Docker layout
 
 The checked-in `deployment/deploy_db_connector.sh` is suitable only when its
@@ -499,14 +729,17 @@ whole-site rollback.
 Successful migration does not authorize activation. The separate sequence is:
 
 1. verify the migrated site with materialization off;
-2. take a fresh full backup;
+2. run Preview Approve All and understand every unsafe/stale conflict;
 3. select complete components for a bounded pilot and any deliberate holdout;
-4. enable `materialization_enabled` as a System Manager;
-5. create and inspect the frozen Activation Batch;
-6. approve it;
-7. apply it, which reruns all safety checks and creates reversible objects;
-8. verify groups, memberships, events, masking, idempotency, and QC; and
-9. disable materialization or stop further waves until the pilot is accepted.
+4. create and inspect the frozen Activation Batch while materialization is off;
+5. approve the frozen batch, which still creates no identity links;
+6. take a fresh full backup immediately before the write window;
+7. enable `materialization_enabled` as a System Manager;
+8. apply it, which reruns all safety checks and creates reversible objects;
+9. disable materialization immediately after Apply unless another authorized
+   operation explicitly requires it; and
+10. verify groups, memberships, events, masking, idempotency, and QC before any
+    wider wave.
 
 Enabling the global switch enables both approved Tiered batch application and
 materialization of newly finalized human Same/Different/component decisions.
@@ -550,6 +783,58 @@ policy/snapshot, component items, and zero unsafe/stale conflicts before using
 **Approve Batch**. Approval is a separate recorded action and still creates no
 Membership. Only **Apply Approved Batch** writes identity objects.
 
+### 11.3 Development-server flow rehearsal
+
+A development rehearsal may use five complete two-record Tiered Proposed
+components from any governed source when its purpose is to learn and demonstrate
+the workflow rather than estimate production impact.
+
+A formal holdout is optional for this rehearsal. The concepts are distinct:
+
+- **pilot wave** — the 5–10 components that will be activated; and
+- **deliberate holdout** — a separately identified comparable component set
+  intentionally not activated so outcomes can later be compared.
+
+Everything outside a five-component pilot remains unactivated backlog, but it
+is not a controlled holdout unless it was explicitly selected and recorded for
+comparison. For a first functional development test, use five pilot components
+and no deliberate holdout.
+
+On the Ready canary form, choose **Identity Rollout → Create Pilot Wave** and
+enter `5` under **Complete components**. The current Desk dialog does not accept
+CCD record IDs. With no explicit component keys supplied, the server selects
+the first five available complete components in deterministic component-
+fingerprint order and freezes them as Activation Batch items. If a specific
+component must be excluded, open one of its Proposed recommendations and use
+**Hold Complete Component for Later/Demo** before batch creation. The hold
+applies to the entire component.
+
+Do not check **Synthetic demonstration batch only** for real development CCD
+records. That flag marks the resulting audit events as demonstration events; it
+does not turn Apply into a dry run. Preview is the zero-write operation.
+
+Administrator may perform the System Manager steps if its resolved roles
+include the exact `System Manager` role. The existing `CCD Match Reviewer` and
+`CCD Match Sensitive Reviewer` users can continue performing Tiered QC. A
+single Administrator account cannot provide two independent Same confirmations:
+two different user accounts must submit the ordinary QC labels, while a System
+Manager handles adjudication when required.
+
+If the development site has no active imports, canary/evaluation jobs, or human
+finalization, a special maintenance window is unnecessary. During the few
+minutes in which materialization is enabled, avoid:
+
+- changing the selected CCD Master records;
+- starting a new evaluation, canary, Splink queue, or bulk import; and
+- finalizing unrelated human Same/Different/component decisions, because the
+  materialization switch is global.
+
+A verified nightly off-host backup is acceptable for a low-risk development
+rehearsal if the team accepts losing changes made since that backup. A fresh
+pre-Apply backup is still preferred because it provides an exact rollback
+point. Remote backup storage satisfies the independence requirement; verify
+that the backup completed, is non-empty, and has a practiced restore procedure.
+
 ## 12. Sign-off checklist
 
 Before declaring transfer complete, record:
@@ -576,6 +861,7 @@ Before declaring transfer complete, record:
 | --- | --- |
 | Current verified deployment boundary | `IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md` |
 | Workflow/data model/safety rules | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
+| Tiered/Splink algorithms, training, calibration, queue, and safeguards | `CCD_TIERED_EVIDENCE_AND_SPLINK_TECHNICAL_GUIDE.md` |
 | Other-server transfer | `ERPNext_SERVER_MIGRATION_RUNBOOK.md` |
 | Current-host Docker deployment | `deployment/deploy_db_connector.sh` |
 | Idempotent schema/custom-field setup | `identity_resolution_setup.py` |
