@@ -208,7 +208,7 @@ def reverse_applied_splink_same(
                 }
             frappe.throw("The Review Candidate has an incomplete reversal record")
 
-        context = _splink_same_reversal_context(candidate_name, lock=False)
+        context = _splink_same_reversal_context(candidate_name)
         decision = context["decision"]
         group = context["group"]
         memberships = context["memberships"]
@@ -218,7 +218,7 @@ def reverse_applied_splink_same(
         _lock_named_rows(GROUP_DOCTYPE, [group.name])
         _lock_named_rows(MEMBERSHIP_DOCTYPE, [row.name for row in memberships])
         # Re-read after all relevant locks and re-run every eligibility check.
-        context = _splink_same_reversal_context(candidate_name, lock=False)
+        context = _splink_same_reversal_context(candidate_name)
         decision = context["decision"]
         group = context["group"]
         memberships = context["memberships"]
