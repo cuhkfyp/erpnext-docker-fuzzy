@@ -10,7 +10,7 @@
   {"fieldname": "review_component", "fieldtype": "Button", "in_list_view": 1, "label": "Review Pair(s)"},
   {"fieldname": "recommendation_count", "fieldtype": "Int", "in_list_view": 1, "label": "Recommendations", "read_only": 1},
   {"fieldname": "record_count", "fieldtype": "Int", "in_list_view": 1, "label": "Records", "read_only": 1},
-  {"default": "Planned", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Planned\nApplied\nStale\nException\nAlready Applied\nFailed", "read_only": 1},
+  {"default": "Planned", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Planned\nApplied\nStale\nException\nAlready Applied\nFailed\nCorrected", "read_only": 1},
   {"fieldname": "recommendation_names_json", "fieldtype": "Code", "hidden": 1, "label": "Recommendation Names", "options": "JSON", "permlevel": 1, "read_only": 1},
   {"fieldname": "planned_group_key", "fieldtype": "Data", "hidden": 1, "label": "Planned Group Key", "read_only": 1},
   {"fieldname": "identity_decision", "fieldtype": "Link", "label": "Identity Decision", "options": "CCD Identity Decision", "read_only": 1},

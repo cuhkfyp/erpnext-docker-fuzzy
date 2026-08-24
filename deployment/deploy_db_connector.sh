@@ -84,6 +84,7 @@ for container in "${containers[@]}"; do
 			db_connector/api_fuzzy_review_queue.py \
 			db_connector/api_fuzzy_splink_experiment.py \
 			db_connector/api_identity_activation.py \
+			db_connector/api_identity_correction.py \
 			db_connector/api_identity_human.py \
 			db_connector/api_identity_qc.py \
 			db_connector/api_identity_resolution.py \
@@ -97,6 +98,7 @@ for container in "${containers[@]}"; do
 			db_connector/fuzzy_matching \
 			db_connector/db_connector \
 			db_connector/public \
+			db_connector/tests \
 			db_connector/deployment; do
 			docker cp "$PERSISTENT_APP/$relative" "$container:$APP_IN_CONTAINER/$(dirname "$relative")/"
 		done

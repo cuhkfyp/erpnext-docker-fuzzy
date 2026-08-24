@@ -627,8 +627,14 @@ API directly.
 
 ### Incorrect partition
 
-Create a new versioned partition and new/updated groups, end superseded
-Memberships, and preserve the old Decision and events.
+The implemented complete-component correction creates a new versioned
+partition, new Groups/Memberships and cross-partition exclusions; ends every
+affected current Membership/Group; supersedes affected Decisions/Exclusions;
+and preserves all original source decisions, recommendations, reviews and
+events. It supports applied Tiered Evidence, Component Review, Splink, and a
+prior Governance Override through one System-Manager-only, 2–25-record,
+lock-protected transaction. Its zero-write preview freezes the expanded live
+scope and its replacement partition before Apply.
 
 ### New canary
 

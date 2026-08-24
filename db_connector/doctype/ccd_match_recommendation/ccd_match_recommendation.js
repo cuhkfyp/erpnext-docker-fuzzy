@@ -3,6 +3,20 @@ frappe.ui.form.on("CCD Match Recommendation", {
 		if (frm.is_new()) return;
 		load_recommendation_evidence(frm);
 		if (!frappe.user.has_role("System Manager")) return;
+		if (
+			frm.doc.identity_decision &&
+			frm.doc.rollout_state === "Applied" &&
+			frm.doc.status === "Approved"
+		) {
+			frm.add_custom_button(
+				__("Correct Complete Identity Component"),
+				() => window.db_connector_identity_correction.open(
+					frm.doc.identity_decision,
+					() => frm.reload_doc(),
+				),
+				__("Identity Resolution"),
+			);
+		}
 		if (frm.doc.status === "Proposed" && !frm.doc.identity_decision) {
 			frm.add_custom_button(__("Withdraw Recommendation"), () => {
 				frappe.prompt(

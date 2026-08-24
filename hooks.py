@@ -16,6 +16,8 @@ doctype_list_js = {
     "CCD Match Review Candidate": "public/js/ccd_match_review_candidate_list.js",
 }
 
+app_include_js = "/assets/db_connector/js/identity_component_correction.js"
+
 doc_events = {
     "CCD Master": {
         "on_update": "db_connector.api_identity_resolution.handle_ccd_master_update",

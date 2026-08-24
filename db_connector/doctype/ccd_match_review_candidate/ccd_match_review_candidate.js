@@ -87,6 +87,20 @@ function load_candidate_evidence(frm) {
 					__("Identity Resolution"),
 				);
 			}
+			if (
+				(frappe.user_roles || []).includes("System Manager") &&
+				payload.materialization_status === "Applied" &&
+				payload.identity_decision
+			) {
+				frm.add_custom_button(
+					__("Correct Complete Identity Component"),
+					() => window.db_connector_identity_correction.open(
+						payload.identity_decision,
+						() => frm.reload_doc(),
+					),
+					__("Identity Resolution"),
+				);
+			}
 		},
 	});
 }

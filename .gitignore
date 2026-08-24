@@ -14,6 +14,7 @@
 !api_fuzzy_review_queue.py
 !api_fuzzy_splink_experiment.py
 !api_identity_activation.py
+!api_identity_correction.py
 !api_identity_human.py
 !api_identity_qc.py
 !api_identity_resolution.py
@@ -47,6 +48,7 @@ public/*
 !public/js/
 public/js/*
 !public/js/ccd_master_identity_resolution.js
+!public/js/identity_component_correction.js
 
 # Never track generated or sensitive runtime material.
 **/__pycache__/

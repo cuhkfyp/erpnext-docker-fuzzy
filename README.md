@@ -249,6 +249,16 @@ Each frozen component row includes source pair(s) and a protected **Review
 Pair(s)** dialog with permitted CCD Master links and the evidence needed to
 inspect the exact selected records before approval.
 
+If an applied Tiered, Component Review, Splink, or prior Governance Override
+decision is later found wrong, a System Manager can use **Correct Complete
+Identity Component** on the source or active Identity Decision. The 2–25-record
+workflow expands through complete live groups, accepts a replacement partition,
+requires a zero-write frozen preview and Materialization off, and atomically
+ends/supersedes the old relationship objects before creating an immutable
+`CCD Identity Correction` and replacement Decision. It never edits or merges a
+CCD Master document. The narrower two-record Splink false-Same shortcut remains
+available for its exact case.
+
 ## Optional Splink Review queue
 
 From a `Ready` or `Active` canary, a System Manager can press **Create Splink

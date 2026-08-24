@@ -738,7 +738,8 @@ PYTHONPATH=.:./db_connector \
 
 ### 9.2 Schema and security checks
 
-- every `CCD Identity *` and `CCD Match Review Batch*` DocType loads;
+- every `CCD Identity *` (including `CCD Identity Correction`) and `CCD Match
+  Review Batch*` DocType loads;
 - CCD Master contains the Identity Resolution tab/custom HTML field;
 - an enabled **CCD Master Identity Resolution** Client Script exists when CCD
   Master is custom, and its source contains `load_identity_resolution`;
@@ -746,8 +747,8 @@ PYTHONPATH=.:./db_connector \
 - `CCD Match Reviewer`, `CCD Match Sensitive Reviewer`, and System Manager
   permissions behave as designed;
 - ordinary reviewers cannot retrieve CCD record IDs through the identity view;
-- ordinary reviewers cannot see the applied-Same correction button and receive
-  `System Manager role is required` if they call either correction API directly;
+- ordinary reviewers cannot see either identity-correction action and receive
+  `System Manager role is required` if they call preview or Apply APIs directly;
 - Sensitive Reviewers/System Managers see only their permitted values; and
 - Identity Resolution Settings reports materialization disabled.
 
@@ -764,14 +765,15 @@ manifest. At the current checkpoint they are:
 | Exception component reviews | 191 |
 | Splink Review Pool | 11,177 |
 | Splink work assigned | 0 |
-| Identity Decisions | 20 |
-| Active Identity Groups | 20 |
-| Active Identity Memberships | 46 |
-| Active Identity Exclusions | 7 |
+| Identity Decisions | 22 total (21 active / 1 superseded) |
+| Identity Groups | 21 total (20 active / 1 ended) |
+| Identity Memberships | 48 total (46 active / 2 ended) |
+| Active Identity Exclusions | 8 |
 | Applied Activation batches | 3 (9 complete Tiered components) |
 | Finalized/Applied Component Reviews | 7 |
 | Applied Splink candidates | 4 |
-| Reversed Splink candidates | 0 |
+| Reversed Splink candidates | 1 |
+| Complete identity corrections | 0 |
 | Human Review batches | 0 |
 
 These are checkpoint values, not permanent constants. If migration occurs after
@@ -906,6 +908,52 @@ Apply also requires Materialization to remain off, a non-empty reason, exact-ID
 confirmation, record and identity-row locks, and the complete eligibility check
 inside one transaction. The original human labels and all old identity objects
 remain as audit history.
+
+For every broader case—including an applied Tiered Evidence High component, an
+applied Exception Component Review, a Splink `Different` decision that must
+become Same, a multi-record partition, or an identity group extended by later
+decisions—use **Identity Resolution → Correct Complete Identity Component**.
+The action is available to System Managers on an active **CCD Identity
+Decision**, an applied **CCD Match Recommendation**, an applied **CCD Match
+Component Review**, and an applied **CCD Match Review Candidate**.
+
+The complete-component procedure is:
+
+1. Disable **Materialization**. The preview remains available while enabled,
+   but Apply fails closed.
+2. Open one affected source or its active Identity Decision and choose
+   **Correct Complete Identity Component**.
+3. Inspect the automatically expanded scope. Expansion follows every current
+   Same Group containing a participant; therefore an existing group can never
+   be partly corrected. The bounded workflow accepts 2–25 CCD records.
+4. Assign each CCD record to **Separate** or to a replacement `Group 1`–`Group
+   25`. Records sharing a group label are asserted Same; every cross-group pair
+   becomes a fingerprint-scoped Different exclusion.
+5. Run **Preview Replacement**. It is zero-write and freezes the complete record,
+   Membership, Group, Exclusion, Decision, identity-fingerprint, and source
+   `modified` state. Inspect the exact counts to end, supersede, and create.
+6. Resolve or explicitly accept any displayed complete-HKID, same-source, or
+   revalidation warning. Acceptance is separately required in both browser and
+   server validation; it is recorded on the correction.
+7. Enter a mandatory evidence-based reason, use the demonstration flag only on
+   a development rehearsal, type the exact source Identity Decision ID, and
+   apply.
+8. Verify the new immutable **CCD Identity Correction** record and replacement
+   Governance Override Decision. Prior Memberships/Groups are Ended, applicable
+   exclusions and Decisions are Superseded, and the original recommendations
+   and human submissions remain as history. Tiered recommendations/items show
+   `Superseded`/`Corrected`; Component Reviews show `Corrected`; corrected
+   Splink sources show `Reversed`.
+9. Open every participating CCD Master. Confirm the replacement Linked or
+   Resolved Separately view and confirm that no CCD Master was deleted, merged,
+   or overwritten.
+
+Apply re-expands and locks the complete scope, compares it with the frozen
+preview fingerprint, and reruns the preview while locked. Any concurrent source
+or relationship change aborts the entire transaction. A deterministic
+correction key makes an exact retry idempotent. Correction history can itself
+be superseded by opening its active replacement Decision and applying a newer
+complete correction; history is never deleted.
 
 ## 11. Activation after migration
 

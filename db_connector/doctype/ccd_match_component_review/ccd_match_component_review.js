@@ -39,6 +39,7 @@ function render_component(frm, payload) {
 	const materialization = payload.materialization_status && payload.materialization_status !== "Not Final"
 		? `<div class="alert alert-secondary"><b>${__("Identity materialization")}</b>: ${component_esc(payload.materialization_status)}` +
 			`${payload.identity_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(payload.identity_decision)}">${__("open decision")}</a>` : ""}` +
+			`${payload.correction_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(payload.correction_decision)}">${__("open correction")}</a>` : ""}` +
 			`${payload.materialization_error ? `<br>${component_esc(payload.materialization_error)}` : ""}</div>`
 		: "";
 	frm.fields_dict.evidence_html.$wrapper.html(
@@ -67,6 +68,20 @@ function load_component_evidence(frm) {
 					freeze: true,
 					callback: () => frm.reload_doc(),
 				}), __("Identity Resolution"));
+			}
+			if (
+				(frappe.user_roles || []).includes("System Manager") &&
+				payload.materialization_status === "Applied" &&
+				payload.identity_decision
+			) {
+				frm.add_custom_button(
+					__("Correct Complete Identity Component"),
+					() => window.db_connector_identity_correction.open(
+						payload.identity_decision,
+						() => frm.reload_doc(),
+					),
+					__("Identity Resolution"),
+				);
 			}
 		},
 	});

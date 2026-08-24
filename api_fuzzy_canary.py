@@ -959,6 +959,7 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
         "final_groups": final_groups,
         "materialization_status": review.materialization_status or "Not Final",
         "identity_decision": review.identity_decision or "",
+        "correction_decision": review.correction_decision or "",
         "materialization_error": review.materialization_error or "",
         "records": records,
         "attributes": list(policy.attributes()),

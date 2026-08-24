@@ -11,7 +11,7 @@
 | Deployment | Schema, services, controllers, managed CCD Master Client Script, and frontend assets deployed |
 | Materialization | Disabled by default (`materialization_enabled = 0`) |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
-| Live identity writes | Development testing applied: 20 Decisions, 20 active Groups, 46 active Memberships, and 7 active Exclusions |
+| Live identity writes | Development testing: 22 Decisions (21 active / 1 superseded), 21 Groups (20 active / 1 ended), 48 Memberships (46 active / 2 ended), and 8 active Exclusions |
 
 The predecessor session completed the workflow specification and pushed it at
 commit `cfef788`. This fresh session recovered that durable artifact, audited
@@ -75,6 +75,14 @@ CCD Master source documents.
   exact candidate-ID confirmation, then atomically ends the two Memberships and
   Group, creates a fingerprint-scoped Different decision/exclusion, supersedes
   the old Same Decision, and preserves the original reviews and audit history.
+- A general System-Manager-only **Complete Identity Component Correction** for
+  applied Tiered Evidence, Component Review, Splink, and earlier Governance
+  Override decisions. It expands through every affected live group, freezes a
+  2–25-record scope, accepts an exact replacement partition, produces a
+  zero-write preview, requires Materialization off/reason/exact-ID confirmation,
+  and atomically ends or supersedes all affected relationship objects before
+  creating the versioned replacement. Each application creates an immutable
+  `CCD Identity Correction`; no CCD Master record is edited or merged.
 - An idempotently managed **CCD Master Identity Resolution** Form Client Script
   for the current custom CCD Master DocType. Frappe skips `doctype_js` hooks for
   custom DocTypes, so checking the form metadata is a mandatory deployment
@@ -89,7 +97,7 @@ CCD Master source documents.
 
 - All new and modified DocType JSON files parse successfully.
 - Python compilation succeeds.
-- The complete in-container test suite passes: 66 tests, 0 failures.
+- The complete in-container test suite passes: 69 tests, 0 failures.
 - Frappe migration, role/policy setup, workflow installation, asset build,
   cache clear, and service restart completed.
 - The frontend-local public renderer is served with HTTP 200, and live CCD
@@ -111,7 +119,24 @@ CCD Master source documents.
   A real non-manager Reviewer received `System Manager role is required` from
   the preview API; that same reviewer's evidence payload reported
   `can_reverse_materialization = false` and omitted the manager-only correction
-  Decision field. No candidate was reversed during deployment verification.
+  Decision field. A later authorized development exercise successfully reversed
+  one candidate; its old Group/two Memberships and Same Decision remain as
+  ended/superseded history and its replacement Different exclusion is active.
+- The complete-component correction schema, manager UI, and three server APIs
+  are deployed. Zero-write live previews succeeded for Tiered decision
+  `0t7kj3mkhn` (`Same → Different`, two records) and Component Review decision
+  `vknlnno1mu` (`All Same → Partial`, three records). A same-source replacement
+  raised the explicit governance-warning confirmation, and a real non-manager
+  reviewer received `System Manager role is required`. These previews created
+  zero `CCD Identity Correction` records and changed no identity relationships.
+- The full Apply lifecycle was then exercised for both those Tiered and
+  Component Review replacements with commit temporarily disabled inside an
+  isolated development transaction. Tiered produced the expected Different
+  result (1 Group / 2 Memberships ended; 1 exclusion planned); Component Review
+  produced the expected Partial result (1 Group / 3 Memberships ended; 1 new
+  Group / 2 Memberships / 2 exclusions planned). Each transaction was explicitly
+  rolled back; temporary correction/decision names do not exist, both original
+  Decisions and Groups remain Active, and the Event count remains 96.
 - Splink candidate `ed9e2a25c4` is now `Applied`. This bulk-workflow deployment
   performed no identity writes. The remaining finalized candidate `8ac22119c8`
   passes the new zero-write bulk preview with two frozen fingerprints, two
@@ -134,14 +159,15 @@ CCD Master source documents.
 | Splink candidates available | 11,177 |
 | Splink candidates assigned | 0 |
 | Component reviews | 191 |
-| Identity decisions | 20 active |
-| Identity groups | 20 active |
-| Identity memberships | 46 active |
-| Identity exclusions/events | 7 active exclusions / 86 events |
+| Identity decisions | 22 total (21 active / 1 superseded) |
+| Identity groups | 21 total (20 active / 1 ended) |
+| Identity memberships | 48 total (46 active / 2 ended) |
+| Identity exclusions/events | 8 active exclusions / 96 events |
+| Complete identity corrections | 0 (previews only) |
 | Activation batches | 3 (`Applied`; 9 complete Tiered components total) |
 | Finalized Component Reviews | 7 (`Agreed` / `Applied`) |
 | Applied Splink candidates | 4 |
-| Reversed Splink candidates | 0 |
+| Reversed Splink candidates | 1 |
 | Review batches | 0 |
 | QC investigations | 0 |
 
@@ -177,8 +203,8 @@ Before any further activation:
 
 1. complete browser acceptance for Linked, Resolved Separately, and Not Grouped
    CCD Master records;
-2. verify the twenty Groups, forty-six Memberships, seven Exclusions,
-   eighty-six Events,
+2. verify the twenty active Groups, forty-six active Memberships, eight active
+   Exclusions, ninety-six Events,
    masking, QC assignments, idempotent re-Apply behavior, and correction path;
 3. demonstrate the bounded pilot and obtain explicit management authorization;
 4. create and inspect a new component-atomic batch for the authorized scope;
