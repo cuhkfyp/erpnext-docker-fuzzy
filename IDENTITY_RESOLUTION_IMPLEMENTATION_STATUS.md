@@ -11,7 +11,7 @@
 | Deployment | Schema, services, controllers, managed CCD Master Client Script, and frontend assets deployed |
 | Materialization | Disabled by default (`materialization_enabled = 0`) |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
-| Live identity writes | Two development waves applied: 8 Decisions, 8 active Groups, 17 active Memberships, and 5 active Exclusions |
+| Live identity writes | Development testing applied: 10 Decisions, 10 active Groups, 23 active Memberships, and 7 active Exclusions |
 
 The predecessor session completed the workflow specification and pushed it at
 commit `cfef788`. This fresh session recovered that durable artifact, audited
@@ -19,8 +19,8 @@ the application and live data, implemented the specification, deployed it in a
 default-off state, and verified the result. It did not depend on reconstructing
 the predecessor's compacted conversational reasoning.
 
-On 2026-08-24, an explicitly approved five-component development pilot and a
-second bounded test wave were applied after verified backup checkpoints.
+On 2026-08-24, explicitly bounded Tiered and human-component development waves
+were applied after verified backup checkpoints.
 Materialization was turned off again immediately afterward. The waves created
 reversible identity objects only; they did not merge or modify the participating
 CCD Master source documents.
@@ -37,6 +37,13 @@ CCD Master source documents.
   Evidence, Splink human review, and exception-component decisions.
 - Fresh fingerprint, complete-HKID conflict, stale-input, exclusion, and
   component-partition gates before writes.
+- Complete frozen-snapshot enforcement: every governed materialization now
+  requires both the frozen identity fingerprint and frozen `modified` value for
+  every participant, and rechecks both after acquiring record locks.
+- A timestamp-guarded legacy repair backfilled all 15,138 August-13 snapshot
+  rows (3,961 Tiered recommendations and 11,177 Splink candidates) using their
+  verified frozen `pilot-1.6` policy. No stale, corrupt, or inconsistent row was
+  accepted, and the repair is idempotent.
 - Component-atomic activation batches with zero-write preview, explicit
   review/approval/application, deliberate hold, and release.
 - A protected **Review Pair(s)** action on every frozen Activation Batch item,
@@ -72,7 +79,7 @@ CCD Master source documents.
 
 - All new and modified DocType JSON files parse successfully.
 - Python compilation succeeds.
-- The complete in-container test suite passes: 63 tests, 0 failures.
+- The complete in-container test suite passes: 66 tests, 0 failures.
 - Frappe migration, role/policy setup, workflow installation, asset build,
   cache clear, and service restart completed.
 - The frontend-local public renderer is served with HTTP 200, and live CCD
@@ -88,6 +95,13 @@ CCD Master source documents.
 - The Component Review list hook and frontend asset are deployed. The bulk API
   rejects already-Applied rows without writing and reports the global switch as
   disabled.
+- Splink candidate `ed9e2a25c4` now passes the complete zero-write
+  materialization preview with two frozen fingerprints, two matching frozen
+  timestamps, zero conflicts, and two planned Memberships. Its immutable human
+  reviews and `Exception` outcome were not altered or retried.
+- Post-repair **Preview Approve All** covers 3,514 remaining complete Tiered
+  components / 3,522 recommendations with zero unsafe or stale components and
+  7,032 planned Memberships.
 
 ### Live read-only state
 
@@ -100,12 +114,13 @@ CCD Master source documents.
 | Splink candidates available | 11,177 |
 | Splink candidates assigned | 0 |
 | Component reviews | 191 |
-| Identity decisions | 8 |
-| Identity groups | 8 active |
-| Identity memberships | 17 active |
-| Identity exclusions/events | 5 active exclusions / 33 create-activate events |
+| Identity decisions | 10 |
+| Identity groups | 10 active |
+| Identity memberships | 23 active |
+| Identity exclusions/events | 7 active exclusions / 43 create-activate events |
 | Activation batches | 2 (`Applied`; 6 complete Tiered components total) |
-| Finalized Component Reviews | 2 (`Agreed` / `Applied`) |
+| Finalized Component Reviews | 4 (`Agreed` / `Applied`) |
+| Finalized Splink candidates | 2 (`1 Pending`, `1 Exception`; neither materialized) |
 | Review batches | 0 |
 | QC investigations | 0 |
 
@@ -141,8 +156,8 @@ Before any further activation:
 
 1. complete browser acceptance for Linked, Resolved Separately, and Not Grouped
    CCD Master records;
-2. verify the eight Groups, seventeen Memberships, five Exclusions,
-   thirty-three create/activate Events,
+2. verify the ten Groups, twenty-three Memberships, seven Exclusions,
+   forty-three create/activate Events,
    masking, QC assignments, idempotent re-Apply behavior, and correction path;
 3. demonstrate the bounded pilot and obtain explicit management authorization;
 4. create and inspect a new component-atomic batch for the authorized scope;

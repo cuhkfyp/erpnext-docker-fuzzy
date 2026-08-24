@@ -3,9 +3,11 @@ import unittest
 from fuzzy_matching.identity import (
     build_materialization_plan,
     complete_hkid_conflicts,
+    expected_identity_fingerprints,
     fingerprint_scoped_exclusion_conflicts,
     identity_fingerprint,
     normalize_partition,
+    snapshot_modified_conflicts,
     validate_component_atomic_selection,
 )
 from fuzzy_matching.policy import MatchingPolicy, SourceProfile
@@ -31,6 +33,27 @@ def policy():
 
 
 class IdentityFingerprintTests(unittest.TestCase):
+    def test_missing_frozen_fingerprint_is_not_the_text_none(self):
+        self.assertEqual(
+            expected_identity_fingerprints(
+                [("A", None), ("B", ""), ("C", "fp-c")]
+            ),
+            {"C": "fp-c"},
+        )
+
+    def test_conflicting_frozen_fingerprints_fail_closed(self):
+        with self.assertRaises(ValueError):
+            expected_identity_fingerprints([("A", "fp-1"), ("A", "fp-2")])
+
+    def test_snapshot_modified_conflicts_include_missing_and_changed_records(self):
+        self.assertEqual(
+            snapshot_modified_conflicts(
+                {"A": "2026-01-01", "B": "2026-01-02", "C": "2026-01-03"},
+                {"A": "2026-01-01", "B": "changed"},
+            ),
+            ("B", "C"),
+        )
+
     def test_administrative_change_does_not_change_fingerprint(self):
         first = {
             "source": "A",

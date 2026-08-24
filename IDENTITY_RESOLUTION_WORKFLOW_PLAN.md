@@ -305,16 +305,20 @@ components/partitions, not unrelated individual edges.
 
 Before writing a Decision, Group, Membership, or Exclusion it must:
 
-1. lock the relevant records, decisions and active memberships;
-2. recompute identity fingerprints from governed identity fields;
-3. reject or reroute stale input;
-4. re-evaluate complete valid HKID agreements/conflicts;
-5. verify the proposed partition is transitively consistent;
-6. verify that a record is not active in a conflicting Identity Group;
-7. preserve component atomicity;
-8. enforce decision-origin confirmation requirements;
-9. calculate an idempotency key; and
-10. append complete lifecycle events in the same transaction.
+1. require a complete frozen identity fingerprint and frozen source-modified
+  value for every governed participant;
+2. lock every participating CCD Master and recheck both frozen values inside the
+  materialization transaction;
+3. fail closed if snapshot metadata is missing, contradictory, or stale;
+4. lock the relevant decisions and active memberships;
+5. recompute identity fingerprints from governed identity fields;
+6. re-evaluate complete valid HKID agreements/conflicts;
+7. verify the proposed partition is transitively consistent;
+8. verify that a record is not active in a conflicting Identity Group;
+9. preserve component atomicity;
+10. enforce decision-origin confirmation requirements;
+11. calculate an idempotency key; and
+12. append complete lifecycle events in the same transaction.
 
 The identity fingerprint must cover identity-relevant fields such as governed
 name, complete identifier, birthday, phone and email evidence. A change to an

@@ -13,6 +13,7 @@ from db_connector.api_identity_resolution import (
     materialize_identity,
     preview_materialization,
 )
+from db_connector.fuzzy_matching.identity import expected_identity_fingerprints
 
 CANDIDATE_DOCTYPE = "CCD Match Review Candidate"
 QUEUE_RUN_DOCTYPE = "CCD Match Review Queue Run"
@@ -72,6 +73,37 @@ def _pending_if_disabled(doctype: str, name: str) -> bool:
     return True
 
 
+def _candidate_materialization_plan(candidate: Any) -> dict[str, Any]:
+    run = frappe.get_doc(QUEUE_RUN_DOCTYPE, candidate.queue_run)
+    record_ids = [str(candidate.left_record), str(candidate.right_record)]
+    expected = expected_identity_fingerprints(
+        (
+            (record_ids[0], candidate.left_identity_fingerprint),
+            (record_ids[1], candidate.right_identity_fingerprint),
+        )
+    )
+    expected_modified = {
+        record_ids[0]: str(candidate.left_modified_at or ""),
+        record_ids[1]: str(candidate.right_modified_at or ""),
+    }
+    return {
+        "run": run,
+        "record_ids": record_ids,
+        "groups": (
+            [record_ids]
+            if candidate.final_label == "Same"
+            else [[item] for item in record_ids]
+        ),
+        "exclusions": (
+            []
+            if candidate.final_label == "Same"
+            else [(record_ids[0], record_ids[1])]
+        ),
+        "expected_fingerprints": expected,
+        "expected_modified": expected_modified,
+    }
+
+
 def materialize_final_candidate_if_enabled(candidate_name: str) -> dict[str, Any]:
     candidate = frappe.get_doc(CANDIDATE_DOCTYPE, candidate_name)
     if candidate.review_status not in FINAL_REVIEW_STATUSES or candidate.final_label not in {"Same", "Different"}:
@@ -81,16 +113,9 @@ def materialize_final_candidate_if_enabled(candidate_name: str) -> dict[str, Any
         return {"status": "Stale"}
     if _pending_if_disabled(CANDIDATE_DOCTYPE, candidate.name):
         return {"status": "Pending"}
-    run = frappe.get_doc(QUEUE_RUN_DOCTYPE, candidate.queue_run)
-    record_ids = [str(candidate.left_record), str(candidate.right_record)]
-    expected = {
-        str(candidate.left_record): str(candidate.left_identity_fingerprint),
-        str(candidate.right_record): str(candidate.right_identity_fingerprint),
-    }
-    expected = {key: value for key, value in expected.items() if value}
-    groups = [record_ids] if candidate.final_label == "Same" else [[item] for item in record_ids]
-    exclusions = [] if candidate.final_label == "Same" else [(record_ids[0], record_ids[1])]
     try:
+        plan = _candidate_materialization_plan(candidate)
+        run = plan["run"]
         result = materialize_identity(
             origin="Splink Human Review",
             origin_doctype=CANDIDATE_DOCTYPE,
@@ -98,10 +123,11 @@ def materialize_final_candidate_if_enabled(candidate_name: str) -> dict[str, Any
             policy_snapshot_json=run.policy_snapshot_json,
             policy_snapshot_sha256=run.policy_snapshot_sha256,
             matching_policy=run.matching_policy,
-            record_ids=record_ids,
-            groups=groups,
-            exclusions=exclusions,
-            expected_fingerprints=expected or None,
+            record_ids=plan["record_ids"],
+            groups=plan["groups"],
+            exclusions=plan["exclusions"],
+            expected_fingerprints=plan["expected_fingerprints"] or None,
+            expected_modified=plan["expected_modified"],
             reason_codes=["human_confirmed_" + candidate.final_label.casefold()],
             review_context=_review_context(candidate.review_labels),
         )
@@ -121,6 +147,51 @@ def materialize_final_candidate_if_enabled(candidate_name: str) -> dict[str, Any
         groups=result.get("identity_groups") or [],
     )
     return result
+
+
+@frappe.whitelist()
+def preview_review_candidate_materialization(candidate_name: str) -> dict[str, Any]:
+    """Run the complete Splink human-decision safety preview without writes."""
+    _require_manager()
+    candidate = frappe.get_doc(CANDIDATE_DOCTYPE, candidate_name)
+    if (
+        candidate.review_status not in FINAL_REVIEW_STATUSES
+        or candidate.final_label not in {"Same", "Different"}
+    ):
+        frappe.throw("The Review Candidate is not finalized")
+    if candidate.stale:
+        frappe.throw("The Review Candidate is stale")
+    plan = _candidate_materialization_plan(candidate)
+    run = plan["run"]
+    preview = preview_materialization(
+        origin="Splink Human Review",
+        origin_doctype=CANDIDATE_DOCTYPE,
+        origin_document=candidate.name,
+        policy_snapshot_json=run.policy_snapshot_json,
+        record_ids=plan["record_ids"],
+        groups=plan["groups"],
+        exclusions=plan["exclusions"],
+        expected_fingerprints=plan["expected_fingerprints"] or None,
+        expected_modified=plan["expected_modified"],
+    )
+    return {
+        "candidate": candidate.name,
+        "review_status": candidate.review_status,
+        "final_label": candidate.final_label,
+        "materialization_status": candidate.materialization_status,
+        "zero_write": True,
+        "safe": preview["safe"],
+        "conflicts": preview["conflicts"],
+        "record_count": preview["record_count"],
+        "group_count": preview["group_count"],
+        "membership_count": preview["membership_count"],
+        "exclusion_count": preview["exclusion_count"],
+        "stale_record_count": preview["stale_record_count"],
+        "missing_fingerprint_record_count": preview[
+            "missing_fingerprint_record_count"
+        ],
+        "missing_modified_record_count": preview["missing_modified_record_count"],
+    }
 
 
 def _cross_group_exclusions(groups: tuple[tuple[str, ...], ...]) -> list[tuple[str, str]]:
@@ -146,7 +217,6 @@ def _component_materialization_plan(review: Any) -> dict[str, Any]:
         raise frappe.ValidationError("final_component_partition_missing")
 
     canary = frappe.get_doc(CANARY_DOCTYPE, review.canary_run)
-    expected: dict[str, str] = {}
     recommendation_rows = frappe.get_all(
         "CCD Match Recommendation",
         filters={
@@ -156,28 +226,44 @@ def _component_materialization_plan(review: Any) -> dict[str, Any]:
         fields=[
             "left_record",
             "right_record",
+            "left_modified_at",
+            "right_modified_at",
             "left_identity_fingerprint",
             "right_identity_fingerprint",
         ],
         limit_page_length=100_000,
     )
+    expected_modified: dict[str, str] = {}
+    fingerprint_values = []
     for row in recommendation_rows:
-        for record_id, fingerprint in (
-            (row.left_record, row.left_identity_fingerprint),
-            (row.right_record, row.right_identity_fingerprint),
+        for record_id, modified in (
+            (row.left_record, row.left_modified_at),
+            (row.right_record, row.right_modified_at),
         ):
-            if fingerprint:
-                prior = expected.setdefault(str(record_id), str(fingerprint))
-                if prior != str(fingerprint):
-                    raise frappe.ValidationError(
-                        "inconsistent_component_identity_fingerprints"
-                    )
+            key = str(record_id)
+            value = str(modified or "")
+            prior = expected_modified.setdefault(key, value)
+            if prior != value:
+                raise frappe.ValidationError(
+                    "inconsistent_component_modified_timestamps"
+                )
+        fingerprint_values.extend(
+            (
+                (str(row.left_record), row.left_identity_fingerprint),
+                (str(row.right_record), row.right_identity_fingerprint),
+            )
+        )
+    try:
+        expected = expected_identity_fingerprints(fingerprint_values)
+    except ValueError as exc:
+        raise frappe.ValidationError(str(exc))
     return {
         "canary": canary,
         "groups": groups,
         "record_ids": record_ids,
         "exclusions": _cross_group_exclusions(groups),
         "expected_fingerprints": expected,
+        "expected_modified": expected_modified,
     }
 
 
@@ -204,6 +290,7 @@ def materialize_final_component_if_enabled(review_name: str) -> dict[str, Any]:
             groups=plan["groups"],
             exclusions=plan["exclusions"],
             expected_fingerprints=plan["expected_fingerprints"] or None,
+            expected_modified=plan["expected_modified"],
             reason_codes=["human_component_" + review.final_decision.casefold().replace(" ", "_")],
             review_context={
                 "final_decision": review.final_decision,
@@ -292,6 +379,7 @@ def _preview_component_review(review_name: str) -> dict[str, Any]:
             groups=plan["groups"],
             exclusions=plan["exclusions"],
             expected_fingerprints=plan["expected_fingerprints"] or None,
+            expected_modified=plan["expected_modified"],
         )
         row.update(
             {

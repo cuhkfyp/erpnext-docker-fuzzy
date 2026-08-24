@@ -20,6 +20,7 @@ from db_connector.api_identity_resolution import (
     materialize_identity,
     preview_materialization,
 )
+from db_connector.fuzzy_matching.identity import expected_identity_fingerprints
 
 RUN_DOCTYPE = "CCD Match Canary Run"
 RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
@@ -146,20 +147,6 @@ def backfill_activation_item_source_pairs() -> dict[str, int]:
     return {"updated": updated, "skipped": skipped}
 
 
-def _record_modified_values(record_ids: Iterable[str]) -> dict[str, str]:
-    ids = tuple(sorted({str(item) for item in record_ids}))
-    output: dict[str, str] = {}
-    for index in range(0, len(ids), 500):
-        for row in frappe.get_all(
-            "CCD Master",
-            filters={"name": ["in", ids[index : index + 500]]},
-            fields=["name", "modified"],
-            limit_page_length=500,
-        ):
-            output[str(row.name)] = str(row.modified or "")
-    return output
-
-
 def _component_context(rows: list[Any]) -> dict[str, Any]:
     record_ids = sorted(
         {
@@ -169,14 +156,27 @@ def _component_context(rows: list[Any]) -> dict[str, Any]:
         }
     )
     expected_modified: dict[str, str] = {}
-    expected_fingerprints: dict[str, str] = {}
+    fingerprint_values = []
     for row in rows:
-        expected_modified[str(row.left_record)] = str(row.left_modified_at or "")
-        expected_modified[str(row.right_record)] = str(row.right_modified_at or "")
-        if row.left_identity_fingerprint:
-            expected_fingerprints[str(row.left_record)] = str(row.left_identity_fingerprint)
-        if row.right_identity_fingerprint:
-            expected_fingerprints[str(row.right_record)] = str(row.right_identity_fingerprint)
+        for record_id, modified in (
+            (row.left_record, row.left_modified_at),
+            (row.right_record, row.right_modified_at),
+        ):
+            key = str(record_id)
+            value = str(modified or "")
+            prior = expected_modified.setdefault(key, value)
+            if prior != value:
+                frappe.throw("A component has inconsistent frozen modified timestamps")
+        fingerprint_values.extend(
+            (
+                (str(row.left_record), row.left_identity_fingerprint),
+                (str(row.right_record), row.right_identity_fingerprint),
+            )
+        )
+    try:
+        expected_fingerprints = expected_identity_fingerprints(fingerprint_values)
+    except ValueError as exc:
+        frappe.throw(str(exc))
     return {
         "record_ids": record_ids,
         "expected_modified": expected_modified,
@@ -218,22 +218,11 @@ def _selected_components(
 
 
 def _preview_components(run: Any, selected: list[tuple[str, list[Any]]]) -> dict[str, Any]:
-    all_record_ids = {
-        str(item)
-        for _key, rows in selected
-        for row in rows
-        for item in (row.left_record, row.right_record)
-    }
-    current_modified = _record_modified_values(all_record_ids)
     conflict_counts: dict[str, int] = defaultdict(int)
     safe = stale = planned_memberships = 0
     component_summaries = []
     for component_key, rows in selected:
         context = _component_context(rows)
-        modified_stale = any(
-            current_modified.get(record_id, "") != expected
-            for record_id, expected in context["expected_modified"].items()
-        )
         preview = preview_materialization(
             origin="Tiered Evidence",
             origin_doctype=BATCH_DOCTYPE,
@@ -242,15 +231,15 @@ def _preview_components(run: Any, selected: list[tuple[str, list[Any]]]) -> dict
             record_ids=context["record_ids"],
             groups=[context["record_ids"]],
             expected_fingerprints=context["expected_fingerprints"] or None,
+            expected_modified=context["expected_modified"],
         )
         conflicts = set(preview["conflicts"])
-        if modified_stale:
-            conflicts.add("source_modified_after_canary_snapshot")
         for reason in conflicts:
             conflict_counts[reason] += 1
         if conflicts:
             stale += int(
                 "source_modified_after_canary_snapshot" in conflicts
+                or "source_modified_after_snapshot" in conflicts
                 or "identity_fingerprint_changed" in conflicts
             )
         else:
@@ -590,6 +579,7 @@ def apply_activation_batch(batch_name: str) -> dict[str, Any]:
                 record_ids=context["record_ids"],
                 groups=[context["record_ids"]],
                 expected_fingerprints=context["expected_fingerprints"] or None,
+                expected_modified=context["expected_modified"],
                 reason_codes=_reasons(rows),
                 review_context={
                     "activation_batch": batch.name,

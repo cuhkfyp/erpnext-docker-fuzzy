@@ -72,6 +72,40 @@ def identity_fingerprint(record: Mapping[str, Any], policy: MatchingPolicy) -> s
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def expected_identity_fingerprints(
+    values: Iterable[tuple[str, Any]],
+) -> dict[str, str]:
+    """Return only present frozen fingerprints and reject contradictory copies.
+
+    In particular, a database NULL must remain absent; converting it with
+    ``str(None)`` would create the bogus expected fingerprint ``"None"``.
+    """
+    output: dict[str, str] = {}
+    for record_id, raw_fingerprint in values:
+        fingerprint = str(raw_fingerprint or "").strip()
+        if not fingerprint:
+            continue
+        key = str(record_id)
+        prior = output.setdefault(key, fingerprint)
+        if prior != fingerprint:
+            raise ValueError("inconsistent_frozen_identity_fingerprints")
+    return output
+
+
+def snapshot_modified_conflicts(
+    expected: Mapping[str, Any], current: Mapping[str, Any]
+) -> tuple[str, ...]:
+    """Return records whose current modified value differs from the snapshot."""
+    return tuple(
+        sorted(
+            str(record_id)
+            for record_id, frozen_value in expected.items()
+            if str(current.get(str(record_id)) or "")
+            != str(frozen_value or "")
+        )
+    )
+
+
 def complete_valid_hkid(record: Mapping[str, Any], policy: MatchingPolicy) -> str:
     """Return a globally governed complete HKID, otherwise an empty string."""
     source = str(record.get("source") or record.get("ccd_reg_source") or "")

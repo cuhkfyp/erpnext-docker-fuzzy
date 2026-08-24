@@ -19,8 +19,10 @@ from db_connector.fuzzy_matching.identity import (
     MATERIALIZER_VERSION,
     build_materialization_plan,
     complete_hkid_conflicts,
+    expected_identity_fingerprints,
     fingerprint_scoped_exclusion_conflicts,
     identity_fingerprint,
+    snapshot_modified_conflicts,
 )
 from db_connector.fuzzy_matching.policy import MatchingPolicy
 
@@ -245,6 +247,7 @@ def preview_materialization(
     groups: Iterable[Iterable[str]],
     exclusions: Iterable[tuple[str, str]] = (),
     expected_fingerprints: dict[str, str] | None = None,
+    expected_modified: dict[str, str] | None = None,
     governance_override: bool = False,
 ) -> dict[str, Any]:
     policy = _policy(policy_snapshot_json)
@@ -267,13 +270,38 @@ def preview_materialization(
         for record_id, row in records.items()
     }
     conflicts: set[str] = set()
-    stale_records = sorted(
+    try:
+        frozen_fingerprints = expected_identity_fingerprints(
+            (record_id, fingerprint)
+            for record_id, fingerprint in (expected_fingerprints or {}).items()
+        )
+    except ValueError as exc:
+        frappe.throw(str(exc))
+    fingerprint_stale_records = sorted(
         record_id
-        for record_id, expected in (expected_fingerprints or {}).items()
+        for record_id, expected in frozen_fingerprints.items()
         if fingerprints.get(str(record_id)) != str(expected)
     )
-    if stale_records:
+    current_modified = {
+        record_id: str(row.get("modified") or "")
+        for record_id, row in records.items()
+    }
+    modified_stale_records = list(
+        snapshot_modified_conflicts(expected_modified or {}, current_modified)
+    )
+    missing_fingerprint_records = sorted(set(plan.record_ids) - set(frozen_fingerprints))
+    missing_modified_records = sorted(set(plan.record_ids) - set(expected_modified or {}))
+    if origin != "Governance Override" and (
+        missing_fingerprint_records or missing_modified_records
+    ):
+        conflicts.add("frozen_identity_snapshot_incomplete")
+    if fingerprint_stale_records:
         conflicts.add("identity_fingerprint_changed")
+    if modified_stale_records:
+        conflicts.add("source_modified_after_snapshot")
+    stale_records = sorted(
+        set(fingerprint_stale_records) | set(modified_stale_records)
+    )
     hkid_conflicts = complete_hkid_conflicts(plan.groups, records, policy)
     if hkid_conflicts and not governance_override:
         conflicts.add("complete_hkid_conflict")
@@ -311,6 +339,10 @@ def preview_materialization(
         "same_source_duplicate_group_count": len(same_source_groups),
         "stale_record_count": len(stale_records),
         "stale_records": stale_records,
+        "fingerprint_stale_records": fingerprint_stale_records,
+        "modified_stale_records": modified_stale_records,
+        "missing_fingerprint_record_count": len(missing_fingerprint_records),
+        "missing_modified_record_count": len(missing_modified_records),
         "conflicts": sorted(conflicts),
         "safe": not conflicts,
         "already_applied": bool(existing_decision),
@@ -484,6 +516,7 @@ def materialize_identity(
     groups: Iterable[Iterable[str]],
     exclusions: Iterable[tuple[str, str]] = (),
     expected_fingerprints: dict[str, str] | None = None,
+    expected_modified: dict[str, str] | None = None,
     reason_codes: Iterable[str] = (),
     review_context: dict[str, Any] | None = None,
     governance_override: bool = False,
@@ -532,6 +565,7 @@ def materialize_identity(
         groups=plan.groups,
         exclusions=plan.exclusions,
         expected_fingerprints=expected_fingerprints,
+        expected_modified=expected_modified,
         governance_override=governance_override,
     )
     if preview["already_applied"]:

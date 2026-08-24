@@ -296,9 +296,21 @@ bench --site <target-site> execute db_connector.api_fuzzy_evaluation.install_mat
 bench --site <target-site> execute db_connector.api_fuzzy_evaluation.install_default_pilot_policy
 bench --site <target-site> execute db_connector.api_fuzzy_canary.install_existing_canary_review_workflows
 bench --site <target-site> execute db_connector.identity_resolution_setup.install_identity_resolution
+bench --site <target-site> execute db_connector.identity_snapshot_backfill.preview_legacy_identity_fingerprint_backfill
+bench --site <target-site> execute db_connector.identity_snapshot_backfill.apply_legacy_identity_fingerprint_backfill
 bench --site <target-site> build --app db_connector
 bench --site <target-site> clear-cache
 ```
+
+The two fingerprint-backfill commands are idempotent migration safeguards. The
+first is zero-write. The second requires Materialization to be off, locks the
+participating CCD records, and fills only missing snapshot fingerprints whose
+current source and `modified` timestamp still exactly match the frozen row under
+its verified policy snapshot. It creates no Identity Decision, Group,
+Membership, or Exclusion. Any stale, missing, corrupt-policy, or inconsistent
+row is left untouched and reported for a new canary/queue instead of being
+silently repaired. On a fresh target with no legacy snapshots, both commands
+report zero rows.
 
 Restart the web, scheduler, long-queue, and short-queue processes using the
 target's service manager. Run `bench --site <target-site> doctor` afterward.
@@ -750,12 +762,13 @@ manifest. At the current checkpoint they are:
 | Exception component reviews | 191 |
 | Splink Review Pool | 11,177 |
 | Splink work assigned | 0 |
-| Identity Decisions | 8 |
-| Active Identity Groups | 8 |
-| Active Identity Memberships | 17 |
-| Active Identity Exclusions | 5 |
+| Identity Decisions | 10 |
+| Active Identity Groups | 10 |
+| Active Identity Memberships | 23 |
+| Active Identity Exclusions | 7 |
 | Applied Activation batches | 2 |
-| Finalized/Applied Component Reviews | 2 |
+| Finalized/Applied Component Reviews | 4 |
+| Finalized Splink candidates | 2 (not materialized) |
 | Human Review batches | 0 |
 
 These are checkpoint values, not permanent constants. If migration occurs after
@@ -776,6 +789,15 @@ If a Ready canary exists, run **Preview Approve All** and confirm:
 
 Do not test Apply merely to prove the migration. Apply is an activation action
 and requires its own backup, authorization, and bounded batch.
+
+Also run the legacy fingerprint preview from section 6.5 and require all of the
+following before activation:
+
+- `totals.missing_rows = 0` after any approved repair;
+- `stale_rows = 0` or every stale row has been moved to a new canary/queue;
+- `corrupt_parent_rows = 0`;
+- `inconsistent_existing_rows = 0`; and
+- Materialization remains off.
 
 ### 9.5 CCD Master identity-view acceptance test
 
@@ -1030,6 +1052,13 @@ switch, and verify the resulting Identity views and audit objects. This bulk
 action replaces repetitive one-by-one **Retry Identity Materialization** clicks;
 the individual retry remains available for diagnosis.
 
+Both the individual and bulk component routes now require a complete frozen
+identity fingerprint and frozen `modified` value for every participant. Splink
+human decisions enforce the same rule. The materializer acquires CCD record
+locks and then compares current values with both frozen values immediately
+before writing; missing snapshot metadata fails closed as
+`frozen_identity_snapshot_incomplete`.
+
 ## 12. Sign-off checklist
 
 Before declaring transfer complete, record:
@@ -1060,6 +1089,7 @@ Before declaring transfer complete, record:
 | Other-server transfer | `ERPNext_SERVER_MIGRATION_RUNBOOK.md` |
 | Current-host Docker deployment | `deployment/deploy_db_connector.sh` |
 | Idempotent schema/custom-field/Client-Script setup | `identity_resolution_setup.py` |
+| Timestamp-guarded legacy snapshot repair | `identity_snapshot_backfill.py` |
 | Exact versioned component | Git commit recorded in Document control |
 
 If these sources disagree, stop before activation and reconcile the
