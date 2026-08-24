@@ -144,22 +144,28 @@ if (( ! CODE_ONLY )); then
 fi
 docker exec frappe_docker-backend-1 bench --site "$SITE" clear-cache
 
-if (( ! CODE_ONLY )); then
-	asset_stage="$(mktemp -d "$ROOT_DIR/.db-connector-assets.XXXXXX")"
-	trap 'rm -rf -- "$asset_stage"' EXIT
-	if docker cp \
-		frappe_docker-backend-1:/home/frappe/frappe-bench/sites/assets/db_connector \
-		"$asset_stage/" 2>/dev/null; then
-		if ! docker exec -u root frappe_docker-frontend-1 mkdir -p \
-				/home/frappe/frappe-bench/sites/assets/db_connector \
-			|| ! docker cp "$asset_stage/db_connector/." \
-				frappe_docker-frontend-1:/home/frappe/frappe-bench/sites/assets/db_connector/; then
-			echo "Warning: optional db_connector frontend asset copy failed." >&2
-		fi
-	fi
-	rm -rf -- "$asset_stage"
-	trap - EXIT
+# The frontend image has its own app filesystem.  Its assets/db_connector entry
+# is a symlink into that filesystem, so copying the backend's symlink (or trying
+# to copy through it) does not deploy the files that nginx serves.  Populate the
+# symlink target directly.  Raw public assets such as DocType form scripts do
+# not require a build, so keep this step active for --code-only deployments too.
+FRONTEND_CONTAINER="frappe_docker-frontend-1"
+FRONTEND_PUBLIC="$APP_IN_CONTAINER/db_connector/public"
+FRONTEND_ASSETS="/home/frappe/frappe-bench/sites/assets/db_connector"
+
+docker inspect "$FRONTEND_CONTAINER" >/dev/null
+docker start "$FRONTEND_CONTAINER" >/dev/null
+docker exec -u root "$FRONTEND_CONTAINER" mkdir -p "$FRONTEND_PUBLIC"
+docker cp "$PERSISTENT_APP/db_connector/public/." \
+	"$FRONTEND_CONTAINER:$FRONTEND_PUBLIC/"
+docker exec -u root "$FRONTEND_CONTAINER" \
+	chown -R frappe:frappe "$FRONTEND_PUBLIC"
+if ! docker exec "$FRONTEND_CONTAINER" test -e "$FRONTEND_ASSETS"; then
+	docker exec -u root "$FRONTEND_CONTAINER" \
+		ln -s "$FRONTEND_PUBLIC" "$FRONTEND_ASSETS"
 fi
+docker exec "$FRONTEND_CONTAINER" test -f \
+	"$FRONTEND_PUBLIC/js/ccd_master_identity_resolution.js"
 
 docker restart \
 	frappe_docker-backend-1 \

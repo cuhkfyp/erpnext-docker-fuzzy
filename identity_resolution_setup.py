@@ -5,6 +5,57 @@ from __future__ import annotations
 import frappe
 
 
+IDENTITY_CLIENT_SCRIPT = "CCD Master Identity Resolution"
+
+
+def _install_identity_client_script() -> dict[str, object]:
+    """Load the CCD Master renderer through the path supported by custom DocTypes."""
+    script = frappe.read_file(
+        frappe.get_app_path(
+            "db_connector",
+            "public",
+            "js",
+            "ccd_master_identity_resolution.js",
+        )
+    )
+    # FormMeta.add_code() intentionally skips doctype_js hooks for custom
+    # DocTypes.  CCD Master is custom on this site, so an enabled Client Script
+    # is required for the renderer to reach the browser.  Keep it disabled on a
+    # future site where CCD Master is standard; the existing doctype_js hook is
+    # the correct path there and loading both would register duplicate handlers.
+    enabled = bool(frappe.db.get_value("DocType", "CCD Master", "custom"))
+    values = {
+        "dt": "CCD Master",
+        "view": "Form",
+        "enabled": enabled,
+        "script": script,
+    }
+    created = not frappe.db.exists("Client Script", IDENTITY_CLIENT_SCRIPT)
+    if created:
+        frappe.get_doc(
+            {
+                "doctype": "Client Script",
+                "name": IDENTITY_CLIENT_SCRIPT,
+                **values,
+            }
+        ).insert(ignore_permissions=True)
+    else:
+        client_script = frappe.get_doc("Client Script", IDENTITY_CLIENT_SCRIPT)
+        changed = any(
+            client_script.get(fieldname) != value
+            for fieldname, value in values.items()
+        )
+        if changed:
+            client_script.update(values)
+            client_script.save(ignore_permissions=True)
+    frappe.clear_cache(doctype="CCD Master")
+    return {
+        "name": IDENTITY_CLIENT_SCRIPT,
+        "enabled": enabled,
+        "created": created,
+    }
+
+
 def _identity_custom_fields() -> dict[str, list[dict[str, object]]]:
     meta = frappe.get_meta("CCD Master")
     fieldnames = {field.fieldname for field in meta.fields}
@@ -84,6 +135,7 @@ def install_identity_resolution() -> dict[str, object]:
     from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
     create_custom_fields(_identity_custom_fields(), update=True)
+    client_script = _install_identity_client_script()
     _add_indexes()
     migration = _migrate_recommendation_terms()
     # Reading the Single creates no business data and preserves the default-off
@@ -95,6 +147,7 @@ def install_identity_resolution() -> dict[str, object]:
             "CCD Master-ccd_identity_resolution_tab",
             "CCD Master-ccd_identity_resolution_html",
         ],
+        "client_script": client_script,
         "materialization_enabled": bool(settings.materialization_enabled),
         "recommendation_term_migration": migration,
         "activation_item_source_backfill": activation_item_source_backfill,

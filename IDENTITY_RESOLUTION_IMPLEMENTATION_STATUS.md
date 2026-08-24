@@ -4,20 +4,25 @@
 
 | Item | Verified state |
 | --- | --- |
-| Date | 2026-08-21 UTC |
+| Date | 2026-08-24 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
-| Deployment | Schema, services, controllers, and assets deployed |
+| Deployment | Schema, services, controllers, managed CCD Master Client Script, and frontend assets deployed |
 | Materialization | Disabled by default (`materialization_enabled = 0`) |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
-| Live identity writes | None |
+| Live identity writes | Development pilot applied: 5 Decisions, 5 active Groups, and 10 active Memberships |
 
 The predecessor session completed the workflow specification and pushed it at
 commit `cfef788`. This fresh session recovered that durable artifact, audited
 the application and live data, implemented the specification, deployed it in a
 default-off state, and verified the result. It did not depend on reconstructing
 the predecessor's compacted conversational reasoning.
+
+On 2026-08-24, an explicitly approved five-component development pilot was
+applied after a verified full backup. Materialization was turned off again
+immediately afterward. The pilot created reversible identity objects only; it
+did not merge or modify the participating CCD Master source documents.
 
 ## Implemented controls
 
@@ -44,6 +49,10 @@ the predecessor's compacted conversational reasoning.
   breaker.
 - Permission-masked identity fields and an Identity Resolution tab on CCD
   Master. Legacy fuzzy fields are retained but are not written by this system.
+- An idempotently managed **CCD Master Identity Resolution** Form Client Script
+  for the current custom CCD Master DocType. Frappe skips `doctype_js` hooks for
+  custom DocTypes, so checking the form metadata is a mandatory deployment
+  acceptance test.
 - Recommendation lifecycle vocabulary migrated to
   Proposed/Approved/Exception/Withdrawn/Superseded without changing the live
   recommendation population.
@@ -57,6 +66,9 @@ the predecessor's compacted conversational reasoning.
 - The complete in-container test suite passes: 63 tests, 0 failures.
 - Frappe migration, role/policy setup, workflow installation, asset build,
   cache clear, and service restart completed.
+- The frontend-local public renderer is served with HTTP 200, and live CCD
+  Master FormMeta contains `load_identity_resolution` through the managed
+  Client Script.
 - All backend, scheduler, and queue containers are running; two workers are
   online.
 - Re-running setup is designed to be idempotent.
@@ -66,16 +78,17 @@ the predecessor's compacted conversational reasoning.
 | Measure | Result |
 | --- | ---: |
 | Frozen Tiered recommendations | 3,961 |
-| Proposed | 3,528 |
+| Proposed | 3,523 |
 | Exception | 433 |
+| Approved | 5 |
 | Splink candidates available | 11,177 |
 | Splink candidates assigned | 0 |
 | Component reviews | 191 |
-| Identity decisions | 0 |
-| Identity groups | 0 |
-| Identity memberships | 0 |
-| Identity exclusions/events | 0 |
-| Activation batches | 1 (`Reviewed`; 5 components, not approved/applied) |
+| Identity decisions | 5 |
+| Identity groups | 5 active |
+| Identity memberships | 10 active |
+| Identity exclusions/events | 0 exclusions / 20 create-activate events |
+| Activation batches | 1 (`Applied`; 5 complete components) |
 | Review batches | 0 |
 | QC investigations | 0 |
 
@@ -94,8 +107,9 @@ For canary `p1mucmhogd`, **Preview Approve All** returned:
 | Planned memberships | 7,044 |
 | Conflict counts | 0 |
 
-The preview made zero writes. A subsequent read-only check confirmed every new
-operational table was still empty.
+The preview made zero writes. A subsequent, separately approved five-component
+development pilot created the live counts recorded above; it did not change the
+zero-write meaning of Preview.
 
 The 3,520 components are 3,516 two-record components containing one
 recommendation each and four three-record components containing three
@@ -105,20 +119,21 @@ of the 7,044 planned member records.
 
 ## Next controlled decision
 
-No production activation is implicit in this implementation. The next action
-requires explicit management authorization and should be bounded:
+The development pilot does not authorize a production rollout or wider wave.
+Before any further activation:
 
-1. select complete components for a small pilot wave and any deliberate
-   holdout;
-2. create, inspect, and approve the frozen pilot activation batch;
-3. take a fresh ERPNext backup immediately before the write window;
-4. enable materialization through Identity Resolution Settings and apply that
-   one approved batch; and
-5. verify memberships, audit events, masking, QC assignments, and rollback
-   behavior before any wider wave.
+1. complete browser acceptance for linked and unlinked CCD Master records;
+2. verify the five Groups, ten Memberships, twenty create/activate Events,
+   masking, QC assignments, idempotent re-Apply behavior, and correction path;
+3. demonstrate the bounded pilot and obtain explicit management authorization;
+4. create and inspect a new component-atomic batch for the authorized scope;
+5. take a fresh full backup immediately before that next write window; and
+6. enable Materialization only long enough to Apply the one approved batch,
+   then disable it and repeat post-write verification.
 
-Until that decision is made, the deployed system is observable and testable
-but cannot create live identity links.
+Materialization is currently off. Existing pilot links remain visible and
+reversible, but no new identity links can be created until a separately
+authorized route temporarily enables the global switch.
 
 Server transfer, clean-target installation, backup/restore, cutover, rollback,
 and new-centre onboarding are covered in

@@ -5,8 +5,8 @@
 | Item | Value |
 | --- | --- |
 | Purpose | Move the guarded CCD matching and identity-resolution setup to another ERPNext server |
-| Runbook date | 2026-08-21 UTC |
-| Implementation code checkpoint | Git commit `903688b` or a reviewed successor |
+| Runbook date | 2026-08-24 UTC |
+| Implementation code checkpoint | The reviewed Git commit containing this runbook, or a reviewed successor |
 | Source site at writing | `frontend` |
 | Source framework baseline | Frappe 15.73.0 / ERPNext 15.70.0 |
 | Required activation state during transfer | Live materialization disabled |
@@ -78,6 +78,32 @@ versions, before reopening the restored site. The current site's broader app
 list is not a promise that every app is required for a feature-only target, but
 it is required for an exact full-site restore unless an app-removal migration
 has been separately designed and tested.
+
+### 2.1 CCD Master identity-view loading boundary
+
+`CCD Master` is a custom DocType (`tabDocType.custom = 1`) on the current site.
+Frappe intentionally skips `doctype_js` hooks while building form metadata for
+a custom DocType. Therefore, the existence of this hook alone is **not** proof
+that the Identity Resolution tab can render:
+
+```python
+doctype_js = {
+    "CCD Master": "public/js/ccd_master_identity_resolution.js",
+}
+```
+
+`db_connector.identity_resolution_setup.install_identity_resolution` reads that
+versioned JavaScript and idempotently creates or updates an enabled Form Client
+Script named **CCD Master Identity Resolution** when `CCD Master` is custom. If
+a future target uses a standard `CCD Master`, the managed Client Script is kept
+disabled and the normal `doctype_js` hook supplies the same renderer, avoiding
+duplicate form handlers.
+
+The tab's HTML is dynamic. No group/member summary is stored in the CCD Master
+document itself: the form script calls
+`db_connector.api_identity_resolution.get_identity_resolution` and renders the
+response. A visible but empty tab means the renderer did not load or execute;
+it does not prove that Membership rows are absent.
 
 ## 3. Required artifacts
 
@@ -320,7 +346,9 @@ If the target's `hooks.py` has different private integrations, merge the
 identity hooks instead of blindly overwriting it. Required integrations are:
 
 - `after_migrate = db_connector.identity_resolution_setup.after_migrate`;
-- CCD Master `doctype_js` for `public/js/ccd_master_identity_resolution.js`;
+- the CCD Master `doctype_js` source file plus the managed **CCD Master Identity
+  Resolution** Client Script installed by `install_identity_resolution` when
+  CCD Master is custom;
 - CCD Master `on_update` event for fingerprint revalidation; and
 - daily `db_connector.api_identity_qc.run_qc_monitor` scheduling.
 
@@ -610,7 +638,8 @@ assumptions are true:
 - containers are named `frappe_docker-backend-1`,
   `frappe_docker-scheduler-1`, `frappe_docker-queue-long-1`, and
   `frappe_docker-queue-short-1`;
-- frontend assets are copied to `frappe_docker-frontend-1`;
+- raw public assets are copied into the app filesystem of
+  `frappe_docker-frontend-1`;
 - the complete private app already exists either in the live mount or
   `persistent_apps/db_connector`; and
 - the private `hksr` app is available from the backend container.
@@ -618,6 +647,20 @@ assumptions are true:
 `ERPNEXT_VOLUME_ROOT` and `FRAPPE_SITE` are configurable, but container names
 and several internal paths are not. On a different Docker Compose project,
 review and adapt the script rather than running it unchanged.
+
+The frontend container has a filesystem separate from the backend container.
+Its `sites/assets/db_connector` entry is a symlink to:
+
+```text
+/home/frappe/frappe-bench/apps/db_connector/db_connector/public
+```
+
+Do not copy the backend's `sites/assets/db_connector` symlink as though it were
+the asset contents: that can leave a valid-looking symlink whose frontend-local
+target contains only `.gitkeep`. The reviewed deployment script copies
+`persistent_apps/db_connector/db_connector/public/.` directly into that target
+inside `frappe_docker-frontend-1` and fails if
+`js/ccd_master_identity_resolution.js` is still missing.
 
 For the exact current layout, the normal full deployment is:
 
@@ -627,9 +670,11 @@ FRAPPE_SITE=frontend \
 /root/erpnext_docker_volume/deploy_db_connector.sh
 ```
 
-`--code-only` is appropriate only when no DocType, dependency, hook, or asset
-migration is required. A new server or this identity-resolution feature needs a
-full migrate/build deployment.
+`--code-only` is appropriate only when no DocType, dependency, hook, or built-
+bundle migration is required. It still synchronizes raw public files to the
+frontend container. A new server or first identity-resolution installation
+needs a full migrate/build deployment so `after_migrate` installs the managed
+Client Script and schema.
 
 ## 9. Mandatory post-transfer validation
 
@@ -641,8 +686,31 @@ Do not enable live materialization until all checks pass.
 - every web/scheduler/queue process imports all identity API modules;
 - `bench --site <target-site> doctor` reports healthy workers;
 - dependency imports for DuckDB, Splink, RapidFuzz, pypinyin, and hanziconv pass;
-- the app asset build exists on the frontend; and
+- the app asset build and raw public renderer exist on the frontend;
 - no migration/import errors appear in logs.
+
+For this managed Docker layout, verify the exact frontend path and the served
+HTTP response. Adapt the service name and Host header on another topology:
+
+```bash
+docker exec frappe_docker-frontend-1 test -f \
+  /home/frappe/frappe-bench/apps/db_connector/db_connector/public/js/ccd_master_identity_resolution.js
+
+docker exec frappe_docker-backend-1 curl --noproxy '*' --fail --silent \
+  --show-error -H 'Host: <target-hostname>' \
+  http://frontend:8080/assets/db_connector/js/ccd_master_identity_resolution.js \
+  >/dev/null
+```
+
+Then prove that Frappe's actual form metadata contains the renderer. This is
+the check that catches a custom DocType silently skipping `doctype_js`:
+
+```bash
+docker exec frappe_docker-backend-1 bash -lc \
+  "bench --site <target-site> execute frappe.desk.form.meta.get_meta \
+  --kwargs '{\"doctype\":\"CCD Master\",\"cached\":False}' \
+  | grep -q load_identity_resolution"
+```
 
 Run the app tests in the target Bench environment:
 
@@ -657,6 +725,8 @@ PYTHONPATH=.:./db_connector \
 
 - every `CCD Identity *` and `CCD Match Review Batch*` DocType loads;
 - CCD Master contains the Identity Resolution tab/custom HTML field;
+- an enabled **CCD Master Identity Resolution** Client Script exists when CCD
+  Master is custom, and its source contains `load_identity_resolution`;
 - identity membership/exclusion/event indexes exist;
 - `CCD Match Reviewer`, `CCD Match Sensitive Reviewer`, and System Manager
   permissions behave as designed;
@@ -671,13 +741,17 @@ manifest. At the current checkpoint they are:
 
 | Object | Expected current count |
 | --- | ---: |
-| Proposed Tiered recommendations | 3,528 |
+| Proposed Tiered recommendations | 3,523 |
+| Approved Tiered recommendations | 5 |
 | Exception recommendations | 433 |
 | Exception component reviews | 191 |
 | Splink Review Pool | 11,177 |
 | Splink work assigned | 0 |
-| Identity Decisions/Groups/Memberships | 0 |
-| Activation/Review batches | 0 |
+| Identity Decisions | 5 |
+| Active Identity Groups | 5 |
+| Active Identity Memberships | 10 |
+| Applied Activation batches | 1 |
+| Human Review batches | 0 |
 
 These are checkpoint values, not permanent constants. If migration occurs after
 authorized operations, compare against a fresh signed source manifest instead.
@@ -697,6 +771,32 @@ If a Ready canary exists, run **Preview Approve All** and confirm:
 
 Do not test Apply merely to prove the migration. Apply is an activation action
 and requires its own backup, authorization, and bounded batch.
+
+### 9.5 CCD Master identity-view acceptance test
+
+Test both cases after clearing the target cache and restarting the web process:
+
+1. open a CCD Master that has a current Identity Membership;
+2. confirm **Identity Resolution** shows `Linked`, the Identity Group, decision
+   origin/policy version, and every current member permitted for that role;
+3. open an unlinked CCD Master and confirm the tab explicitly shows `Unlinked`;
+4. confirm a Sensitive Reviewer/System Manager can follow permitted record
+   links while an ordinary reviewer receives masked member aliases; and
+5. in browser developer tools, confirm the
+   `get_identity_resolution` request succeeds rather than leaving a blank tab.
+
+If the tab exists but is completely empty, check in this order:
+
+- FormMeta contains `load_identity_resolution` (managed Client Script for a
+  custom CCD Master, or `doctype_js` for a standard CCD Master);
+- the frontend-local public file exists and nginx serves it with HTTP 200;
+- the browser has reloaded form metadata after `bench --site <site> clear-cache`;
+- the API call returns `Linked` or `Unlinked` for the signed-in role; and
+- backend/browser logs contain no JavaScript, permission, or API exception.
+
+Do not re-enable Materialization or reapply an Applied batch to repair an empty
+view. First compare the Membership table and API response: if they exist, the
+problem is presentation/deployment, not materialization.
 
 ## 10. Rollback and recovery
 
@@ -908,7 +1008,7 @@ Before declaring transfer complete, record:
 | Tiered/Splink algorithms, training, calibration, queue, and safeguards | `CCD_TIERED_EVIDENCE_AND_SPLINK_TECHNICAL_GUIDE.md` |
 | Other-server transfer | `ERPNext_SERVER_MIGRATION_RUNBOOK.md` |
 | Current-host Docker deployment | `deployment/deploy_db_connector.sh` |
-| Idempotent schema/custom-field setup | `identity_resolution_setup.py` |
+| Idempotent schema/custom-field/Client-Script setup | `identity_resolution_setup.py` |
 | Exact versioned component | Git commit recorded in Document control |
 
 If these sources disagree, stop before activation and reconcile the
