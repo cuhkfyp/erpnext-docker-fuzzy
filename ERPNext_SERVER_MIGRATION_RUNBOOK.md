@@ -696,6 +696,9 @@ HTTP response. Adapt the service name and Host header on another topology:
 docker exec frappe_docker-frontend-1 test -f \
   /home/frappe/frappe-bench/apps/db_connector/db_connector/public/js/ccd_master_identity_resolution.js
 
+docker exec frappe_docker-frontend-1 test -f \
+  /home/frappe/frappe-bench/apps/db_connector/db_connector/public/js/ccd_match_component_review_list.js
+
 docker exec frappe_docker-backend-1 curl --noproxy '*' --fail --silent \
   --show-error -H 'Host: <target-hostname>' \
   http://frontend:8080/assets/db_connector/js/ccd_master_identity_resolution.js \
@@ -741,16 +744,18 @@ manifest. At the current checkpoint they are:
 
 | Object | Expected current count |
 | --- | ---: |
-| Proposed Tiered recommendations | 3,523 |
-| Approved Tiered recommendations | 5 |
+| Proposed Tiered recommendations | 3,522 |
+| Approved Tiered recommendations | 6 |
 | Exception recommendations | 433 |
 | Exception component reviews | 191 |
 | Splink Review Pool | 11,177 |
 | Splink work assigned | 0 |
-| Identity Decisions | 5 |
-| Active Identity Groups | 5 |
-| Active Identity Memberships | 10 |
-| Applied Activation batches | 1 |
+| Identity Decisions | 8 |
+| Active Identity Groups | 8 |
+| Active Identity Memberships | 17 |
+| Active Identity Exclusions | 5 |
+| Applied Activation batches | 2 |
+| Finalized/Applied Component Reviews | 2 |
 | Human Review batches | 0 |
 
 These are checkpoint values, not permanent constants. If migration occurs after
@@ -774,16 +779,30 @@ and requires its own backup, authorization, and bounded batch.
 
 ### 9.5 CCD Master identity-view acceptance test
 
-Test both cases after clearing the target cache and restarting the web process:
+Test all three display cases after clearing the target cache and restarting the
+web process:
 
 1. open a CCD Master that has a current Identity Membership;
 2. confirm **Identity Resolution** shows `Linked`, the Identity Group, decision
    origin/policy version, and every current member permitted for that role;
-3. open an unlinked CCD Master and confirm the tab explicitly shows `Unlinked`;
-4. confirm a Sensitive Reviewer/System Manager can follow permitted record
+3. open a singleton from an applied Partial Match or All Different decision and
+   confirm the tab shows `Resolved Separately`, the count of current Different
+   relationships, and its decision link(s);
+4. open a CCD Master with neither a current Membership nor a current Different
+   resolution and confirm the tab shows `Not Grouped`;
+5. confirm a Sensitive Reviewer/System Manager can follow permitted record
    links while an ordinary reviewer receives masked member aliases; and
-5. in browser developer tools, confirm the
+6. in browser developer tools, confirm the
    `get_identity_resolution` request succeeds rather than leaving a blank tab.
+
+`Resolved Separately` is dynamic, not a permanent ban. Each Different exclusion
+is scoped to the two records and the governed identity fingerprints captured by
+that decision's frozen policy. If either governed fingerprint changes, the old
+exclusion no longer describes the current evidence. A later approved link to a
+non-excluded record may create a Membership, and an active Membership takes
+display precedence. A proposed link that directly contradicts a still-current
+exclusion remains safety-blocked and must be reviewed/corrected; it is not
+silently allowed.
 
 If the tab exists but is completely empty, check in this order:
 
@@ -791,7 +810,8 @@ If the tab exists but is completely empty, check in this order:
   custom CCD Master, or `doctype_js` for a standard CCD Master);
 - the frontend-local public file exists and nginx serves it with HTTP 200;
 - the browser has reloaded form metadata after `bench --site <site> clear-cache`;
-- the API call returns `Linked` or `Unlinked` for the signed-in role; and
+- the API call returns `Linked`, `Resolved Separately`, or `Not Grouped` for the
+  signed-in role; and
 - backend/browser logs contain no JavaScript, permission, or API exception.
 
 Do not re-enable Materialization or reapply an Applied batch to repair an empty
@@ -978,6 +998,37 @@ site state and is as close as practical to Apply. Then enable Materialization,
 apply that one batch, turn Materialization off, and verify. If rollback is
 needed, that checkpoint returns the site to the state immediately before the
 identity Groups and Memberships were created.
+
+### 11.4 Bulk materialization of finalized exception components
+
+The component bulk action is for human-finalized **CCD Match Component Review**
+documents, not for every Recommendation whose status is Exception. Use it after
+the required reviewers have produced an `Agreed` or `Adjudicated` component
+partition and its **Identity Materialization** status is `Pending` or
+`Exception`:
+
+1. open the **CCD Match Component Review** list;
+2. filter **Identity Materialization** to `Pending` or `Exception`;
+3. check exactly the number of complete components wanted for this operation;
+4. choose **Actions → Preview Selected Identity Materialization**;
+5. inspect each decision and the planned group, membership, exclusion, and
+   safety counts; and
+6. with Materialization enabled, choose **Materialize Selected (N)** and confirm.
+
+The checked-row count is the operation size: selecting 1, 3, or 10 rows processes
+exactly 1, 3, or 10 complete components. The server limit is 25 per operation so
+the review and verification remain bounded. Preview is always zero-write. Apply
+reruns preflight and treats the selected set atomically; if any component no
+longer passes, none of the selected components are committed. Already-Applied,
+unfinalized, and stale rows are rejected. The action requires the exact `System
+Manager` role, including when the account is Administrator.
+
+For a short controlled window, first finalize components while Materialization
+is off so they remain `Pending`; take the required backup, enable
+Materialization, preview the explicit selection again, apply it, disable the
+switch, and verify the resulting Identity views and audit objects. This bulk
+action replaces repetitive one-by-one **Retry Identity Materialization** clicks;
+the individual retry remains available for diagnosis.
 
 ## 12. Sign-off checklist
 

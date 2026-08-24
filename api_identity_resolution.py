@@ -732,6 +732,86 @@ def _decision_policy(decision_name: str) -> MatchingPolicy:
     return _policy(snapshot)
 
 
+def _current_separate_resolution(ccd_master_name: str) -> dict[str, Any] | None:
+    """Return current fingerprint-scoped Different decisions for an ungrouped record.
+
+    Exclusions are deliberately not permanent record-level blocks.  They apply
+    only while both participating records still match the identity fingerprints
+    captured by the decision's policy snapshot.
+    """
+    exclusions = frappe.get_all(
+        EXCLUSION_DOCTYPE,
+        filters={"status": "Active"},
+        or_filters={
+            "left_record": ccd_master_name,
+            "right_record": ccd_master_name,
+        },
+        fields=[
+            "left_record",
+            "right_record",
+            "left_fingerprint",
+            "right_fingerprint",
+            "originating_decision",
+        ],
+        limit_page_length=100_000,
+    )
+    if not exclusions:
+        return None
+
+    record_ids = {
+        str(record_id)
+        for row in exclusions
+        for record_id in (row.left_record, row.right_record)
+    }
+    records = _record_rows(record_ids)
+    for row in records.values():
+        row["source"] = str(row.get("ccd_reg_source") or row.get("source") or "")
+
+    policies: dict[str, MatchingPolicy] = {}
+    current_rows = []
+    for row in exclusions:
+        decision_name = str(row.originating_decision)
+        decision_status = frappe.db.get_value(
+            DECISION_DOCTYPE, decision_name, "status"
+        )
+        if decision_status != "Active":
+            continue
+        if decision_name not in policies:
+            policies[decision_name] = _decision_policy(decision_name)
+        policy = policies[decision_name]
+        left = str(row.left_record)
+        right = str(row.right_record)
+        if (
+            identity_fingerprint(records[left], policy) == str(row.left_fingerprint)
+            and identity_fingerprint(records[right], policy)
+            == str(row.right_fingerprint)
+        ):
+            current_rows.append(row)
+
+    if not current_rows:
+        return None
+
+    decision_names = sorted({str(row.originating_decision) for row in current_rows})
+    decisions = frappe.get_all(
+        DECISION_DOCTYPE,
+        filters={"name": ["in", decision_names], "status": "Active"},
+        fields=[
+            "name",
+            "origin",
+            "origin_document",
+            "decision_type",
+            "policy_version",
+            "decided_at",
+        ],
+        order_by="decided_at desc, name",
+        limit_page_length=max(len(decision_names), 1),
+    )
+    return {
+        "active_exclusion_count": len(current_rows),
+        "decisions": [dict(row) for row in decisions],
+    }
+
+
 def handle_ccd_master_update(doc: Any, method: str | None = None) -> None:
     """Mark only governed identity changes for explicit revalidation."""
     if not frappe.db.table_exists(MEMBERSHIP_DOCTYPE):
@@ -805,10 +885,24 @@ def get_identity_resolution(ccd_master_name: str) -> dict[str, Any]:
         limit=1,
     )
     if not rows:
+        separate = _current_separate_resolution(ccd_master_name)
+        if separate:
+            return {
+                "status": "Resolved Separately",
+                "physical_merge": False,
+                "message": (
+                    "A finalized identity decision currently keeps this record "
+                    "separate from one or more other records."
+                ),
+                **separate,
+            }
         return {
-            "status": "Unlinked",
+            "status": "Not Grouped",
             "physical_merge": False,
-            "message": "This CCD Master is not in an active Identity Group.",
+            "message": (
+                "This CCD Master has no active multi-record Identity Group and "
+                "no current finalized Different resolution."
+            ),
         }
     membership = rows[0]
     group = frappe.get_doc(GROUP_DOCTYPE, membership.identity_group)

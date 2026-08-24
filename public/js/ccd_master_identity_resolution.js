@@ -28,13 +28,36 @@ function identity_member_label(member) {
 	return `<a href="${href}" target="_blank" rel="noopener">${identity_esc(base)}</a>`;
 }
 
+function identity_decision_link(decision) {
+	const href = `/app/ccd-identity-decision/${encodeURIComponent(decision.name)}`;
+	const label = `${decision.origin || "Decision"} — ${decision.decision_type || "Different"}`;
+	return `<a href="${href}" target="_blank" rel="noopener">${identity_esc(label)}</a>`;
+}
+
 function render_identity_resolution(frm, payload) {
 	const wrapper = frm.fields_dict.ccd_identity_resolution_html?.$wrapper;
 	if (!wrapper) return;
-	if (payload.status === "Unlinked") {
+	if (payload.status === "Resolved Separately") {
+		const decisions = (payload.decisions || []).map((decision) =>
+			`<li>${identity_decision_link(decision)} — ${identity_esc(decision.policy_version || "")}</li>`
+		).join("");
+		wrapper.html(
+			'<div class="alert alert-secondary">' +
+			`<p><strong>${__("Identity status")}</strong>: ${__("Resolved Separately")}</p>` +
+			`<p>${__("A finalized identity decision currently keeps this record separate from one or more other records. It is not an active member of a multi-record Identity Group.")}</p>` +
+			`<p><strong>${__("Current Different relationships")}</strong>: ${identity_esc(payload.active_exclusion_count || 0)}</p>` +
+			(decisions ? `<ul>${decisions}</ul>` : "") +
+			'<div class="text-muted">' +
+			__("This is not permanent: the exclusions apply only to the identity fingerprints captured by those decisions. A later approved link takes precedence. CCD Master source documents are never physically merged.") +
+			"</div></div>",
+		);
+		return;
+	}
+	if (payload.status === "Not Grouped" || payload.status === "Unlinked") {
 		wrapper.html(
 			'<div class="alert alert-info">' +
-			__("Unlinked. No CCD record is physically merged; approved identity links will appear here.") +
+			`<p><strong>${__("Identity status")}</strong>: ${__("Not Grouped")}</p>` +
+			__("This CCD Master has no active multi-record Identity Group and no current finalized Different resolution. CCD Master source documents are never physically merged.") +
 			"</div>",
 		);
 		return;

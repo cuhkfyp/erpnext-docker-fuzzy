@@ -11,7 +11,7 @@
 | Deployment | Schema, services, controllers, managed CCD Master Client Script, and frontend assets deployed |
 | Materialization | Disabled by default (`materialization_enabled = 0`) |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
-| Live identity writes | Development pilot applied: 5 Decisions, 5 active Groups, and 10 active Memberships |
+| Live identity writes | Two development waves applied: 8 Decisions, 8 active Groups, 17 active Memberships, and 5 active Exclusions |
 
 The predecessor session completed the workflow specification and pushed it at
 commit `cfef788`. This fresh session recovered that durable artifact, audited
@@ -19,10 +19,11 @@ the application and live data, implemented the specification, deployed it in a
 default-off state, and verified the result. It did not depend on reconstructing
 the predecessor's compacted conversational reasoning.
 
-On 2026-08-24, an explicitly approved five-component development pilot was
-applied after a verified full backup. Materialization was turned off again
-immediately afterward. The pilot created reversible identity objects only; it
-did not merge or modify the participating CCD Master source documents.
+On 2026-08-24, an explicitly approved five-component development pilot and a
+second bounded test wave were applied after verified backup checkpoints.
+Materialization was turned off again immediately afterward. The waves created
+reversible identity objects only; they did not merge or modify the participating
+CCD Master source documents.
 
 ## Implemented controls
 
@@ -49,6 +50,14 @@ did not merge or modify the participating CCD Master source documents.
   breaker.
 - Permission-masked identity fields and an Identity Resolution tab on CCD
   Master. Legacy fuzzy fields are retained but are not written by this system.
+- Dynamic ungrouped-state wording: a fingerprint-current Different decision is
+  shown as **Resolved Separately**, a record with neither membership nor a
+  current Different decision is **Not Grouped**, and an active Membership takes
+  display precedence if a later approved link is created. No state implies a
+  physical CCD Master merge.
+- A System Manager bulk action on the Component Review list: select the exact
+  Pending/Exception rows, run a zero-write safety preview, and atomically
+  materialize 1–25 complete components in one operation.
 - An idempotently managed **CCD Master Identity Resolution** Form Client Script
   for the current custom CCD Master DocType. Frappe skips `doctype_js` hooks for
   custom DocTypes, so checking the form metadata is a mandatory deployment
@@ -72,23 +81,31 @@ did not merge or modify the participating CCD Master source documents.
 - All backend, scheduler, and queue containers are running; two workers are
   online.
 - Re-running setup is designed to be idempotent.
+- Live API checks prove all three identity-view branches: a partial-match
+  singleton returns `Resolved Separately` with three current exclusions, its
+  linked pair member returns `Linked` despite also participating in exclusions,
+  and an untouched record returns `Not Grouped`.
+- The Component Review list hook and frontend asset are deployed. The bulk API
+  rejects already-Applied rows without writing and reports the global switch as
+  disabled.
 
 ### Live read-only state
 
 | Measure | Result |
 | --- | ---: |
 | Frozen Tiered recommendations | 3,961 |
-| Proposed | 3,523 |
+| Proposed | 3,522 |
 | Exception | 433 |
-| Approved | 5 |
+| Approved | 6 |
 | Splink candidates available | 11,177 |
 | Splink candidates assigned | 0 |
 | Component reviews | 191 |
-| Identity decisions | 5 |
-| Identity groups | 5 active |
-| Identity memberships | 10 active |
-| Identity exclusions/events | 0 exclusions / 20 create-activate events |
-| Activation batches | 1 (`Applied`; 5 complete components) |
+| Identity decisions | 8 |
+| Identity groups | 8 active |
+| Identity memberships | 17 active |
+| Identity exclusions/events | 5 active exclusions / 33 create-activate events |
+| Activation batches | 2 (`Applied`; 6 complete Tiered components total) |
+| Finalized Component Reviews | 2 (`Agreed` / `Applied`) |
 | Review batches | 0 |
 | QC investigations | 0 |
 
@@ -122,8 +139,10 @@ of the 7,044 planned member records.
 The development pilot does not authorize a production rollout or wider wave.
 Before any further activation:
 
-1. complete browser acceptance for linked and unlinked CCD Master records;
-2. verify the five Groups, ten Memberships, twenty create/activate Events,
+1. complete browser acceptance for Linked, Resolved Separately, and Not Grouped
+   CCD Master records;
+2. verify the eight Groups, seventeen Memberships, five Exclusions,
+   thirty-three create/activate Events,
    masking, QC assignments, idempotent re-Apply behavior, and correction path;
 3. demonstrate the bounded pilot and obtain explicit management authorization;
 4. create and inspect a new component-atomic batch for the authorized scope;

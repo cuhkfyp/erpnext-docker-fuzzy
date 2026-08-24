@@ -237,7 +237,7 @@ copied child tables from disagreeing.
 
 The Identity Resolution tab will show:
 
-- Unlinked / Linked / Needs Revalidation status;
+- Not Grouped / Resolved Separately / Linked / Needs Revalidation status;
 - group and active membership;
 - role-protected member list;
 - decision origin (`Tiered`, `Human Splink`, or `Component Review`);
@@ -250,6 +250,13 @@ The Identity Resolution tab will show:
 Ordinary reviewers see masked values and aliases. Sensitive Reviewers and
 System Managers retain the existing role-gated record links and permitted
 values.
+
+`Resolved Separately` means a finalized Different/partition decision has a
+current fingerprint-scoped exclusion for this record but no active multi-record
+Membership. It is not permanent: governed evidence changes make the old
+fingerprint scope non-current, and a later valid active Membership takes display
+precedence. `Not Grouped` means neither a current Membership nor a current
+Different resolution exists. No display state physically merges CCD Master.
 
 ## 7. Recommendation and membership state models
 
@@ -652,6 +659,11 @@ governance review.
 - resulting group/exclusion preview; and
 - final Identity Decision/Group links after materialization.
 
+The Component Review list also provides a System Manager bulk action for the
+exact checked set of finalized `Pending`/`Exception` components. It previews
+without writes and atomically materializes 1–25 complete components per
+operation; a failed preflight commits none of the selected set.
+
 ## 17. Roles and permissions
 
 | Action | Reviewer | Sensitive Reviewer | System Manager |
@@ -767,6 +779,10 @@ activation scope.
 - Human Confirmed Same uses human provenance, not model High;
 - All Same handles genuine same-source duplicates;
 - All Different creates exclusions but no group;
+- partial-match singletons display Resolved Separately while a later active
+  Membership takes precedence;
+- selected bulk Component Review preview is zero-write, capped at 25, and Apply
+  is atomic across the selected set;
 - stale and Unsure decisions create no membership;
 - QC Different invokes the configured circuit breaker; and
 - zero Review Batches leaves every Splink candidate unassigned.

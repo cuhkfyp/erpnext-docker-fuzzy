@@ -11,6 +11,10 @@ doctype_js = {
     "CCD Master": "public/js/ccd_master_identity_resolution.js",
 }
 
+doctype_list_js = {
+    "CCD Match Component Review": "public/js/ccd_match_component_review_list.js",
+}
+
 doc_events = {
     "CCD Master": {
         "on_update": "db_connector.api_identity_resolution.handle_ccd_master_update",
@@ -74,7 +78,6 @@ scheduler_events = {
 
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
