@@ -21,6 +21,7 @@ COMPONENT_DOCTYPE = "CCD Match Component Review"
 CANARY_DOCTYPE = "CCD Match Canary Run"
 FINAL_REVIEW_STATUSES = {"Agreed", "Adjudicated"}
 MAX_BULK_COMPONENT_MATERIALIZATIONS = 25
+MAX_BULK_CANDIDATE_MATERIALIZATIONS = 25
 
 
 def _require_manager() -> None:
@@ -76,12 +77,15 @@ def _pending_if_disabled(doctype: str, name: str) -> bool:
 def _candidate_materialization_plan(candidate: Any) -> dict[str, Any]:
     run = frappe.get_doc(QUEUE_RUN_DOCTYPE, candidate.queue_run)
     record_ids = [str(candidate.left_record), str(candidate.right_record)]
-    expected = expected_identity_fingerprints(
-        (
-            (record_ids[0], candidate.left_identity_fingerprint),
-            (record_ids[1], candidate.right_identity_fingerprint),
+    try:
+        expected = expected_identity_fingerprints(
+            (
+                (record_ids[0], candidate.left_identity_fingerprint),
+                (record_ids[1], candidate.right_identity_fingerprint),
+            )
         )
-    )
+    except ValueError as exc:
+        raise frappe.ValidationError(str(exc))
     expected_modified = {
         record_ids[0]: str(candidate.left_modified_at or ""),
         record_ids[1]: str(candidate.right_modified_at or ""),
@@ -191,6 +195,194 @@ def preview_review_candidate_materialization(candidate_name: str) -> dict[str, A
             "missing_fingerprint_record_count"
         ],
         "missing_modified_record_count": preview["missing_modified_record_count"],
+    }
+
+
+def _bulk_candidate_names(candidate_names: Any) -> list[str]:
+    try:
+        values = (
+            json.loads(candidate_names)
+            if isinstance(candidate_names, str)
+            else candidate_names
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        frappe.throw("Selected Review Candidate names must be a JSON list")
+    if not isinstance(values, (list, tuple)):
+        frappe.throw("Select one or more Review Candidate rows")
+    if any(not isinstance(value, str) for value in values):
+        frappe.throw("Every selected Review Candidate name must be text")
+    names = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+    if not names:
+        frappe.throw("Select one or more Review Candidate rows")
+    if len(names) > MAX_BULK_CANDIDATE_MATERIALIZATIONS:
+        frappe.throw(
+            f"Select at most {MAX_BULK_CANDIDATE_MATERIALIZATIONS} Splink candidates per operation"
+        )
+    return names
+
+
+def _preview_review_candidate(candidate_name: str) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "candidate": candidate_name,
+        "eligible": False,
+        "review_status": "",
+        "final_label": "",
+        "materialization_status": "",
+        "record_ids": [],
+        "record_count": 0,
+        "group_count": 0,
+        "membership_count": 0,
+        "exclusion_count": 0,
+        "safe": False,
+        "already_applied": False,
+        "conflicts": [],
+        "error": "",
+    }
+    try:
+        candidate = frappe.get_doc(CANDIDATE_DOCTYPE, candidate_name)
+        row.update(
+            {
+                "review_status": str(candidate.review_status or ""),
+                "final_label": str(candidate.final_label or ""),
+                "materialization_status": str(
+                    candidate.materialization_status or ""
+                ),
+            }
+        )
+        if (
+            candidate.review_status not in FINAL_REVIEW_STATUSES
+            or candidate.final_label not in {"Same", "Different"}
+        ):
+            row["error"] = "Review Candidate is not finalized"
+            return row
+        if candidate.stale:
+            row["error"] = "Review Candidate is stale; create a new Splink queue"
+            return row
+        if candidate.materialization_status not in {"Pending", "Exception"}:
+            row["error"] = "Only Pending or Exception candidates can be selected"
+            return row
+        plan = _candidate_materialization_plan(candidate)
+        run = plan["run"]
+        preview = preview_materialization(
+            origin="Splink Human Review",
+            origin_doctype=CANDIDATE_DOCTYPE,
+            origin_document=candidate.name,
+            policy_snapshot_json=run.policy_snapshot_json,
+            record_ids=plan["record_ids"],
+            groups=plan["groups"],
+            exclusions=plan["exclusions"],
+            expected_fingerprints=plan["expected_fingerprints"] or None,
+            expected_modified=plan["expected_modified"],
+        )
+        row.update(
+            {
+                "record_ids": list(plan["record_ids"]),
+                "record_count": preview["record_count"],
+                "group_count": preview["group_count"],
+                "membership_count": preview["membership_count"],
+                "exclusion_count": preview["exclusion_count"],
+                "safe": bool(preview["safe"]),
+                "already_applied": bool(preview["already_applied"]),
+                "conflicts": list(preview["conflicts"]),
+                "eligible": bool(preview["safe"]),
+            }
+        )
+        if not preview["safe"]:
+            row["error"] = "Identity safety checks failed"
+    except (
+        frappe.ValidationError,
+        frappe.PermissionError,
+        frappe.DoesNotExistError,
+    ) as exc:
+        row["error"] = str(exc)
+    return row
+
+
+def _reject_overlapping_candidate_records(rows: list[dict[str, Any]]) -> None:
+    owners: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        for record_id in row["record_ids"]:
+            owners.setdefault(str(record_id), []).append(row)
+    for record_id, record_rows in owners.items():
+        if len(record_rows) < 2:
+            continue
+        for row in record_rows:
+            row["eligible"] = False
+            row["safe"] = False
+            row["conflicts"] = sorted(
+                set(row["conflicts"]) | {"selected_candidates_overlap"}
+            )
+            row["error"] = (
+                f"CCD record {record_id} appears in more than one selected candidate"
+            )
+
+
+@frappe.whitelist()
+def preview_candidate_materializations(candidate_names: Any) -> dict[str, Any]:
+    """Zero-write preview for an exact, bounded Splink candidate selection."""
+    _require_manager()
+    names = _bulk_candidate_names(candidate_names)
+    rows = [_preview_review_candidate(name) for name in names]
+    _reject_overlapping_candidate_records(rows)
+    eligible_count = sum(bool(row["eligible"]) for row in rows)
+    return {
+        "selected_count": len(names),
+        "eligible_count": eligible_count,
+        "all_eligible": eligible_count == len(names),
+        "materialization_enabled": materialization_enabled(automated=False),
+        "max_candidates": MAX_BULK_CANDIDATE_MATERIALIZATIONS,
+        "rows": rows,
+        "totals": {
+            "record_count": sum(int(row["record_count"]) for row in rows),
+            "group_count": sum(int(row["group_count"]) for row in rows),
+            "membership_count": sum(int(row["membership_count"]) for row in rows),
+            "exclusion_count": sum(int(row["exclusion_count"]) for row in rows),
+        },
+    }
+
+
+@frappe.whitelist()
+def materialize_review_candidates(candidate_names: Any) -> dict[str, Any]:
+    """Materialize one exact Splink selection as a single atomic operation."""
+    _require_manager()
+    names = _bulk_candidate_names(candidate_names)
+    if not materialization_enabled(automated=False):
+        frappe.throw(
+            "Live identity materialization is disabled. Enable Materialization, then preview again."
+        )
+    preview = preview_candidate_materializations(names)
+    invalid = [row["candidate"] for row in preview["rows"] if not row["eligible"]]
+    if invalid:
+        frappe.throw(
+            "Every selected Splink candidate must pass preview before this atomic operation: "
+            + ", ".join(invalid[:5])
+        )
+
+    results = []
+    for name in names:
+        result = materialize_final_candidate_if_enabled(name)
+        if result.get("status") not in {"Applied", "Already Applied"}:
+            frappe.throw(
+                f"Splink candidate {name} was not applied; the complete selection was rolled back"
+            )
+        results.append(
+            {
+                "candidate": name,
+                "status": result["status"],
+                "identity_decision": result.get("identity_decision") or "",
+                "created_groups": int(result.get("created_groups") or 0),
+                "created_memberships": int(result.get("created_memberships") or 0),
+                "created_exclusions": int(result.get("created_exclusions") or 0),
+            }
+        )
+    frappe.db.commit()
+    return {
+        "status": "Applied",
+        "selected_count": len(names),
+        "results": results,
+        "created_groups": sum(row["created_groups"] for row in results),
+        "created_memberships": sum(row["created_memberships"] for row in results),
+        "created_exclusions": sum(row["created_exclusions"] for row in results),
     }
 
 

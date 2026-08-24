@@ -668,6 +668,11 @@ exact checked set of finalized `Pending`/`Exception` components. It previews
 without writes and atomically materializes 1–25 complete components per
 operation; a failed preflight commits none of the selected set.
 
+The Review Candidate list provides the same bounded workflow for finalized
+Splink Same/Different decisions: an exact checked set of 1–25
+`Pending`/`Exception` candidates, a zero-write per-candidate preview, rejection
+of overlapping CCD participants, and one atomic Apply operation.
+
 ## 17. Roles and permissions
 
 | Action | Reviewer | Sensitive Reviewer | System Manager |
@@ -787,6 +792,8 @@ activation scope.
   Membership takes precedence;
 - selected bulk Component Review preview is zero-write, capped at 25, and Apply
   is atomic across the selected set;
+- selected bulk Splink preview has the same zero-write, 25-row and atomic-Apply
+  guarantees, and rejects overlapping participants;
 - stale and Unsure decisions create no membership;
 - QC Different invokes the configured circuit breaker; and
 - zero Review Batches leaves every Splink candidate unassigned.

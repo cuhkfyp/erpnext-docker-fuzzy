@@ -13,6 +13,7 @@ doctype_js = {
 
 doctype_list_js = {
     "CCD Match Component Review": "public/js/ccd_match_component_review_list.js",
+    "CCD Match Review Candidate": "public/js/ccd_match_review_candidate_list.js",
 }
 
 doc_events = {

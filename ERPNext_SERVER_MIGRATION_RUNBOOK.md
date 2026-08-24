@@ -762,13 +762,13 @@ manifest. At the current checkpoint they are:
 | Exception component reviews | 191 |
 | Splink Review Pool | 11,177 |
 | Splink work assigned | 0 |
-| Identity Decisions | 10 |
-| Active Identity Groups | 10 |
-| Active Identity Memberships | 23 |
+| Identity Decisions | 11 |
+| Active Identity Groups | 11 |
+| Active Identity Memberships | 25 |
 | Active Identity Exclusions | 7 |
 | Applied Activation batches | 2 |
 | Finalized/Applied Component Reviews | 4 |
-| Finalized Splink candidates | 2 (not materialized) |
+| Finalized Splink candidates | 2 (1 Applied, 1 Pending) |
 | Human Review batches | 0 |
 
 These are checkpoint values, not permanent constants. If migration occurs after
@@ -1052,12 +1052,28 @@ switch, and verify the resulting Identity views and audit objects. This bulk
 action replaces repetitive one-by-one **Retry Identity Materialization** clicks;
 the individual retry remains available for diagnosis.
 
-Both the individual and bulk component routes now require a complete frozen
-identity fingerprint and frozen `modified` value for every participant. Splink
-human decisions enforce the same rule. The materializer acquires CCD record
-locks and then compares current values with both frozen values immediately
-before writing; missing snapshot metadata fails closed as
-`frozen_identity_snapshot_incomplete`.
+### 11.5 Bulk materialization of finalized Splink decisions
+
+The **CCD Match Review Candidate** list provides the equivalent bounded action
+for human-finalized Splink pairs. Filter **Identity Materialization** to
+`Pending` or `Exception`, check the exact candidates wanted, and choose
+**Actions → Preview Selected Identity Materialization**. The zero-write dialog
+shows the final Same/Different label and the planned records, groups,
+memberships, exclusions, and safety outcome for every checked row.
+
+The checked-row count is again the operation size, capped at 25. With
+Materialization enabled and every row safe, **Materialize Selected (N)** reruns
+the complete preflight and commits the exact set atomically. An unfinalized,
+stale, already-Applied, unsafe, or overlapping selection is blocked. Overlap
+means the same CCD Master appears in more than one checked candidate; those
+decisions must not be treated as independent pairs. The individual retry stays
+available for isolated diagnosis.
+
+Both individual and bulk component/Splink routes require a complete frozen
+identity fingerprint and frozen `modified` value for every participant. The
+materializer acquires CCD record locks and then compares current values with
+both frozen values immediately before writing; missing snapshot metadata fails
+closed as `frozen_identity_snapshot_incomplete`.
 
 ## 12. Sign-off checklist
 
