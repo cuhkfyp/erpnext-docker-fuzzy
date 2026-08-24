@@ -533,6 +533,7 @@ def _display_value(value: Any, sensitive: bool) -> str:
 def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
     _require_reviewer()
     candidate = frappe.get_doc(CANDIDATE_DOCTYPE, candidate_name)
+    is_manager = "System Manager" in set(frappe.get_roles())
     run = frappe.get_doc(RUN_DOCTYPE, candidate.queue_run)
     policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
     left = frappe.get_doc("CCD Master", candidate.left_record).as_dict()
@@ -582,23 +583,32 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
             and not submitted
         ),
         "can_adjudicate": bool(
-            "System Manager" in set(frappe.get_roles())
+            is_manager
             and not stale
             and candidate.review_status == "Needs Adjudication"
         ),
         "can_materialize": bool(
-            "System Manager" in set(frappe.get_roles())
+            is_manager
             and candidate.review_status in FINAL_REVIEW_STATUSES
             and candidate.materialization_status in {"Pending", "Exception"}
+        ),
+        "can_reverse_materialization": bool(
+            is_manager
+            and candidate.review_status in FINAL_REVIEW_STATUSES
+            and candidate.final_label == "Same"
+            and candidate.materialization_status == "Applied"
+            and candidate.identity_decision
+            and not candidate.correction_decision
         ),
     }
     if sensitive:
         payload["left"]["record_id"] = candidate.left_record
         payload["right"]["record_id"] = candidate.right_record
-    if "System Manager" in set(frappe.get_roles()):
+    if is_manager:
         payload["probabilistic_score"] = candidate.probabilistic_score
         payload["review_threshold"] = candidate.review_threshold
         payload["blocking_routes"] = candidate.blocking_routes
+        payload["correction_decision"] = candidate.correction_decision or ""
     return payload
 
 

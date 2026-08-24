@@ -603,6 +603,28 @@ not reconstructing merged data.
 
 End only that Membership. Other correct members may remain in their group.
 
+For the narrower case where one finalized two-record Splink candidate was
+materialized as Same and both records are later confirmed to be different, the
+implemented manager correction is atomic and append-only:
+
+1. Materialization must first be disabled.
+2. The live Group must contain exactly the candidate's two current Memberships,
+   and the Group, Memberships, and active Same Decision must all originate from
+   that candidate. A larger, extended, or changed Group is rejected and must use
+   complete-component correction.
+3. A System Manager runs a zero-write preview, supplies a mandatory reason,
+   types the exact candidate ID, and explicitly marks development/demonstration
+   use when applicable.
+4. One transaction ends both Memberships and the Group, creates a new
+   fingerprint-scoped Different Decision/Exclusion, supersedes the old Same
+   Decision, and marks the candidate `Reversed` with actor and timestamp.
+5. CCD Master records and original human-review submissions remain unchanged.
+
+The form button is rendered only for a System Manager and the whitelisted
+preview/apply APIs repeat that exact role check server-side. Ordinary CCD Match
+Reviewers and Sensitive Reviewers cannot invoke the correction by calling the
+API directly.
+
 ### Incorrect partition
 
 Create a new versioned partition and new/updated groups, end superseded

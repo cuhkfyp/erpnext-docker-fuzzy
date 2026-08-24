@@ -9,6 +9,12 @@ from typing import Any, Iterable
 import frappe
 
 from db_connector.api_identity_resolution import (
+    CURRENT_MEMBERSHIP_STATUSES,
+    DECISION_DOCTYPE,
+    GROUP_DOCTYPE,
+    MEMBERSHIP_DOCTYPE,
+    _append_event,
+    _lock_records,
     materialization_enabled,
     materialize_identity,
     preview_materialization,
@@ -22,11 +28,353 @@ CANARY_DOCTYPE = "CCD Match Canary Run"
 FINAL_REVIEW_STATUSES = {"Agreed", "Adjudicated"}
 MAX_BULK_COMPONENT_MATERIALIZATIONS = 25
 MAX_BULK_CANDIDATE_MATERIALIZATIONS = 25
+REVERSAL_STATUS = "Reversed"
 
 
 def _require_manager() -> None:
     if "System Manager" not in set(frappe.get_roles()):
         frappe.throw("System Manager role is required", frappe.PermissionError)
+
+
+def _lock_named_rows(doctype: str, names: Iterable[str]) -> None:
+    """Lock a bounded set of internal identity rows in deterministic order."""
+    ordered = tuple(sorted({str(item) for item in names if str(item)}))
+    if not ordered:
+        return
+    placeholders = ", ".join(["%s"] * len(ordered))
+    frappe.db.sql(
+        f"SELECT name FROM `tab{doctype}` "
+        f"WHERE name IN ({placeholders}) ORDER BY name FOR UPDATE",
+        ordered,
+    )
+
+
+def _single_materialized_group(candidate: Any) -> str:
+    try:
+        values = json.loads(candidate.identity_groups_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        frappe.throw("The Review Candidate has invalid materialized-group history")
+    groups = [str(value) for value in values if str(value)] if isinstance(values, list) else []
+    if len(groups) != 1:
+        frappe.throw(
+            "This correction is limited to an applied Same decision with exactly one Identity Group"
+        )
+    return groups[0]
+
+
+def _splink_same_reversal_context(candidate_name: str) -> dict[str, Any]:
+    """Validate the deliberately narrow two-record Splink correction case."""
+    candidate = frappe.get_doc(CANDIDATE_DOCTYPE, candidate_name)
+    if candidate.review_status not in FINAL_REVIEW_STATUSES:
+        frappe.throw("The Review Candidate is not finalized")
+    if candidate.final_label != "Same":
+        frappe.throw("Only a finalized Same decision can use this correction")
+    if candidate.materialization_status != "Applied":
+        frappe.throw("Only an Applied Same decision can use this correction")
+    if not candidate.identity_decision:
+        frappe.throw("The Review Candidate has no applied Identity Decision")
+
+    group_name = _single_materialized_group(candidate)
+    decision = frappe.get_doc(DECISION_DOCTYPE, candidate.identity_decision)
+    group = frappe.get_doc(GROUP_DOCTYPE, group_name)
+    if decision.status != "Active" or decision.decision_type != "Same":
+        frappe.throw("The original Same Identity Decision is no longer active")
+    if (
+        decision.origin != "Splink Human Review"
+        or decision.origin_doctype != CANDIDATE_DOCTYPE
+        or decision.origin_document != candidate.name
+    ):
+        frappe.throw("The applied Identity Decision does not belong to this Splink candidate")
+    if group.status not in {"Active", "Needs Revalidation"}:
+        frappe.throw("The materialized Identity Group is no longer current")
+    if group.originating_decision != decision.name:
+        frappe.throw(
+            "This group has a different origin; use complete-component correction instead"
+        )
+
+    memberships = frappe.get_all(
+        MEMBERSHIP_DOCTYPE,
+        filters={
+            "identity_group": group.name,
+            "status": ["in", CURRENT_MEMBERSHIP_STATUSES],
+        },
+        fields=[
+            "name",
+            "ccd_master",
+            "status",
+            "originating_decision",
+        ],
+        order_by="name",
+        limit_page_length=100_000,
+    )
+    record_ids = [str(candidate.left_record), str(candidate.right_record)]
+    if len(memberships) != 2 or {str(row.ccd_master) for row in memberships} != set(record_ids):
+        frappe.throw(
+            "This correction is limited to a group containing exactly the candidate's two records; "
+            "use complete-component correction for a larger or changed group"
+        )
+    if any(str(row.originating_decision) != str(decision.name) for row in memberships):
+        frappe.throw("The current memberships were not both created by this Same decision")
+
+    return {
+        "candidate": candidate,
+        "decision": decision,
+        "group": group,
+        "memberships": memberships,
+        "record_ids": record_ids,
+        "run": frappe.get_doc(QUEUE_RUN_DOCTYPE, candidate.queue_run),
+    }
+
+
+@frappe.whitelist()
+def preview_reverse_splink_same(candidate_name: str) -> dict[str, Any]:
+    """Preview, without writes, a two-record Applied Same -> Different correction."""
+    _require_manager()
+    context = _splink_same_reversal_context(candidate_name)
+    candidate = context["candidate"]
+    return {
+        "candidate": candidate.name,
+        "zero_write": True,
+        "eligible": True,
+        "materialization_enabled": materialization_enabled(automated=False),
+        "requires_materialization_disabled": True,
+        "original_identity_decision": context["decision"].name,
+        "identity_group": context["group"].name,
+        "memberships": [
+            {
+                "membership": str(row.name),
+                "ccd_master": str(row.ccd_master),
+                "status": str(row.status),
+            }
+            for row in context["memberships"]
+        ],
+        "planned": {
+            "ended_groups": 1,
+            "ended_memberships": 2,
+            "new_decision_type": "Different",
+            "new_exclusions": 1,
+            "superseded_same_decisions": 1,
+            "physical_ccd_master_merges": 0,
+        },
+    }
+
+
+@frappe.whitelist()
+def reverse_applied_splink_same(
+    candidate_name: str,
+    reason: str,
+    confirm_candidate_name: str,
+    is_demonstration: int | str = 0,
+) -> dict[str, Any]:
+    """Atomically correct one exact, two-member Splink Same decision to Different."""
+    _require_manager()
+    candidate_name = str(candidate_name or "").strip()
+    reason = str(reason or "").strip()
+    if not candidate_name or str(confirm_candidate_name or "").strip() != candidate_name:
+        frappe.throw("Type the exact Review Candidate ID to confirm this correction")
+    if not reason:
+        frappe.throw("A correction reason is required")
+    if materialization_enabled(automated=False):
+        frappe.throw(
+            "Disable Materialization before correcting an applied Same decision"
+        )
+    demonstration = str(is_demonstration or "0").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+    try:
+        preliminary = frappe.get_doc(CANDIDATE_DOCTYPE, candidate_name)
+        preliminary_records = tuple(
+            sorted((str(preliminary.left_record), str(preliminary.right_record)))
+        )
+        _lock_records(preliminary_records)
+        _lock_named_rows(CANDIDATE_DOCTYPE, [candidate_name])
+        candidate = frappe.get_doc(CANDIDATE_DOCTYPE, candidate_name)
+        locked_records = tuple(
+            sorted((str(candidate.left_record), str(candidate.right_record)))
+        )
+        if locked_records != preliminary_records:
+            frappe.throw("The Review Candidate pair changed while the correction was starting")
+        if candidate.materialization_status == REVERSAL_STATUS:
+            if candidate.correction_decision:
+                frappe.db.rollback()
+                return {
+                    "status": "Already Reversed",
+                    "candidate": candidate.name,
+                    "correction_decision": candidate.correction_decision,
+                }
+            frappe.throw("The Review Candidate has an incomplete reversal record")
+
+        context = _splink_same_reversal_context(candidate_name, lock=False)
+        decision = context["decision"]
+        group = context["group"]
+        memberships = context["memberships"]
+        record_ids = context["record_ids"]
+        run = context["run"]
+        _lock_named_rows(DECISION_DOCTYPE, [decision.name])
+        _lock_named_rows(GROUP_DOCTYPE, [group.name])
+        _lock_named_rows(MEMBERSHIP_DOCTYPE, [row.name for row in memberships])
+        # Re-read after all relevant locks and re-run every eligibility check.
+        context = _splink_same_reversal_context(candidate_name, lock=False)
+        decision = context["decision"]
+        group = context["group"]
+        memberships = context["memberships"]
+        record_ids = context["record_ids"]
+        run = context["run"]
+
+        now = frappe.utils.now_datetime()
+        event_nonce = f"splink_same_reversal:{candidate.name}:{now}"
+        for membership in memberships:
+            frappe.db.set_value(
+                MEMBERSHIP_DOCTYPE,
+                membership.name,
+                {
+                    "status": "Ended",
+                    "valid_to": now,
+                    "ended_reason": reason,
+                    "ended_by": frappe.session.user,
+                },
+                update_modified=False,
+            )
+            _append_event(
+                entity_doctype=MEMBERSHIP_DOCTYPE,
+                entity_name=membership.name,
+                event_type="End",
+                reason=reason,
+                nonce=event_nonce,
+                from_status=str(membership.status),
+                to_status="Ended",
+                identity_decision=decision.name,
+                identity_group=group.name,
+                identity_membership=membership.name,
+                metadata={"corrected_splink_candidate": candidate.name},
+                is_demonstration=demonstration,
+            )
+        frappe.db.set_value(
+            GROUP_DOCTYPE,
+            group.name,
+            {
+                "status": "Ended",
+                "active_member_count": 0,
+                "last_validation_at": now,
+            },
+            update_modified=False,
+        )
+        _append_event(
+            entity_doctype=GROUP_DOCTYPE,
+            entity_name=group.name,
+            event_type="End",
+            reason=reason,
+            nonce=event_nonce,
+            from_status=str(group.status),
+            to_status="Ended",
+            identity_decision=decision.name,
+            identity_group=group.name,
+            metadata={"corrected_splink_candidate": candidate.name},
+            is_demonstration=demonstration,
+        )
+
+        correction = materialize_identity(
+            origin="Governance Override",
+            origin_doctype=CANDIDATE_DOCTYPE,
+            origin_document=candidate.name,
+            policy_snapshot_json=run.policy_snapshot_json,
+            policy_snapshot_sha256=run.policy_snapshot_sha256,
+            matching_policy=run.matching_policy,
+            record_ids=record_ids,
+            groups=[[record_id] for record_id in record_ids],
+            exclusions=[(record_ids[0], record_ids[1])],
+            reason_codes=[
+                "manager_corrected_false_same",
+                "human_confirmed_different",
+            ],
+            review_context={
+                "corrected_splink_candidate": candidate.name,
+                "superseded_identity_decision": decision.name,
+                "ended_identity_group": group.name,
+                "correction_reason": reason,
+                "is_demonstration": demonstration,
+            },
+            governance_override=True,
+            governance_notes=reason,
+            is_demonstration=demonstration,
+            require_enabled=False,
+        )
+        correction_decision = str(correction["identity_decision"])
+        frappe.db.set_value(
+            DECISION_DOCTYPE,
+            correction_decision,
+            {
+                "decision_version": int(decision.decision_version or 1) + 1,
+                "supersedes": decision.name,
+            },
+            update_modified=False,
+        )
+        frappe.db.set_value(
+            DECISION_DOCTYPE,
+            decision.name,
+            {"status": "Superseded", "superseded_by": correction_decision},
+            update_modified=False,
+        )
+        _append_event(
+            entity_doctype=DECISION_DOCTYPE,
+            entity_name=decision.name,
+            event_type="Supersede",
+            reason=reason,
+            nonce=event_nonce,
+            from_status="Active",
+            to_status="Superseded",
+            identity_decision=correction_decision,
+            identity_group=group.name,
+            metadata={
+                "corrected_splink_candidate": candidate.name,
+                "superseded_identity_decision": decision.name,
+            },
+            is_demonstration=demonstration,
+        )
+        frappe.db.set_value(
+            CANDIDATE_DOCTYPE,
+            candidate.name,
+            {
+                "materialization_status": REVERSAL_STATUS,
+                "correction_decision": correction_decision,
+                "reversed_at": now,
+                "reversed_by": frappe.session.user,
+                "reversal_reason": reason,
+                "materialization_error": None,
+            },
+            update_modified=False,
+        )
+        _append_event(
+            entity_doctype=CANDIDATE_DOCTYPE,
+            entity_name=candidate.name,
+            event_type="Supersede",
+            reason=reason,
+            nonce=event_nonce,
+            from_status="Applied",
+            to_status=REVERSAL_STATUS,
+            identity_decision=correction_decision,
+            identity_group=group.name,
+            metadata={"superseded_identity_decision": decision.name},
+            is_demonstration=demonstration,
+        )
+        frappe.db.commit()
+        return {
+            "status": REVERSAL_STATUS,
+            "candidate": candidate.name,
+            "superseded_identity_decision": decision.name,
+            "correction_decision": correction_decision,
+            "ended_identity_group": group.name,
+            "ended_memberships": [str(row.name) for row in memberships],
+            "created_exclusions": int(correction.get("created_exclusions") or 0),
+            "is_demonstration": demonstration,
+        }
+    except Exception:
+        frappe.db.rollback()
+        raise
 
 
 def _review_context(rows: Iterable[Any]) -> dict[str, Any]:

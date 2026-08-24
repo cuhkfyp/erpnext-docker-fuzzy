@@ -44,6 +44,7 @@ function render_candidate_evidence(frm, payload) {
 	const materialization = payload.materialization_status && payload.materialization_status !== "Not Final"
 		? `<div class="alert alert-secondary"><b>${__("Identity materialization")}</b>: ${esc(payload.materialization_status)}` +
 			`${payload.identity_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(payload.identity_decision)}">${__("open decision")}</a>` : ""}` +
+			`${payload.correction_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(payload.correction_decision)}">${__("open correction")}</a>` : ""}` +
 			`${payload.materialization_error ? `<br>${esc(payload.materialization_error)}` : ""}</div>`
 		: "";
 	const rows = (payload.attributes || []).map((row) =>
@@ -76,6 +77,104 @@ function load_candidate_evidence(frm) {
 					callback: () => frm.reload_doc(),
 				}), __("Identity Resolution"));
 			}
+			if (
+				payload.can_reverse_materialization &&
+				(frappe.user_roles || []).includes("System Manager")
+			) {
+				frm.add_custom_button(
+					__("Correct Applied Same to Different"),
+					() => preview_splink_same_correction(frm),
+					__("Identity Resolution"),
+				);
+			}
+		},
+	});
+}
+
+function preview_splink_same_correction(frm) {
+	frappe.call({
+		method: "db_connector.api_identity_human.preview_reverse_splink_same",
+		args: { candidate_name: frm.doc.name },
+		freeze: true,
+		callback(response) {
+			const preview = response.message || {};
+			const planned = preview.planned || {};
+			const switch_warning = preview.materialization_enabled
+				? `<div class="alert alert-danger">${__("Materialization is enabled. Disable it before applying this correction.")}</div>`
+				: `<div class="alert alert-success">${__("Materialization is disabled, as required for this correction.")}</div>`;
+			const membership_rows = (preview.memberships || []).map((row) =>
+				`<li>${esc(row.ccd_master)} — ${esc(row.membership)} (${esc(row.status)})</li>`
+			).join("");
+			const dialog = new frappe.ui.Dialog({
+				title: __("Correct Applied Same Decision"),
+				fields: [
+					{
+						fieldname: "warning",
+						fieldtype: "HTML",
+						options:
+							`<div class="alert alert-warning"><b>${__("This is an audited identity correction, not a record deletion.")}</b><br>` +
+							`${__("The two live memberships and their group will end; the old Same decision will be superseded; a new Different decision and one fingerprint-scoped exclusion will be created. CCD Master records are not merged or deleted.")}</div>` +
+							switch_warning +
+							`<p><b>${__("Candidate")}</b>: ${esc(preview.candidate)}<br>` +
+							`<b>${__("Original decision")}</b>: ${esc(preview.original_identity_decision)}<br>` +
+							`<b>${__("Identity group")}</b>: ${esc(preview.identity_group)}<br>` +
+							`<b>${__("Planned result")}</b>: ${esc(planned.ended_memberships)} ${__("memberships ended")}, ` +
+							`${esc(planned.new_exclusions)} ${__("Different exclusion created")}</p><ul>${membership_rows}</ul>`,
+					},
+					{
+						fieldname: "reason",
+						fieldtype: "Small Text",
+						label: __("Correction reason"),
+						reqd: 1,
+						description: __("Explain how the false Same decision was discovered."),
+					},
+					{
+						fieldname: "is_demonstration",
+						fieldtype: "Check",
+						label: __("Development / demonstration correction"),
+						default: 1,
+					},
+					{
+						fieldname: "confirm_candidate_name",
+						fieldtype: "Data",
+						label: __("Type the exact Candidate ID to confirm"),
+						reqd: 1,
+						description: esc(preview.candidate),
+					},
+				],
+				primary_action_label: __("Apply Audited Correction"),
+				primary_action(values) {
+					if (values.confirm_candidate_name !== preview.candidate) {
+						frappe.msgprint(__("The confirmation must exactly match Candidate {0}.", [preview.candidate]));
+						return;
+					}
+					if (preview.materialization_enabled) {
+						frappe.msgprint(__("Disable Materialization, then open this preview again."));
+						return;
+					}
+					frappe.call({
+						method: "db_connector.api_identity_human.reverse_applied_splink_same",
+						args: {
+							candidate_name: preview.candidate,
+							reason: values.reason,
+							confirm_candidate_name: values.confirm_candidate_name,
+							is_demonstration: values.is_demonstration ? 1 : 0,
+						},
+						freeze: true,
+						callback(result) {
+							dialog.hide();
+							const outcome = result.message || {};
+							frappe.msgprint(__("Candidate {0} is now {1}. Correction decision: {2}.", [
+								preview.candidate,
+								outcome.status || __("Reversed"),
+								outcome.correction_decision || "",
+							]));
+							frm.reload_doc();
+						},
+					});
+				},
+			});
+			dialog.show();
 		},
 	});
 }

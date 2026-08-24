@@ -746,6 +746,8 @@ PYTHONPATH=.:./db_connector \
 - `CCD Match Reviewer`, `CCD Match Sensitive Reviewer`, and System Manager
   permissions behave as designed;
 - ordinary reviewers cannot retrieve CCD record IDs through the identity view;
+- ordinary reviewers cannot see the applied-Same correction button and receive
+  `System Manager role is required` if they call either correction API directly;
 - Sensitive Reviewers/System Managers see only their permitted values; and
 - Identity Resolution Settings reports materialization disabled.
 
@@ -756,19 +758,20 @@ manifest. At the current checkpoint they are:
 
 | Object | Expected current count |
 | --- | ---: |
-| Proposed Tiered recommendations | 3,522 |
-| Approved Tiered recommendations | 6 |
+| Proposed Tiered recommendations | 3,519 |
+| Approved Tiered recommendations | 9 |
 | Exception recommendations | 433 |
 | Exception component reviews | 191 |
 | Splink Review Pool | 11,177 |
 | Splink work assigned | 0 |
-| Identity Decisions | 11 |
-| Active Identity Groups | 11 |
-| Active Identity Memberships | 25 |
+| Identity Decisions | 20 |
+| Active Identity Groups | 20 |
+| Active Identity Memberships | 46 |
 | Active Identity Exclusions | 7 |
-| Applied Activation batches | 2 |
-| Finalized/Applied Component Reviews | 4 |
-| Finalized Splink candidates | 2 (1 Applied, 1 Pending) |
+| Applied Activation batches | 3 (9 complete Tiered components) |
+| Finalized/Applied Component Reviews | 7 |
+| Applied Splink candidates | 4 |
+| Reversed Splink candidates | 0 |
 | Human Review batches | 0 |
 
 These are checkpoint values, not permanent constants. If migration occurs after
@@ -873,6 +876,36 @@ Normal identity correction is not a database restore:
 
 Use a full backup restore only for disaster recovery or a formally approved
 whole-site rollback.
+
+For one ordinary two-record Splink candidate that was applied as Same and was
+later found to be a false match, use the bounded correction on the **CCD Match
+Review Candidate** form:
+
+1. Disable **Materialization** in **CCD Identity Resolution Settings**.
+2. Sign in as a user whose resolved roles include the exact `System Manager`
+   role. Reviewer and Sensitive Reviewer roles alone are intentionally
+   insufficient.
+3. Open the applied candidate and choose **Identity Resolution → Correct
+   Applied Same to Different**.
+4. Inspect the zero-write preview. It must name exactly one live Group and its
+   two Memberships. If the group is larger, changed, or has mixed provenance,
+   stop and use complete-component correction instead.
+5. Enter the reason, keep **Development / demonstration correction** selected
+   only for deliberate non-production testing, type the exact candidate ID,
+   and apply.
+6. Verify that the candidate is `Reversed`; both Memberships and the Group are
+   `Ended`; the prior Same Decision is `Superseded`; the new correction
+   Decision is `Different`; and one active fingerprint-scoped Exclusion exists.
+7. Open both CCD Master records. Each should show **Resolved Separately** while
+   the exclusion fingerprints remain current, and neither source record should
+   have been deleted or physically merged.
+
+The button is hidden from non-managers, but visibility is not the security
+boundary: both preview and apply endpoints independently enforce System Manager.
+Apply also requires Materialization to remain off, a non-empty reason, exact-ID
+confirmation, record and identity-row locks, and the complete eligibility check
+inside one transaction. The original human labels and all old identity objects
+remain as audit history.
 
 ## 11. Activation after migration
 

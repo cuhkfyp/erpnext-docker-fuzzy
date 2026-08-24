@@ -11,7 +11,7 @@
 | Deployment | Schema, services, controllers, managed CCD Master Client Script, and frontend assets deployed |
 | Materialization | Disabled by default (`materialization_enabled = 0`) |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
-| Live identity writes | Development testing applied: 11 Decisions, 11 active Groups, 25 active Memberships, and 7 active Exclusions |
+| Live identity writes | Development testing applied: 20 Decisions, 20 active Groups, 46 active Memberships, and 7 active Exclusions |
 
 The predecessor session completed the workflow specification and pushed it at
 commit `cfef788`. This fresh session recovered that durable artifact, audited
@@ -69,6 +69,12 @@ CCD Master source documents.
   exactly 1–25 finalized Pending/Exception decisions, preview every planned
   object, reject overlapping participants, and apply the complete set
   atomically.
+- A deliberately narrow false-Same correction on an applied two-record Splink
+  candidate. It is System-Manager-only in both the form and server APIs,
+  requires Materialization off, a zero-write preview, mandatory reason, and
+  exact candidate-ID confirmation, then atomically ends the two Memberships and
+  Group, creates a fingerprint-scoped Different decision/exclusion, supersedes
+  the old Same Decision, and preserves the original reviews and audit history.
 - An idempotently managed **CCD Master Identity Resolution** Form Client Script
   for the current custom CCD Master DocType. Frappe skips `doctype_js` hooks for
   custom DocTypes, so checking the form metadata is a mandatory deployment
@@ -99,33 +105,43 @@ CCD Master source documents.
 - The Component Review and Splink Review Candidate list hooks and frontend
   assets are deployed. Their bulk APIs reject ineligible rows without writing
   and report the global switch state.
+- The two-record Splink false-Same correction schema and form are deployed.
+  Candidate `8ac22119c8` passed the zero-write eligibility preview with exactly
+  one active Group and two active Memberships while Materialization was off.
+  A real non-manager Reviewer received `System Manager role is required` from
+  the preview API; that same reviewer's evidence payload reported
+  `can_reverse_materialization = false` and omitted the manager-only correction
+  Decision field. No candidate was reversed during deployment verification.
 - Splink candidate `ed9e2a25c4` is now `Applied`. This bulk-workflow deployment
   performed no identity writes. The remaining finalized candidate `8ac22119c8`
   passes the new zero-write bulk preview with two frozen fingerprints, two
   matching timestamps, zero conflicts, one planned Group, and two planned
   Memberships while Materialization is off.
-- Post-repair **Preview Approve All** covers 3,514 remaining complete Tiered
-  components / 3,522 recommendations with zero unsafe or stale components and
-  7,032 planned Memberships.
+- Current **Preview Approve All** covers 3,511 remaining complete Tiered
+  components / 3,519 recommendations. It reports 3,510 safe, one unsafe, zero
+  stale, and 7,024 planned Memberships; the one conflict is
+  `partial_existing_identity_group` from the already identified Splink/Tiered
+  overlap and is not eligible for a batch.
 
 ### Live read-only state
 
 | Measure | Result |
 | --- | ---: |
 | Frozen Tiered recommendations | 3,961 |
-| Proposed | 3,522 |
+| Proposed | 3,519 |
 | Exception | 433 |
-| Approved | 6 |
+| Approved | 9 |
 | Splink candidates available | 11,177 |
 | Splink candidates assigned | 0 |
 | Component reviews | 191 |
-| Identity decisions | 11 |
-| Identity groups | 11 active |
-| Identity memberships | 25 active |
-| Identity exclusions/events | 7 active exclusions / 47 create-activate events |
-| Activation batches | 2 (`Applied`; 6 complete Tiered components total) |
-| Finalized Component Reviews | 4 (`Agreed` / `Applied`) |
-| Finalized Splink candidates | 2 (`1 Applied`, `1 Pending`) |
+| Identity decisions | 20 active |
+| Identity groups | 20 active |
+| Identity memberships | 46 active |
+| Identity exclusions/events | 7 active exclusions / 86 events |
+| Activation batches | 3 (`Applied`; 9 complete Tiered components total) |
+| Finalized Component Reviews | 7 (`Agreed` / `Applied`) |
+| Applied Splink candidates | 4 |
+| Reversed Splink candidates | 0 |
 | Review batches | 0 |
 | QC investigations | 0 |
 
@@ -135,24 +151,24 @@ For canary `p1mucmhogd`, **Preview Approve All** returned:
 
 | Measure | Result |
 | --- | ---: |
-| Selected complete components | 3,520 |
-| Selected recommendations | 3,528 |
-| Safe components | 3,520 |
-| Unsafe components | 0 |
+| Selected complete components | 3,511 |
+| Selected recommendations | 3,519 |
+| Safe components | 3,510 |
+| Unsafe components | 1 (`partial_existing_identity_group`) |
 | Stale components | 0 |
-| Planned identity groups | 3,520 |
-| Planned memberships | 7,044 |
-| Conflict counts | 0 |
+| Planned identity groups | 3,510 |
+| Planned memberships | 7,024 |
+| Conflict counts | 1 |
 
-The preview made zero writes. A subsequent, separately approved five-component
-development pilot created the live counts recorded above; it did not change the
-zero-write meaning of Preview.
+The preview made zero writes. Three separately approved development batches
+have applied nine Tiered components in total; they created the live counts
+recorded above but did not change the zero-write meaning of Preview.
 
-The 3,520 components are 3,516 two-record components containing one
+The 3,511 selected components are 3,507 two-record components containing one
 recommendation each and four three-record components containing three
 recommendations each. Thus the eight-count difference between recommendations
-and components is an edge-count difference; those four triplets account for 12
-of the 7,044 planned member records.
+and components is an edge-count difference. The one unsafe two-record component
+is excluded from planned writes, leaving 7,024 planned member records.
 
 ## Next controlled decision
 
@@ -161,8 +177,8 @@ Before any further activation:
 
 1. complete browser acceptance for Linked, Resolved Separately, and Not Grouped
    CCD Master records;
-2. verify the eleven Groups, twenty-five Memberships, seven Exclusions,
-   forty-seven create/activate Events,
+2. verify the twenty Groups, forty-six Memberships, seven Exclusions,
+   eighty-six Events,
    masking, QC assignments, idempotent re-Apply behavior, and correction path;
 3. demonstrate the bounded pilot and obtain explicit management authorization;
 4. create and inspect a new component-atomic batch for the authorized scope;
