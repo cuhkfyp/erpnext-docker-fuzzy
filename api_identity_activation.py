@@ -21,6 +21,7 @@ from db_connector.api_identity_resolution import (
     preview_materialization,
 )
 from db_connector.fuzzy_matching.identity import expected_identity_fingerprints
+from db_connector.fuzzy_matching.overlap import structural_overlap_only
 
 RUN_DOCTYPE = "CCD Match Canary Run"
 RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
@@ -248,6 +249,7 @@ def _preview_components(run: Any, selected: list[tuple[str, list[Any]]]) -> dict
         component_summaries.append(
             {
                 "component_fingerprint": component_key,
+                "recommendation_names": [str(row.name) for row in rows],
                 "recommendation_count": len(rows),
                 "record_count": len(context["record_ids"]),
                 "safe": not conflicts,
@@ -299,14 +301,15 @@ def _selection_fingerprint(
     ).hexdigest()
 
 
-@frappe.whitelist()
-def create_activation_batch(
+def _create_activation_batch(
     run_name: str,
     selection_method: str = "Explicit Wave",
     component_limit: int | str | None = None,
     component_keys_json: str | list[str] | None = None,
     is_pilot_wave: int | str = 0,
     is_demonstration: int | str = 0,
+    *,
+    allow_structural_overlap: bool = False,
 ) -> dict[str, Any]:
     _require_manager()
     allowed_methods = {
@@ -315,6 +318,8 @@ def create_activation_batch(
         "Approve All Remaining",
         "Synthetic Test",
     }
+    if allow_structural_overlap:
+        allowed_methods.add("Overlap Resolution")
     if selection_method not in allowed_methods:
         frappe.throw("Unsupported Activation Batch selection method")
     run = _run(run_name)
@@ -332,7 +337,21 @@ def create_activation_batch(
         frappe.throw("No available Proposed components were selected")
     preview = _preview_components(run, selected)
     if preview["unsafe_component_count"]:
-        frappe.throw("Activation Batch selection contains stale or unsafe components")
+        if not allow_structural_overlap:
+            frappe.throw("Activation Batch selection contains stale or unsafe components")
+        unsafe = [row for row in preview["components"] if not row["safe"]]
+        if (
+            len(selected) != 1
+            or len(unsafe) != 1
+            or not structural_overlap_only(
+                unsafe[0]["conflicts"], stale=bool(preview["stale_component_count"])
+            )
+        ):
+            frappe.throw(
+                "Only one current component with structural identity overlap may use an Overlap Resolution Batch"
+            )
+    elif allow_structural_overlap:
+        frappe.throw("This component is safe; use a normal Activation Batch")
     selection_fingerprint = _selection_fingerprint(run.name, selection_method, selected)
     existing = frappe.db.get_value(
         BATCH_DOCTYPE, {"selection_fingerprint": selection_fingerprint}, "name"
@@ -377,16 +396,62 @@ def create_activation_batch(
                 "recommendation_count": len(rows),
                 "record_count": len(context["record_ids"]),
                 "source_pairs": ", ".join(_source_pair_labels(rows)),
-                "status": "Planned",
+                "status": "Exception" if summary["conflicts"] else "Planned",
                 "recommendation_names_json": _json(context["recommendations"]),
                 "planned_group_key": hashlib.sha256(
                     f"{idempotency_key}\x1f{component_key}".encode()
                 ).hexdigest(),
+                "error_code": (
+                    "overlap_resolution_required:" + ",".join(summary["conflicts"])
+                    if summary["conflicts"]
+                    else ""
+                ),
             },
         )
     batch.insert(ignore_permissions=True)
     frappe.db.commit()
     return {"batch": batch.name, "status": batch.status, **{k: v for k, v in preview.items() if k != "components"}}
+
+
+@frappe.whitelist()
+def create_activation_batch(
+    run_name: str,
+    selection_method: str = "Explicit Wave",
+    component_limit: int | str | None = None,
+    component_keys_json: str | list[str] | None = None,
+    is_pilot_wave: int | str = 0,
+    is_demonstration: int | str = 0,
+) -> dict[str, Any]:
+    return _create_activation_batch(
+        run_name,
+        selection_method,
+        component_limit,
+        component_keys_json,
+        is_pilot_wave,
+        is_demonstration,
+        allow_structural_overlap=False,
+    )
+
+
+@frappe.whitelist()
+def create_overlap_resolution_batch(
+    recommendation_name: str,
+    is_demonstration: int | str = 0,
+) -> dict[str, Any]:
+    """Freeze one structurally overlapping Tiered component for approval."""
+    _require_manager()
+    recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, recommendation_name)
+    if recommendation.status != "Proposed" or recommendation.rollout_state == "Held":
+        frappe.throw("Select an available Proposed Tiered recommendation")
+    return _create_activation_batch(
+        str(recommendation.canary_run),
+        "Overlap Resolution",
+        None,
+        [str(recommendation.cluster_fingerprint)],
+        0,
+        is_demonstration,
+        allow_structural_overlap=True,
+    )
 
 
 @frappe.whitelist()
@@ -506,6 +571,8 @@ def revalidate_failed_activation_batch(batch_name: str) -> dict[str, Any]:
     components = _component_rows(run.name)
     selected: list[tuple[str, list[Any]]] = []
     for item in batch.items:
+        if item.status in {"Applied", "Already Applied", "Corrected"}:
+            continue
         component_key = str(item.component_fingerprint)
         rows = components.get(component_key)
         expected_names = sorted(json.loads(item.recommendation_names_json or "[]"))
@@ -555,11 +622,18 @@ def apply_activation_batch(batch_name: str) -> dict[str, Any]:
     run = _run(batch.canary_run)
     if run.policy_snapshot_sha256 != batch.policy_snapshot_sha256:
         frappe.throw("Activation Batch and canary policy snapshots differ")
+    if any(item.status == "Exception" for item in batch.items):
+        frappe.throw(
+            "This batch contains a structural overlap; use Resolve Overlap on its Exception item"
+        )
     batch.db_set("status", "Applying", update_modified=False)
     try:
-        created_groups = created_memberships = 0
+        created_groups = int(batch.created_group_count or 0)
+        created_memberships = int(batch.created_membership_count or 0)
         components = _component_rows(run.name)
         for item in batch.items:
+            if item.status in {"Applied", "Already Applied", "Corrected"}:
+                continue
             rows = components.get(str(item.component_fingerprint))
             if not rows:
                 frappe.throw("A selected component is no longer fully Proposed")

@@ -1,5 +1,15 @@
 frappe.ui.form.on("CCD Identity Activation Batch", {
 	refresh(frm) {
+		const canResolveOverlap = frappe.user.has_role("System Manager") &&
+			frm.doc.status === "Approved";
+		if (frm.fields_dict.items && frm.fields_dict.items.grid) {
+			frm.fields_dict.items.grid.update_docfield_property(
+				"resolve_overlap",
+				"hidden",
+				canResolveOverlap ? 0 : 1,
+			);
+			frm.fields_dict.items.grid.refresh();
+		}
 		if (frm.is_new() || !frappe.user.has_role("System Manager")) return;
 		if (frm.doc.status === "Reviewed") {
 			frm.add_custom_button(__("Approve Batch"), () => {
@@ -13,7 +23,8 @@ frappe.ui.form.on("CCD Identity Activation Batch", {
 				);
 			});
 		}
-		if (frm.doc.status === "Approved") {
+		const hasStructuralOverlap = (frm.doc.items || []).some((item) => item.status === "Exception");
+		if (frm.doc.status === "Approved" && !hasStructuralOverlap) {
 			frm.add_custom_button(__("Apply Approved Batch"), () => {
 				frappe.confirm(
 					__("Run fresh safety checks and create reversible Identity Decisions, Groups, and Memberships? This is blocked while Live Identity Materialization is disabled or paused."),
@@ -54,6 +65,23 @@ frappe.ui.form.on("CCD Identity Activation Item", {
 				show_activation_component(response.message || {});
 			},
 		});
+	},
+	resolve_overlap(frm, cdt, cdn) {
+		const row = locals[cdt][cdn];
+		if (!(frappe.user_roles || []).includes("System Manager")) return;
+		if (frm.doc.status !== "Approved") {
+			frappe.msgprint(__("Approve the frozen Activation Batch before resolving an overlap."));
+			return;
+		}
+		if (!["Planned", "Failed", "Exception"].includes(row.status)) {
+			frappe.msgprint(__("Only an unapplied Activation Item can start overlap resolution."));
+			return;
+		}
+		window.db_connector_identity_overlap.open(
+			"CCD Identity Activation Item",
+			row.name,
+			() => frm.reload_doc(),
+		);
 	},
 });
 

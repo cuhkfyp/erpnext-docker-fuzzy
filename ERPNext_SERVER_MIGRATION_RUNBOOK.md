@@ -5,7 +5,7 @@
 | Item | Value |
 | --- | --- |
 | Purpose | Move the guarded CCD matching and identity-resolution setup to another ERPNext server |
-| Runbook date | 2026-08-24 UTC |
+| Runbook date | 2026-08-25 UTC |
 | Implementation code checkpoint | The reviewed Git commit containing this runbook, or a reviewed successor |
 | Source site at writing | `frontend` |
 | Source framework baseline | Frappe 15.73.0 / ERPNext 15.70.0 |
@@ -711,6 +711,9 @@ docker exec frappe_docker-frontend-1 test -f \
 docker exec frappe_docker-frontend-1 test -f \
   /home/frappe/frappe-bench/apps/db_connector/db_connector/public/js/ccd_match_component_review_list.js
 
+docker exec frappe_docker-frontend-1 test -f \
+  /home/frappe/frappe-bench/apps/db_connector/db_connector/public/js/identity_overlap_resolution.js
+
 docker exec frappe_docker-backend-1 curl --noproxy '*' --fail --silent \
   --show-error -H 'Host: <target-hostname>' \
   http://frontend:8080/assets/db_connector/js/ccd_master_identity_resolution.js \
@@ -738,7 +741,8 @@ PYTHONPATH=.:./db_connector \
 
 ### 9.2 Schema and security checks
 
-- every `CCD Identity *` (including `CCD Identity Correction`) and `CCD Match
+- every `CCD Identity *` (including `CCD Identity Correction` and `CCD Identity
+  Overlap Resolution`) and `CCD Match
   Review Batch*` DocType loads;
 - CCD Master contains the Identity Resolution tab/custom HTML field;
 - an enabled **CCD Master Identity Resolution** Client Script exists when CCD
@@ -749,6 +753,8 @@ PYTHONPATH=.:./db_connector \
 - ordinary reviewers cannot retrieve CCD record IDs through the identity view;
 - ordinary reviewers cannot see either identity-correction action and receive
   `System Manager role is required` if they call preview or Apply APIs directly;
+- ordinary and Sensitive Reviewers cannot invoke the combined-overlap preview
+  or Apply APIs, and the Activation Item overlap control is hidden from them;
 - Sensitive Reviewers/System Managers see only their permitted values; and
 - Identity Resolution Settings reports materialization disabled.
 
@@ -759,21 +765,23 @@ manifest. At the current checkpoint they are:
 
 | Object | Expected current count |
 | --- | ---: |
-| Proposed Tiered recommendations | 3,519 |
-| Approved Tiered recommendations | 9 |
+| Proposed Tiered recommendations | 3,517 |
+| Approved Tiered recommendations | 10 |
+| Superseded Tiered recommendations | 1 |
 | Exception recommendations | 433 |
 | Exception component reviews | 191 |
 | Splink Review Pool | 11,177 |
 | Splink work assigned | 0 |
-| Identity Decisions | 22 total (21 active / 1 superseded) |
-| Identity Groups | 21 total (20 active / 1 ended) |
-| Identity Memberships | 48 total (46 active / 2 ended) |
-| Active Identity Exclusions | 8 |
-| Applied Activation batches | 3 (9 complete Tiered components) |
-| Finalized/Applied Component Reviews | 7 |
-| Applied Splink candidates | 4 |
-| Reversed Splink candidates | 1 |
-| Complete identity corrections | 0 |
+| Identity Decisions | 33 total (27 active / 6 superseded) |
+| Identity Groups | 30 total (25 active / 5 ended) |
+| Identity Memberships | 68 total (58 active / 10 ended) |
+| Active Identity Exclusions | 9 |
+| Applied Activation batches | 4 (10 Applied / 1 Corrected items) |
+| Finalized Component Reviews | 9 (7 Applied / 2 Corrected) |
+| Applied Splink candidates | 5 |
+| Reversed Splink candidates | 2 |
+| Complete identity corrections | 4 total (3 applied / 1 superseded) |
+| Combined overlap resolutions | 0 |
 | Human Review batches | 0 |
 
 These are checkpoint values, not permanent constants. If migration occurs after
@@ -1160,6 +1168,56 @@ materializer acquires CCD record locks and then compares current values with
 both frozen values immediately before writing; missing snapshot metadata fails
 closed as `frozen_identity_snapshot_incomplete`.
 
+### 11.6 Resolve a pending decision that overlaps existing identity state
+
+Do not use the independent bulk retry actions when a finalized pending Splink,
+Exception Component, or Tiered component touches an active Group, an active
+Different exclusion, or another finalized pending decision. Open the pending
+Splink/Component source and use **Identity Resolution → Preview Combined
+Identity Component**. For Tiered Evidence, **Preview Approve All** lists each
+unsafe component and links one Recommendation. Open that Recommendation, choose
+**Prepare Overlap Resolution Batch**, review and approve the one-component
+frozen batch, then use its **Resolve Overlap** row action. The special batch
+accepts only structural group/exclusion overlap; stale, fingerprint, HKID, and
+other safety failures remain rejected. Ordinary **Apply Approved Batch** is
+unavailable while its Exception item awaits combined resolution.
+
+The System-Manager-only preview performs no writes. It recursively expands a
+bounded 2–25-record scope through complete active Same Groups, active Different
+exclusions, and every connected finalized `Pending`/`Exception` source across
+all three routes. Unreviewed Splink/Component work and unapproved Tiered
+proposals are displayed as adjacent evidence only. They are not absorbed and
+cannot enlarge the authoritative scope until finalized and deliberately
+prepared for application.
+
+1. Keep Materialization off while opening the combined preview.
+2. Inspect every included authoritative source, adjacent unresolved source,
+   current live partition, and suggested partition.
+3. Choose **All Same**, **All Different**, or construct the complete **Partial
+   Match** partition. Every record must occur exactly once. Cross-partition
+   pairs become fingerprint-scoped Different exclusions.
+4. Run **Preview Final Atomic Result** and inspect ended/superseded/created
+   counts and every warning. If the exact complete state is already live, Apply
+   records an audited **No Change** outcome without creating relationship
+   objects and does not require Materialization.
+5. For a changed result, take the activation checkpoint, confirm the QC circuit
+   breaker is clear, briefly enable Materialization, reopen the preview, enter
+   the evidence-based reason, explicitly accept any warnings, type the exact
+   seed document ID, and Apply.
+6. Turn Materialization off immediately afterward. Verify the immutable **CCD
+   Identity Overlap Resolution**, replacement Decision, current Groups,
+   Memberships, Exclusions, Events, source statuses, and every participant's
+   CCD Master Identity Resolution view.
+
+Apply locks all CCD participants, current relationship rows, every included
+frozen source document/recommendation, and displayed adjacent review sources;
+then it recomputes the scope and its fingerprint. A changed record, policy
+snapshot, pending decision, relationship, or circuit-breaker state aborts the
+transaction. It never edits, merges, or deletes a CCD Master. A migration must
+therefore include `api_identity_overlap.py`, `fuzzy_matching/overlap.py`, the
+`CCD Identity Overlap Resolution` DocType, its global JavaScript asset, and the
+Activation Item `Resolve Overlap` field—not only the older correction files.
+
 ## 12. Sign-off checklist
 
 Before declaring transfer complete, record:
@@ -1175,6 +1233,7 @@ Before declaring transfer complete, record:
 - [ ] schema/index/custom-field result;
 - [ ] aggregate source-versus-target count comparison;
 - [ ] permissions/masking checks;
+- [ ] combined-overlap API/DocType/asset and non-manager denial checks;
 - [ ] materialization disabled;
 - [ ] zero-write preview result, when a canary exists;
 - [ ] rollback owner/window; and
@@ -1191,6 +1250,7 @@ Before declaring transfer complete, record:
 | Current-host Docker deployment | `deployment/deploy_db_connector.sh` |
 | Idempotent schema/custom-field/Client-Script setup | `identity_resolution_setup.py` |
 | Timestamp-guarded legacy snapshot repair | `identity_snapshot_backfill.py` |
+| Pending/active overlap expansion and atomic resolution | `api_identity_overlap.py`, `fuzzy_matching/overlap.py`, and `public/js/identity_overlap_resolution.js` |
 | Exact versioned component | Git commit recorded in Document control |
 
 If these sources disagree, stop before activation and reconcile the

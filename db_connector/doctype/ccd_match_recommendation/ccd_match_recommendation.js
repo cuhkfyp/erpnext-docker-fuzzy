@@ -18,6 +18,23 @@ frappe.ui.form.on("CCD Match Recommendation", {
 			);
 		}
 		if (frm.doc.status === "Proposed" && !frm.doc.identity_decision) {
+			frm.add_custom_button(
+				__("Prepare Overlap Resolution Batch"),
+				() => frappe.confirm(
+					__("Freeze this complete Tiered component into a reviewed batch only if its sole safety problem is existing identity overlap? This creates no identity links."),
+					() => frappe.call({
+						method: "db_connector.api_identity_activation.create_overlap_resolution_batch",
+						args: { recommendation_name: frm.doc.name },
+						freeze: true,
+						callback(response) {
+							if (response.message?.batch) {
+								frappe.set_route("Form", "CCD Identity Activation Batch", response.message.batch);
+							}
+						},
+					}),
+				),
+				__("Identity Resolution"),
+			);
 			frm.add_custom_button(__("Withdraw Recommendation"), () => {
 				frappe.prompt(
 					[{ fieldname: "reason", fieldtype: "Small Text", label: __("Withdrawal Reason"), reqd: 1 }],

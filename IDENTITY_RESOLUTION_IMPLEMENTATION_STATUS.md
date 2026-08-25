@@ -4,14 +4,14 @@
 
 | Item | Verified state |
 | --- | --- |
-| Date | 2026-08-24 UTC |
+| Date | 2026-08-25 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
 | Deployment | Schema, services, controllers, managed CCD Master Client Script, and frontend assets deployed |
 | Materialization | Disabled by default (`materialization_enabled = 0`) |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
-| Live identity writes | Development testing: 22 Decisions (21 active / 1 superseded), 21 Groups (20 active / 1 ended), 48 Memberships (46 active / 2 ended), and 8 active Exclusions |
+| Live identity writes | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
 
 The predecessor session completed the workflow specification and pushed it at
 commit `cfef788`. This fresh session recovered that durable artifact, audited
@@ -24,6 +24,10 @@ development decisions were applied after verified backup checkpoints.
 Materialization was turned off again immediately afterward. The waves created
 reversible identity objects only; they did not merge or modify the participating
 CCD Master source documents.
+
+On 2026-08-25, the unified overlap resolver was deployed and tested with
+Materialization still off. Its live tests used transaction rollback; they did
+not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
 
 ## Implemented controls
 
@@ -83,6 +87,23 @@ CCD Master source documents.
   and atomically ends or supersedes all affected relationship objects before
   creating the versioned replacement. Each application creates an immutable
   `CCD Identity Correction`; no CCD Master record is edited or merged.
+- A unified System-Manager-only **Combined Identity Component** workflow for a
+  finalized pending Splink decision, Exception Component Review, or approved
+  Tiered Activation Item that overlaps existing identity state. Its zero-write
+  preview recursively includes complete active Groups, applicable active
+  Different exclusions, and all connected finalized pending sources across the
+  three routes. Unreviewed work remains adjacent evidence only. The operator
+  chooses All Same, All Different, or one complete Partial partition; Apply is
+  one lock-protected transaction with a frozen scope fingerprint and immutable
+  `CCD Identity Overlap Resolution` audit. A true already-represented result
+  records No Change without creating identity objects. Changed results require
+  Materialization enabled, while a tripped QC circuit breaker fails closed.
+- Tiered structural overlaps are reachable without weakening ordinary batch
+  safety: Preview Approve All links each unsafe component to a Recommendation;
+  a manager may freeze exactly one structurally overlapping component into an
+  **Overlap Resolution** batch, review/approve it, and use the Exception item's
+  Resolve Overlap action. Stale or non-structural unsafe components remain
+  rejected, and ordinary batch Apply refuses unresolved Exception items.
 - Corrected Component Review evidence now separates the immutable reviewer
   outcome from the live identity state. The original decision is labelled
   **Original reviewed grouping (historical)**, while the latest decision in its
@@ -104,7 +125,9 @@ CCD Master source documents.
 
 - All new and modified DocType JSON files parse successfully.
 - Python compilation succeeds.
-- The complete in-container test suite passes: 70 tests, 0 failures.
+- The complete test suite passes: 74 tests, 0 failures, including transitive
+  overlap partition, Different-constraint conflict, and active-group split
+  detection tests.
 - Frappe migration, role/policy setup, workflow installation, asset build,
   cache clear, and service restart completed.
 - The frontend-local public renderer is served with HTTP 200, and live CCD
@@ -113,6 +136,24 @@ CCD Master source documents.
 - All backend, scheduler, and queue containers are running; two workers are
   online.
 - Re-running setup is designed to be idempotent.
+- The deployed combined preview was exercised against finalized Splink
+  candidate `d41a94b39e` inside an isolated rollback-only transaction. It
+  expanded the complete active two-record Group, included the one authoritative
+  pending source, displayed seven adjacent unreviewed sources without absorbing
+  them, recognized the final state as Already Represented, and left all live
+  object counts unchanged. The candidate returned to `Applied` afterward.
+- A real non-manager Reviewer received `System Manager role is required` from
+  the combined-preview API. The changed-partition Apply path was rejected while
+  Materialization was off. With commit suppressed, the Already Represented path
+  transiently created exactly one `No Change` overlap audit and one Event, no
+  identity objects, then a full rollback restored every count and source status.
+- Tiered recommendation `roocvcovtr` exercised the dedicated entry route with
+  commit suppressed. It transiently produced one Reviewed **Overlap
+  Resolution** batch and one Exception item carrying
+  `partial_existing_identity_group`; normal approval exposed a safe zero-write
+  three-record combined preview, ordinary batch Apply was refused, and rollback
+  restored both batch/item counts. No batch or identity object from the probe
+  remains.
 - Live API checks prove all three identity-view branches: a partial-match
   singleton returns `Resolved Separately` with three current exclusions, its
   linked pair member returns `Linked` despite also participating in exclusions,
@@ -165,21 +206,23 @@ CCD Master source documents.
 | Measure | Result |
 | --- | ---: |
 | Frozen Tiered recommendations | 3,961 |
-| Proposed | 3,519 |
+| Proposed | 3,517 |
 | Exception | 433 |
-| Approved | 9 |
+| Approved | 10 |
+| Superseded recommendations | 1 |
 | Splink candidates available | 11,177 |
 | Splink candidates assigned | 0 |
 | Component reviews | 191 |
-| Identity decisions | 22 total (21 active / 1 superseded) |
-| Identity groups | 21 total (20 active / 1 ended) |
-| Identity memberships | 48 total (46 active / 2 ended) |
-| Identity exclusions/events | 8 active exclusions / 96 events |
-| Complete identity corrections | 0 (previews only) |
-| Activation batches | 3 (`Applied`; 9 complete Tiered components total) |
-| Finalized Component Reviews | 7 (`Agreed` / `Applied`) |
-| Applied Splink candidates | 4 |
-| Reversed Splink candidates | 1 |
+| Identity decisions | 33 total (27 active / 6 superseded) |
+| Identity groups | 30 total (25 active / 5 ended) |
+| Identity memberships | 68 total (58 active / 10 ended) |
+| Identity exclusions/events | 9 active exclusions / 163 events |
+| Complete identity corrections | 4 total (3 applied / 1 superseded) |
+| Combined overlap resolutions | 0 |
+| Activation batches | 4 (`Applied`; 10 Applied and 1 Corrected items) |
+| Finalized Component Reviews | 9 (7 Applied / 2 Corrected) |
+| Applied Splink candidates | 5 |
+| Reversed Splink candidates | 2 |
 | Review batches | 0 |
 | QC investigations | 0 |
 
@@ -189,24 +232,24 @@ For canary `p1mucmhogd`, **Preview Approve All** returned:
 
 | Measure | Result |
 | --- | ---: |
-| Selected complete components | 3,511 |
-| Selected recommendations | 3,519 |
-| Safe components | 3,510 |
-| Unsafe components | 1 (`partial_existing_identity_group`) |
+| Selected complete components | 3,509 |
+| Selected recommendations | 3,517 |
+| Safe components | 3,507 |
+| Unsafe components | 2 (`partial_existing_identity_group`) |
 | Stale components | 0 |
-| Planned identity groups | 3,510 |
-| Planned memberships | 7,024 |
-| Conflict counts | 1 |
+| Planned identity groups | 3,507 |
+| Planned memberships | 7,018 |
+| Conflict counts | 2 |
 
 The preview made zero writes. Three separately approved development batches
 have applied nine Tiered components in total; they created the live counts
 recorded above but did not change the zero-write meaning of Preview.
 
-The 3,511 selected components are 3,507 two-record components containing one
+The 3,509 selected components are 3,505 two-record components containing one
 recommendation each and four three-record components containing three
 recommendations each. Thus the eight-count difference between recommendations
-and components is an edge-count difference. The one unsafe two-record component
-is excluded from planned writes, leaving 7,024 planned member records.
+and components is an edge-count difference. The two unsafe components are
+excluded from planned writes, leaving 7,018 planned member records.
 
 ## Next controlled decision
 
@@ -215,8 +258,8 @@ Before any further activation:
 
 1. complete browser acceptance for Linked, Resolved Separately, and Not Grouped
    CCD Master records;
-2. verify the twenty active Groups, forty-six active Memberships, eight active
-   Exclusions, ninety-six Events,
+2. verify the twenty-five active Groups, fifty-eight active Memberships, nine
+   active Exclusions, 163 Events,
    masking, QC assignments, idempotent re-Apply behavior, and correction path;
 3. demonstrate the bounded pilot and obtain explicit management authorization;
 4. create and inspect a new component-atomic batch for the authorized scope;

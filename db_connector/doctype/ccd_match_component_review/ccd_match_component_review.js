@@ -107,6 +107,17 @@ function load_component_evidence(frm) {
 			if (payload.can_submit) add_component_buttons(frm, payload, false);
 			if (payload.can_adjudicate) add_component_buttons(frm, payload, true);
 			if (payload.can_materialize) {
+				if ((frappe.user_roles || []).includes("System Manager")) {
+					frm.add_custom_button(
+						__("Preview Combined Identity Component"),
+						() => window.db_connector_identity_overlap.open(
+							"CCD Match Component Review",
+							frm.doc.name,
+							() => frm.reload_doc(),
+						),
+						__("Identity Resolution"),
+					);
+				}
 				frm.add_custom_button(__("Retry Identity Materialization"), () => frappe.call({
 					method: "db_connector.api_identity_human.materialize_component_review",
 					args: { review_name: frm.doc.name },

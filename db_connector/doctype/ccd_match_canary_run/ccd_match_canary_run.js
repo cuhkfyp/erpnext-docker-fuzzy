@@ -49,6 +49,16 @@ function add_manager_actions(frm) {
 				freeze: true,
 				callback(response) {
 					const result = response.message || {};
+					const unsafe = (result.components || []).filter((component) => !component.safe);
+					const unsafeHtml = unsafe.length
+						? `<p><strong>${__("Unsafe component details")}</strong></p><ul>${unsafe.map((component) => {
+							const recommendation = (component.recommendation_names || [])[0] || "";
+							const link = recommendation
+								? `<a href="/app/ccd-match-recommendation/${encodeURIComponent(recommendation)}">${frappe.utils.escape_html(recommendation)}</a>`
+								: frappe.utils.escape_html(component.component_fingerprint || "");
+							return `<li>${link}: ${frappe.utils.escape_html((component.conflicts || []).join(", "))}</li>`;
+						}).join("")}</ul><p>${__("Open a linked recommendation and use Prepare Overlap Resolution Batch when the listed failure is structural identity overlap.")}</p>`
+						: "";
 					frappe.msgprint({
 						title: __("Zero-write activation preview"),
 						indicator: result.unsafe_component_count ? "orange" : "green",
@@ -56,6 +66,7 @@ function add_manager_actions(frm) {
 							`<p>${__("Recommendations")}: ${result.selected_recommendation_count || 0}</p>` +
 							`<p>${__("Planned groups / memberships")}: ${result.planned_identity_group_count || 0} / ${result.planned_membership_count || 0}</p>` +
 							`<p>${__("Unsafe components")}: ${result.unsafe_component_count || 0}</p>` +
+							unsafeHtml +
 							`<p><strong>${__("No records were written.")}</strong></p>`,
 					});
 				},

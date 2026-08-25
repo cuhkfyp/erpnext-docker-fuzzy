@@ -86,6 +86,7 @@ for container in "${containers[@]}"; do
 			db_connector/api_identity_activation.py \
 			db_connector/api_identity_correction.py \
 			db_connector/api_identity_human.py \
+			db_connector/api_identity_overlap.py \
 			db_connector/api_identity_qc.py \
 			db_connector/api_identity_resolution.py \
 			db_connector/api_identity_review_batch.py \

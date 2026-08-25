@@ -70,6 +70,17 @@ function load_candidate_evidence(frm) {
 			if (payload.can_submit) add_review_buttons(frm);
 			if (payload.can_adjudicate) add_adjudication_buttons(frm);
 			if (payload.can_materialize) {
+				if ((frappe.user_roles || []).includes("System Manager")) {
+					frm.add_custom_button(
+						__("Preview Combined Identity Component"),
+						() => window.db_connector_identity_overlap.open(
+							"CCD Match Review Candidate",
+							frm.doc.name,
+							() => frm.reload_doc(),
+						),
+						__("Identity Resolution"),
+					);
+				}
 				frm.add_custom_button(__("Retry Identity Materialization"), () => frappe.call({
 					method: "db_connector.api_identity_human.materialize_review_candidate",
 					args: { candidate_name: frm.doc.name },

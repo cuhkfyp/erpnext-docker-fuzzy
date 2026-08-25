@@ -636,6 +636,30 @@ prior Governance Override through one System-Manager-only, 2–25-record,
 lock-protected transaction. Its zero-write preview freezes the expanded live
 scope and its replacement partition before Apply.
 
+### Pending decision overlaps active or pending identity state
+
+An unapplied finalized decision is not corrected because it has not yet created
+identity objects. When it touches an existing Group, active Different
+exclusion, or another finalized pending source, it enters the unified combined
+component workflow instead of an independent retry.
+
+The preview recursively expands through every complete touched active Group,
+applicable active-exclusion endpoint, and connected finalized
+`Pending`/`Exception` Splink, Component Review, or approved Tiered Activation
+Item. Unreviewed candidates and unapproved proposals are shown as adjacent
+evidence but are never automatically absorbed. The authoritative scope is
+bounded to 2–25 CCD records and 100 finalized source decisions.
+
+A System Manager makes one explicit complete decision: All Same, All Different,
+or a Partial Match partition. The exact state may also be Already Represented,
+which records an immutable No Change audit without creating relationship
+objects. A changed Apply requires Materialization enabled and a clear QC
+circuit breaker. It locks records, current identity state, frozen source rows,
+and relevant evidence; recomputes the scope fingerprint; then ends/supersedes
+the old relationship state and creates one Governance Override replacement in
+one transaction. Original CCD Master documents and source evidence are never
+merged, edited, or deleted.
+
 ### New canary
 
 A newer decision may supersede prior model recommendations. It must not silently
@@ -701,6 +725,20 @@ Splink Same/Different decisions: an exact checked set of 1–25
 `Pending`/`Exception` candidates, a zero-write per-candidate preview, rejection
 of overlapping CCD participants, and one atomic Apply operation.
 
+Each finalized pending Candidate/Component form also exposes **Preview Combined
+Identity Component** to System Managers. Approved Activation Batch rows expose
+**Resolve Overlap** only to System Managers. The dialog displays authoritative
+included sources separately from adjacent unresolved evidence, current and
+suggested partitions, explicit All Same/All Different/Partial controls, and an
+audited Already-Represented outcome.
+
+Tiered Preview Approve All lists unsafe components with Recommendation links.
+For a component whose only safety failure is structural identity overlap, a
+System Manager can prepare a one-component **Overlap Resolution** batch. It uses
+the normal reviewed/approved lifecycle but marks the item Exception and blocks
+ordinary batch Apply until the combined resolver closes it. No other unsafe or
+stale reason is admitted through this route.
+
 ## 17. Roles and permissions
 
 | Action | Reviewer | Sensitive Reviewer | System Manager |
@@ -711,6 +749,7 @@ of overlapping CCD participants, and one atomic Apply operation.
 | Adjudicate | No | No | Yes |
 | Create/approve activation batch | No | No | Yes |
 | Hold/release rollout component | No | No | Yes |
+| Preview/apply combined pending overlap | No | No | Yes |
 | End/split/revalidate Identity Group | No | No | Yes |
 | View model scores and diagnostics | No | No | Yes |
 
@@ -822,6 +861,13 @@ activation scope.
   is atomic across the selected set;
 - selected bulk Splink preview has the same zero-write, 25-row and atomic-Apply
   guarantees, and rejects overlapping participants;
+- combined overlap expansion is transitive across active Groups, active
+  Different exclusions, and finalized pending sources without absorbing
+  unreviewed Splink evidence;
+- combined overlap Apply rejects stale fingerprints, changed frozen source
+  metadata, a changed scope, and a tripped QC circuit breaker;
+- All Same, All Different, Partial Match, and Already Represented outcomes are
+  atomic, bounded, idempotent, and leave CCD Master unchanged;
 - stale and Unsure decisions create no membership;
 - QC Different invokes the configured circuit breaker; and
 - zero Review Batches leaves every Splink candidate unassigned.
@@ -939,3 +985,13 @@ The component aggregate consists of 3,516 two-record/one-recommendation
 components and four three-record/three-recommendation components. The numeric
 difference `3,528 - 3,520 = 8` is therefore eight extra pair edges above one
 edge per component, not eight omitted CCD records.
+
+## 25. Implementation update — 2026-08-25 overlap governance
+
+The combined pending/active overlap workflow described above is implemented.
+It adds `CCD Identity Overlap Resolution`, the manager-only preview/apply APIs,
+cross-route recursive scope expansion, explicit partition controls, source and
+relationship locks, circuit-breaker enforcement, deterministic no-change
+idempotency, source lifecycle updates, audit events, and deployment/migration
+coverage. Materialization remains off after deployment; preview and tests do
+not authorize or create a new live identity relationship.

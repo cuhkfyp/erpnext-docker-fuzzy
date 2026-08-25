@@ -16,7 +16,10 @@ doctype_list_js = {
     "CCD Match Review Candidate": "public/js/ccd_match_review_candidate_list.js",
 }
 
-app_include_js = "/assets/db_connector/js/identity_component_correction.js"
+app_include_js = [
+    "/assets/db_connector/js/identity_component_correction.js",
+    "/assets/db_connector/js/identity_overlap_resolution.js",
+]
 
 doc_events = {
     "CCD Master": {

@@ -566,6 +566,16 @@ def _mark_origin_corrected(
                     origin_document,
                     {"status": "Superseded", "superseded_by": correction_name},
                 )
+        elif origin == "Governance Override" and decision.origin_doctype == "CCD Identity Overlap Resolution":
+            if frappe.db.exists(decision.origin_doctype, origin_document):
+                _set_existing_fields(
+                    decision.origin_doctype,
+                    origin_document,
+                    {
+                        "status": "Superseded",
+                        "superseded_by_identity_decision": replacement_decision,
+                    },
+                )
 
     if affected_canaries:
         from db_connector.api_fuzzy_canary import _refresh_run_counts

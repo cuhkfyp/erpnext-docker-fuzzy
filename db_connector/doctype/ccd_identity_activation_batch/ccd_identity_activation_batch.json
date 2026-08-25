@@ -16,7 +16,7 @@
   {"fieldname": "policy_version", "fieldtype": "Data", "label": "Policy Version", "read_only": 1, "reqd": 1},
   {"fieldname": "policy_snapshot_sha256", "fieldtype": "Data", "label": "Policy Snapshot SHA-256", "read_only": 1, "reqd": 1},
   {"fieldname": "snapshot_at", "fieldtype": "Datetime", "label": "Snapshot At", "read_only": 1, "reqd": 1},
-  {"fieldname": "selection_method", "fieldtype": "Select", "in_list_view": 1, "label": "Selection Method", "options": "Explicit Wave\nApprove All Eligible\nApprove All Remaining\nSynthetic Test", "read_only": 1, "reqd": 1},
+  {"fieldname": "selection_method", "fieldtype": "Select", "in_list_view": 1, "label": "Selection Method", "options": "Explicit Wave\nApprove All Eligible\nApprove All Remaining\nSynthetic Test\nOverlap Resolution", "read_only": 1, "reqd": 1},
   {"fieldname": "selection_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Selection Fingerprint", "read_only": 1, "reqd": 1, "unique": 1},
   {"fieldname": "idempotency_key", "fieldtype": "Data", "hidden": 1, "label": "Batch Idempotency Key", "read_only": 1, "reqd": 1, "unique": 1},
   {"default": "0", "fieldname": "is_pilot_wave", "fieldtype": "Check", "label": "Pilot Wave", "read_only": 1},
