@@ -943,7 +943,11 @@ The complete-component procedure is:
    exclusions and Decisions are Superseded, and the original recommendations
    and human submissions remain as history. Tiered recommendations/items show
    `Superseded`/`Corrected`; Component Reviews show `Corrected`; corrected
-   Splink sources show `Reversed`.
+   Splink sources show `Reversed`. On a corrected Component Review, verify that
+   **Original reviewed grouping (historical)** still shows the immutable human
+   result and **Current effective identity result** shows the active replacement
+   partition. The original Decision, correction audit, and current Decision
+   links must all resolve.
 9. Open every participating CCD Master. Confirm the replacement Linked or
    Resolved Separately view and confirm that no CCD Master was deleted, merged,
    or overwritten.

@@ -99,3 +99,37 @@ def correction_key(
             "replacement_groups": groups,
         }
     )
+
+
+def partition_for_display(
+    groups: Iterable[Iterable[str]],
+    aliases: dict[str, str],
+    *,
+    reveal_record_ids: bool = False,
+) -> tuple[list[list[dict[str, Any]]], int]:
+    """Label a decision partition without leaking out-of-component record IDs."""
+    outside_labels: dict[str, str] = {}
+    displayed: list[list[dict[str, Any]]] = []
+    for raw_group in groups:
+        members: list[dict[str, Any]] = []
+        for raw_record_id in raw_group:
+            record_id = str(raw_record_id)
+            in_review = record_id in aliases
+            if in_review:
+                label = aliases[record_id]
+            else:
+                if record_id not in outside_labels:
+                    outside_labels[record_id] = (
+                        f"Outside component record {len(outside_labels) + 1}"
+                    )
+                label = record_id if reveal_record_ids else outside_labels[record_id]
+            member: dict[str, Any] = {
+                "label": label,
+                "in_original_review": in_review,
+            }
+            if reveal_record_ids:
+                member["record_id"] = record_id
+            members.append(member)
+        if members:
+            displayed.append(members)
+    return displayed, len(outside_labels)

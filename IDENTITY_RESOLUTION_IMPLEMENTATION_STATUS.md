@@ -83,6 +83,13 @@ CCD Master source documents.
   and atomically ends or supersedes all affected relationship objects before
   creating the versioned replacement. Each application creates an immutable
   `CCD Identity Correction`; no CCD Master record is edited or merged.
+- Corrected Component Review evidence now separates the immutable reviewer
+  outcome from the live identity state. The original decision is labelled
+  **Original reviewed grouping (historical)**, while the latest decision in its
+  supersession chain is shown as **Current effective identity result**, with
+  distinct links to the original Decision, correction audit, and active
+  replacement Decision. Out-of-component identities are counted without
+  exposing their record IDs to reviewers who lack sensitive access.
 - An idempotently managed **CCD Master Identity Resolution** Form Client Script
   for the current custom CCD Master DocType. Frappe skips `doctype_js` hooks for
   custom DocTypes, so checking the form metadata is a mandatory deployment
@@ -97,7 +104,7 @@ CCD Master source documents.
 
 - All new and modified DocType JSON files parse successfully.
 - Python compilation succeeds.
-- The complete in-container test suite passes: 69 tests, 0 failures.
+- The complete in-container test suite passes: 70 tests, 0 failures.
 - Frappe migration, role/policy setup, workflow installation, asset build,
   cache clear, and service restart completed.
 - The frontend-local public renderer is served with HTTP 200, and live CCD
@@ -137,6 +144,11 @@ CCD Master source documents.
   Group / 2 Memberships / 2 exclusions planned). Each transaction was explicitly
   rolled back; temporary correction/decision names do not exist, both original
   Decisions and Groups remain Active, and the Event count remains 96.
+- Corrected Component Review `l30evokvod` was used to verify the historical
+  versus current renderer. Its immutable reviewed result remains Partial
+  (`R1 = R3; R2 separate`), while its active Governance Override correctly
+  displays All Same (`R1 = R2 = R3`) and links to both the correction audit and
+  current Decision.
 - Splink candidate `ed9e2a25c4` is now `Applied`. This bulk-workflow deployment
   performed no identity writes. The remaining finalized candidate `8ac22119c8`
   passes the new zero-write bulk preview with two frozen fingerprints, two

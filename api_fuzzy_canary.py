@@ -33,6 +33,7 @@ from db_connector.fuzzy_matching.canary import (
     identity_partition_fingerprint,
     ordered_pair,
 )
+from db_connector.fuzzy_matching.correction import partition_for_display
 from db_connector.fuzzy_matching.identity import identity_fingerprint
 from db_connector.fuzzy_matching.models import build_evidence, tiered_result
 from db_connector.fuzzy_matching.policy import MatchingPolicy
@@ -885,6 +886,79 @@ def _append_component_submission(
     )
 
 
+def _current_component_identity_result(
+    review: Any,
+    aliases: dict[str, str],
+    *,
+    reveal_record_ids: bool,
+) -> dict[str, Any]:
+    """Return the latest decision in the original decision's supersession chain."""
+    decision_name = str(review.identity_decision or "").strip()
+    if not decision_name:
+        return {}
+
+    seen: set[str] = set()
+    decision = None
+    while decision_name:
+        if decision_name in seen:
+            frappe.log_error(
+                title="CCD identity decision supersession cycle",
+                message=f"Component review {review.name}: {decision_name}",
+            )
+            break
+        seen.add(decision_name)
+        row = frappe.db.get_value(
+            "CCD Identity Decision",
+            decision_name,
+            [
+                "name",
+                "decision_version",
+                "decision_type",
+                "origin",
+                "origin_doctype",
+                "origin_document",
+                "final_groups_json",
+                "status",
+                "superseded_by",
+            ],
+            as_dict=True,
+        )
+        if not row:
+            break
+        decision = row
+        decision_name = str(row.superseded_by or "").strip()
+
+    if not decision:
+        return {}
+
+    try:
+        raw_groups = json.loads(decision.final_groups_json or "[]")
+    except (TypeError, ValueError):
+        raw_groups = []
+    groups, outside_count = partition_for_display(
+        (group for group in raw_groups if isinstance(group, list))
+        if isinstance(raw_groups, list)
+        else (),
+        aliases,
+        reveal_record_ids=reveal_record_ids,
+    )
+
+    return {
+        "identity_decision": str(decision.name),
+        "decision_version": int(decision.decision_version or 1),
+        "decision_type": str(decision.decision_type or ""),
+        "origin": str(decision.origin or ""),
+        "status": str(decision.status or ""),
+        "groups": groups,
+        "outside_component_record_count": outside_count,
+        "correction": (
+            str(decision.origin_document or "")
+            if str(decision.origin_doctype or "") == "CCD Identity Correction"
+            else ""
+        ),
+    }
+
+
 @frappe.whitelist()
 def get_component_evidence(review_name: str) -> dict[str, Any]:
     _require_reviewer()
@@ -952,6 +1026,11 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
     if review.final_groups_json:
         for group in json.loads(review.final_groups_json):
             final_groups.append([aliases[str(record_id)] for record_id in group])
+    current_identity_result = _current_component_identity_result(
+        review,
+        aliases,
+        reveal_record_ids=sensitive,
+    )
     return {
         "review": review.name,
         "status": "Stale" if stale else review.review_status,
@@ -960,6 +1039,7 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
         "materialization_status": review.materialization_status or "Not Final",
         "identity_decision": review.identity_decision or "",
         "correction_decision": review.correction_decision or "",
+        "current_identity_result": current_identity_result,
         "materialization_error": review.materialization_error or "",
         "records": records,
         "attributes": list(policy.attributes()),

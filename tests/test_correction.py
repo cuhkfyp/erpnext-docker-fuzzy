@@ -4,6 +4,7 @@ from fuzzy_matching.correction import (
     correction_key,
     exclusions_for_partition,
     normalize_partition,
+    partition_for_display,
     stable_payload_fingerprint,
 )
 
@@ -36,6 +37,34 @@ class IdentityCorrectionHelperTests(unittest.TestCase):
             correction_key("D1", "S1", [["B", "A"], ["C"]]),
             correction_key("D1", "S1", [["C"], ["A", "B"]]),
         )
+
+    def test_partition_display_preserves_aliases_without_leaking_external_ids(self):
+        groups, outside_count = partition_for_display(
+            (("CCD-1", "CCD-3"), ("CCD-2",)),
+            {"CCD-1": "R1", "CCD-2": "R2"},
+        )
+        self.assertEqual(outside_count, 1)
+        self.assertEqual(
+            groups,
+            [
+                [
+                    {"label": "R1", "in_original_review": True},
+                    {
+                        "label": "Outside component record 1",
+                        "in_original_review": False,
+                    },
+                ],
+                [{"label": "R2", "in_original_review": True}],
+            ],
+        )
+
+        revealed, _outside_count = partition_for_display(
+            (("CCD-1", "CCD-3"),),
+            {"CCD-1": "R1"},
+            reveal_record_ids=True,
+        )
+        self.assertEqual(revealed[0][1]["label"], "CCD-3")
+        self.assertEqual(revealed[0][1]["record_id"], "CCD-3")
 
 
 if __name__ == "__main__":

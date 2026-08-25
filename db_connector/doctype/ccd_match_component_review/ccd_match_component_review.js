@@ -15,6 +15,34 @@ function component_record_label(record) {
 	return `<a href="/app/ccd-master/${encodeURIComponent(record.record_id)}" target="_blank" rel="noopener">${component_esc(label)}</a>`;
 }
 
+function historical_partition_text(groups) {
+	return (groups || []).map((group) => (group || []).length > 1
+		? group.map(component_esc).join(" = ")
+		: `${component_esc((group || [""])[0])} (${__("separate")})`
+	).join("; ");
+}
+
+function effective_member_label(member) {
+	const label = component_esc(member.label || "");
+	if (!member.record_id) return label;
+	return `<a href="/app/ccd-master/${encodeURIComponent(member.record_id)}" target="_blank" rel="noopener">${label}</a>`;
+}
+
+function effective_partition_text(groups) {
+	return (groups || []).map((group) => (group || []).length > 1
+		? group.map(effective_member_label).join(" = ")
+		: `${effective_member_label((group || [{}])[0])} (${__("separate")})`
+	).join("; ");
+}
+
+function effective_decision_label(decisionType) {
+	return {
+		Same: __("All Same"),
+		Different: __("All Different"),
+		Partition: __("Partial Match"),
+	}[decisionType] || component_esc(decisionType || "");
+}
+
 function render_component(frm, payload) {
 	const privacy = payload.sensitive_values_visible
 		? '<div class="alert alert-warning">' + __("Sensitive values are visible because your role permits them.") + "</div>"
@@ -32,21 +60,38 @@ function render_component(frm, payload) {
 	const edges = (payload.candidate_pairs || []).map((pair) =>
 		`<span class="badge badge-light mr-2">${component_esc(pair.left)} ↔ ${component_esc(pair.right)}</span>`
 	).join("");
-	const groups = (payload.final_groups || []).length
-		? `<div class="alert alert-success"><b>${__("Final grouping")}</b>: ` +
-			payload.final_groups.map((group) => component_esc(group.join(" = "))).join("; ") + "</div>"
+	const corrected = payload.materialization_status === "Corrected";
+	const reviewed_groups = (payload.final_groups || []).length
+		? `<div class="alert ${corrected ? "alert-secondary" : "alert-success"}"><b>${corrected ? __("Original reviewed grouping (historical)") : __("Final grouping")}</b>: ` +
+			historical_partition_text(payload.final_groups) + "</div>"
 		: "";
-	const materialization = payload.materialization_status && payload.materialization_status !== "Not Final"
-		? `<div class="alert alert-secondary"><b>${__("Identity materialization")}</b>: ${component_esc(payload.materialization_status)}` +
+	const current = payload.current_identity_result || {};
+	const current_result = corrected && current.identity_decision
+		? `<div class="alert ${current.status === "Active" ? "alert-success" : "alert-warning"}">` +
+			`<b>${__("Current effective identity result")}</b>: ${component_esc(current.origin)} — ${effective_decision_label(current.decision_type)}<br>` +
+			`${effective_partition_text(current.groups || [])}` +
+			`${current.outside_component_record_count ? `<br><small>${__("Includes {0} record(s) outside the original component review.", [current.outside_component_record_count])}</small>` : ""}` +
+			"</div>"
+		: "";
+	let materialization = "";
+	if (corrected) {
+		materialization = `<div class="alert alert-secondary"><b>${__("Original identity materialization")}</b>: ${__("Overridden by an audited correction")}` +
+			`${payload.identity_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(payload.identity_decision)}">${__("original decision")}</a>` : ""}` +
+			`${current.correction ? ` — <a href="/app/ccd-identity-correction/${encodeURIComponent(current.correction)}">${__("correction audit")}</a>` : ""}` +
+			`${current.identity_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(current.identity_decision)}">${__("current decision")}</a>` : ""}` +
+			`${payload.materialization_error ? `<br>${component_esc(payload.materialization_error)}` : ""}</div>`;
+	} else if (payload.materialization_status && payload.materialization_status !== "Not Final") {
+		materialization = `<div class="alert alert-secondary"><b>${__("Identity materialization")}</b>: ${component_esc(payload.materialization_status)}` +
 			`${payload.identity_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(payload.identity_decision)}">${__("open decision")}</a>` : ""}` +
-			`${payload.correction_decision ? ` — <a href="/app/ccd-identity-decision/${encodeURIComponent(payload.correction_decision)}">${__("open correction")}</a>` : ""}` +
-			`${payload.materialization_error ? `<br>${component_esc(payload.materialization_error)}` : ""}</div>`
-		: "";
+			`${payload.materialization_error ? `<br>${component_esc(payload.materialization_error)}` : ""}</div>`;
+	}
+	const review_label = corrected ? __("Historical review status") : __("Review status");
+	const candidate_label = corrected ? __("Original Tiered High candidate edges") : __("Tiered High candidate edges");
 	frm.fields_dict.evidence_html.$wrapper.html(
-		privacy + stale + groups + materialization +
-		`<p><b>${__("Review status")}</b>: ${component_esc(payload.status)} ` +
+		privacy + stale + reviewed_groups + current_result + materialization +
+		`<p><b>${review_label}</b>: ${component_esc(payload.status)} ` +
 		`${payload.final_decision ? `— ${component_esc(payload.final_decision)}` : ""}</p>` +
-		`<p><b>${__("Tiered High candidate edges")}</b>: ${edges || __("None")}</p>` +
+		`<p><b>${candidate_label}</b>: ${edges || __("None")}</p>` +
 		`<div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr>` +
 		`<th>${__("Record / Source")}</th>${headers}</tr></thead><tbody>${records}</tbody></table></div>`
 	);
