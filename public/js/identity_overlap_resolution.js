@@ -91,6 +91,10 @@
 		return `<a href="/app/ccd-master/${encodeURIComponent(recordId)}" target="_blank" rel="noopener">${esc(recordId)}</a>`;
 	}
 
+	function recommendationLink(recommendationName) {
+		return `<a href="/app/ccd-match-recommendation/${encodeURIComponent(recommendationName)}" target="_blank" rel="noopener">${esc(recommendationName)}</a>`;
+	}
+
 	function identityGroupLink(groupName) {
 		return `<a href="/app/ccd-identity-group/${encodeURIComponent(groupName)}" target="_blank" rel="noopener">${esc(groupName)}</a>`;
 	}
@@ -99,28 +103,53 @@
 		return `<a href="/app/ccd-identity-decision/${encodeURIComponent(decisionName)}" target="_blank" rel="noopener">${esc(decisionName)}</a>`;
 	}
 
-	function activeGroupRows(groups) {
+	function evidenceByRecord(context) {
+		return Object.fromEntries((context.record_evidence || []).map((record) => [record.record_id, record]));
+	}
+
+	function compactRecord(recordId, evidence) {
+		const record = evidence[recordId] || {};
+		const values = record.values || {};
+		const chineseName = [values.chi_surname, values.chi_firstname].filter(Boolean).join("");
+		const englishName = [values.eng_firstname, values.eng_surname].filter(Boolean).join(" ");
+		const facts = [
+			[chineseName || englishName ? __("Name") : "", [chineseName, englishName].filter(Boolean).join(" / ")],
+			[__("Birthday"), values.birthday],
+			[__("HKID"), values.hkid],
+			[__("HKSR No."), values.hksr_num],
+			[__("Phone"), values.phone],
+		].filter(([label, value]) => label && value);
+		return `<div class="mb-2">${recordLink(recordId)}` +
+			`${record.source ? `<br><small class="text-muted">${esc(record.source)}</small>` : ""}` +
+			`${facts.map(([label, value]) => `<br><small><b>${esc(label)}:</b> ${esc(value)}</small>`).join("")}</div>`;
+	}
+
+	function activeGroupRows(groups, evidence) {
 		return (groups || []).map((group) =>
 			`<tr><td>${identityGroupLink(group.identity_group)}</td>` +
-			`<td>${(group.records || []).map(recordLink).join("<br>")}</td>` +
-			`<td>${identityDecisionLink(group.originating_decision)}</td></tr>`
+			`<td>${(group.records || []).map((recordId) => compactRecord(recordId, evidence)).join("")}</td>` +
+			`<td>${identityDecisionLink(group.originating_decision)}` +
+			`${group.decision_type || group.decision_origin ? `<br><small>${esc([group.decision_type, group.decision_origin].filter(Boolean).join(" — "))}</small>` : ""}` +
+			`${group.decision_origin_document ? `<br><small>${esc(group.decision_origin_doctype)}: ${esc(group.decision_origin_document)}</small>` : ""}</td></tr>`
 		).join("");
 	}
 
-	function activeExclusionRows(exclusions) {
+	function activeExclusionRows(exclusions, evidence) {
 		return (exclusions || []).map((item) =>
-			`<tr><td>${recordLink(item.left_record)} ≠ ${recordLink(item.right_record)}</td>` +
+			`<tr><td>${compactRecord(item.left_record, evidence)}<div><b>≠</b></div>${compactRecord(item.right_record, evidence)}</td>` +
 			`<td>${identityDecisionLink(item.originating_decision)}</td><td>${esc(item.status)}</td></tr>`
 		).join("");
 	}
 
-	function activeGroupOverlapRows(overlaps) {
+	function activeGroupOverlapRows(overlaps, evidence) {
 		return (overlaps || []).map((item) =>
-			`<tr><td>${esc(item.pending_origin)} — ${esc(item.pending_document)}</td>` +
-			`<td>${(item.pending_records || []).map(recordLink).join("<br>")}</td>` +
+			`<tr><td>${esc(item.pending_origin)} — ${esc(item.pending_result || "")}` +
+			`<br><small>${__("Frozen item")}: ${esc(item.pending_document)}</small>` +
+			`${(item.pending_recommendations || []).length ? `<br><small>${__("Recommendation")}: ${(item.pending_recommendations || []).map(recommendationLink).join(", ")}</small>` : ""}</td>` +
+			`<td>${(item.pending_records || []).map((recordId) => compactRecord(recordId, evidence)).join("")}</td>` +
 			`<td>${identityGroupLink(item.identity_group)}</td>` +
-			`<td>${(item.identity_group_records || []).map(recordLink).join("<br>")}</td>` +
-			`<td><strong>${(item.shared_records || []).map(recordLink).join("<br>")}</strong></td></tr>`
+			`<td>${(item.identity_group_records || []).map((recordId) => compactRecord(recordId, evidence)).join("")}</td>` +
+			`<td><strong>${(item.shared_records || []).map((recordId) => compactRecord(recordId, evidence)).join("")}</strong></td></tr>`
 		).join("");
 	}
 
@@ -308,9 +337,10 @@
 			const adjacentNote = context.adjacent_unreviewed_truncated
 				? `<div class="alert alert-warning">${__("Only the first {0} of {1} adjacent unresolved scopes are displayed.", [(context.adjacent_unreviewed_scopes || []).length, context.adjacent_unreviewed_count])}</div>`
 				: "";
-			const overlapRows = activeGroupOverlapRows(context.active_group_overlaps || []);
-			const groupRows = activeGroupRows(context.active_identity_groups || []);
-			const exclusionRows = activeExclusionRows(context.active_exclusions || []);
+			const evidence = evidenceByRecord(context);
+			const overlapRows = activeGroupOverlapRows(context.active_group_overlaps || [], evidence);
+			const groupRows = activeGroupRows(context.active_identity_groups || [], evidence);
+			const exclusionRows = activeExclusionRows(context.active_exclusions || [], evidence);
 			const approvalNote = context.seed_requires_approval && !context.seed_approved
 				? `<div class="alert alert-info"><b>${__("Batch status")}: ${esc(context.activation_batch_status)}</b>. ${__("You can inspect the entire overlap and preview a final partition now. Applying remains blocked until the batch is explicitly Approved.")}</div>`
 				: "";
@@ -332,12 +362,14 @@
 							`<b>${__("Complete scope")}</b>: ${esc((context.records || []).length)} ${__("records")}; ${esc((context.included_pending_scopes || []).length)} ${__("finalized pending scopes")}; ${esc(context.adjacent_unreviewed_count)} ${__("adjacent unresolved scopes")}</p>` +
 							`<p><b>${__("Current live partition")}</b><br>${groupText(context.current_groups || [])}</p>` +
 							`<p><b>${__("Suggested complete partition")}</b><br>${groupText(context.default_groups || [])}</p>` +
+							`<h5>${__("Complete-scope identity evidence — side by side")}</h5>` +
+							`<div class="alert alert-info">${__("The identity evidence required for this review is embedded here. Record, Recommendation, Group, and Decision links are optional audit-navigation links; you do not need to switch tabs to compare the participants.")}</div>` +
+							privacyNote + recordEvidenceMatrix(context) +
 							`<h5>${__("Why this component is an overlap")}</h5><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Pending decision")}</th><th>${__("Pending records")}</th><th>${__("Existing Identity Group")}</th><th>${__("Existing group members")}</th><th>${__("Shared record")}</th></tr></thead><tbody>${overlapRows || `<tr><td colspan="5">${__("No active Identity Group overlap; inspect exclusions and connected scopes below.")}</td></tr>`}</tbody></table></div>` +
 							`<h5>${__("Current active Identity Groups in scope")}</h5><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Identity Group")}</th><th>${__("Active members")}</th><th>${__("Originating Decision")}</th></tr></thead><tbody>${groupRows || `<tr><td colspan="3">${__("None")}</td></tr>`}</tbody></table></div>` +
 							`<h5>${__("Active Different exclusions in scope")}</h5><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Different pair")}</th><th>${__("Originating Decision")}</th><th>${__("Status")}</th></tr></thead><tbody>${exclusionRows || `<tr><td colspan="3">${__("None")}</td></tr>`}</tbody></table></div>` +
 							`<h5>${__("Included authoritative pending scopes")}</h5><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Route")}</th><th>${__("Document")}</th><th>${__("Result")}</th><th>${__("Records")}</th><th>${__("Splink probability")}</th></tr></thead><tbody>${included}</tbody></table></div>` +
-							`<h5>${__("Adjacent unresolved evidence—not included")}</h5>${adjacentNote}<div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Route")}</th><th>${__("Document")}</th><th>${__("Status")}</th><th>${__("Records")}</th><th>${__("Splink probability")}</th></tr></thead><tbody>${adjacent || `<tr><td colspan="5">${__("None")}</td></tr>`}</tbody></table></div>` +
-							`<h5>${__("Complete-scope identity evidence — side by side")}</h5>${privacyNote}${recordEvidenceMatrix(context)}`,
+							`<h5>${__("Adjacent unresolved evidence—not included")}</h5>${adjacentNote}<div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Route")}</th><th>${__("Document")}</th><th>${__("Status")}</th><th>${__("Records")}</th><th>${__("Splink probability")}</th></tr></thead><tbody>${adjacent || `<tr><td colspan="5">${__("None")}</td></tr>`}</tbody></table></div>`,
 					},
 					{ fieldtype: "Section Break", label: __("Final complete partition") },
 					{

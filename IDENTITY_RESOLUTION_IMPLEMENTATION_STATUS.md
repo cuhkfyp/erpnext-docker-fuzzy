@@ -105,7 +105,9 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
   Overlap** action while the batch is still Reviewed. The preview explicitly
   identifies the pending records, existing Identity Group, shared bridge
   record, current members/Decision, active Different exclusions, and displays
-  every complete-scope record side by side. Reviewed batches are preview-only;
+  every complete-scope record side by side near the top. Compact governed
+  values and the original Recommendation ID are also embedded in the overlap
+  rows, so linked documents are optional audit navigation. Reviewed batches are preview-only;
   Apply remains server-blocked until explicit approval. Stale or non-structural
   unsafe components remain rejected, and ordinary batch Apply refuses
   unresolved Exception items.
@@ -272,11 +274,11 @@ Before any further activation:
 6. enable Materialization only long enough to Apply the one approved batch,
    then disable it and repeat post-write verification.
 
-At the 2026-08-26 read-only validation checkpoint, Materialization was enabled;
-the overlap-preview deployment did not change that setting. Batch `sg3sn8ot6e`
-remains Reviewed and its server-side approval guard prevents Apply. If there is
-no active authorized write window, the operator should disable Materialization;
-existing pilot links remain visible and reversible either way.
+Materialization is currently off at the latest 2026-08-26 read-only checkpoint;
+the overlap-preview deployments did not change that setting. Batch `sg3sn8ot6e`
+remains Reviewed and its server-side approval guard also prevents Apply.
+Existing pilot links remain visible and reversible while no new identity links
+can be created.
 
 Server transfer, clean-target installation, backup/restore, cutover, rollback,
 and new-centre onboarding are covered in

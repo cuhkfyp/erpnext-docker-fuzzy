@@ -1200,7 +1200,9 @@ prepared for application.
    identifies the pending pair/component, existing Identity Group and all its
    members, shared bridge record, originating Decision, and active Different
    exclusions. The complete-scope evidence matrix places every participant's
-   governed identity values side by side.
+   governed identity values side by side near the top of the dialog. The
+   overlap rows repeat compact identity summaries and frozen Recommendation
+   IDs; opening linked documents is optional, not required for comparison.
 3. Choose **All Same**, **All Different**, or construct the complete **Partial
    Match** partition. Every record must occur exactly once. Cross-partition
    pairs become fingerprint-scoped Different exclusions.

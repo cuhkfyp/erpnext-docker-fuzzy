@@ -464,6 +464,7 @@ def _scope_summary(scope: dict[str, Any]) -> dict[str, Any]:
         "groups": scope["groups"],
         "exclusions": scope["exclusions"],
         "probability": scope.get("probability"),
+        "recommendations": scope.get("recommendation_ids", ()),
         "activation_batch": scope.get("activation_batch", ""),
         "canary_run": scope.get("canary_run", ""),
     }
@@ -748,6 +749,7 @@ def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
             }
         )
 
+    decisions_by_name = {str(row.name): row for row in decisions}
     active_identity_groups = []
     for group in groups:
         members = sorted(
@@ -755,14 +757,23 @@ def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
             for membership in memberships
             if str(membership.identity_group) == str(group.name)
         )
-        active_identity_groups.append(
-            {
-                "identity_group": str(group.name),
-                "status": str(group.status),
-                "originating_decision": str(group.originating_decision),
-                "records": members,
-            }
-        )
+        decision = decisions_by_name.get(str(group.originating_decision))
+        group_summary = {
+            "identity_group": str(group.name),
+            "status": str(group.status),
+            "originating_decision": str(group.originating_decision),
+            "records": members,
+        }
+        if decision:
+            group_summary.update(
+                {
+                    "decision_type": str(decision.decision_type or ""),
+                    "decision_origin": str(decision.origin or ""),
+                    "decision_origin_doctype": str(decision.origin_doctype or ""),
+                    "decision_origin_document": str(decision.origin_document or ""),
+                }
+            )
+        active_identity_groups.append(group_summary)
     active_exclusion_summaries = [
         {
             "exclusion": str(row.name),
@@ -785,7 +796,12 @@ def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
                     "pending_doctype": str(scope["doctype"]),
                     "pending_document": str(scope["name"]),
                     "pending_origin": str(scope["origin"]),
+                    "pending_result": str(scope["result"]),
                     "pending_records": sorted(scope_records),
+                    "pending_recommendations": sorted(
+                        str(value)
+                        for value in scope.get("recommendation_ids", ())
+                    ),
                     "identity_group": group["identity_group"],
                     "identity_group_records": group["records"],
                     "shared_records": shared_records,

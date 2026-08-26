@@ -732,8 +732,11 @@ batch can preview but cannot Apply. The dialog displays authoritative included
 sources separately from adjacent unresolved evidence, the exact pending-to-live
 Group intersection and shared bridge record, current Group members/Decision,
 active Different exclusions, a side-by-side complete-scope evidence matrix,
-current and suggested partitions, explicit All Same/All Different/Partial
-controls, and an audited Already-Represented outcome.
+compact identity summaries and original Recommendation IDs inside the overlap
+rows, current and suggested partitions, explicit All Same/All Different/Partial
+controls, and an audited Already-Represented outcome. The evidence matrix is
+placed near the top so linked documents are optional audit navigation rather
+than a required tab-switching review step.
 
 Tiered Preview Approve All lists unsafe components with Recommendation links.
 For a component whose only safety failure is structural identity overlap, a
