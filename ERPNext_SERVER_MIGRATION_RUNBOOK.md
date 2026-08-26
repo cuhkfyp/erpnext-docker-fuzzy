@@ -1177,7 +1177,11 @@ Splink/Component source and use **Identity Resolution → Preview Combined
 Identity Component**. For Tiered Evidence, **Preview Approve All** lists each
 unsafe component and links one Recommendation. Open that Recommendation, choose
 **Prepare Overlap Resolution Batch**, review and approve the one-component
-frozen batch, then use its **Resolve Overlap** row action. The special batch
+frozen batch, then use its **Preview / Resolve Overlap** row action. The same
+row action is available while the batch is still Reviewed so the manager can
+inspect the exact overlap before deciding whether to approve. In Reviewed
+state, both the browser and server expose preview only; Apply is rejected until
+the batch is Approved. The special batch
 accepts only structural group/exclusion overlap; stale, fingerprint, HKID, and
 other safety failures remain rejected. Ordinary **Apply Approved Batch** is
 unavailable while its Exception item awaits combined resolution.
@@ -1192,7 +1196,11 @@ prepared for application.
 
 1. Keep Materialization off while opening the combined preview.
 2. Inspect every included authoritative source, adjacent unresolved source,
-   current live partition, and suggested partition.
+   current live partition, and suggested partition. The preview's overlap table
+   identifies the pending pair/component, existing Identity Group and all its
+   members, shared bridge record, originating Decision, and active Different
+   exclusions. The complete-scope evidence matrix places every participant's
+   governed identity values side by side.
 3. Choose **All Same**, **All Different**, or construct the complete **Partial
    Match** partition. Every record must occur exactly once. Cross-partition
    pairs become fingerprint-scoped Different exclusions.

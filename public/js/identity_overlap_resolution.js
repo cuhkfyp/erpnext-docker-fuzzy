@@ -87,6 +87,62 @@
 		).join("");
 	}
 
+	function recordLink(recordId) {
+		return `<a href="/app/ccd-master/${encodeURIComponent(recordId)}" target="_blank" rel="noopener">${esc(recordId)}</a>`;
+	}
+
+	function identityGroupLink(groupName) {
+		return `<a href="/app/ccd-identity-group/${encodeURIComponent(groupName)}" target="_blank" rel="noopener">${esc(groupName)}</a>`;
+	}
+
+	function identityDecisionLink(decisionName) {
+		return `<a href="/app/ccd-identity-decision/${encodeURIComponent(decisionName)}" target="_blank" rel="noopener">${esc(decisionName)}</a>`;
+	}
+
+	function activeGroupRows(groups) {
+		return (groups || []).map((group) =>
+			`<tr><td>${identityGroupLink(group.identity_group)}</td>` +
+			`<td>${(group.records || []).map(recordLink).join("<br>")}</td>` +
+			`<td>${identityDecisionLink(group.originating_decision)}</td></tr>`
+		).join("");
+	}
+
+	function activeExclusionRows(exclusions) {
+		return (exclusions || []).map((item) =>
+			`<tr><td>${recordLink(item.left_record)} ≠ ${recordLink(item.right_record)}</td>` +
+			`<td>${identityDecisionLink(item.originating_decision)}</td><td>${esc(item.status)}</td></tr>`
+		).join("");
+	}
+
+	function activeGroupOverlapRows(overlaps) {
+		return (overlaps || []).map((item) =>
+			`<tr><td>${esc(item.pending_origin)} — ${esc(item.pending_document)}</td>` +
+			`<td>${(item.pending_records || []).map(recordLink).join("<br>")}</td>` +
+			`<td>${identityGroupLink(item.identity_group)}</td>` +
+			`<td>${(item.identity_group_records || []).map(recordLink).join("<br>")}</td>` +
+			`<td><strong>${(item.shared_records || []).map(recordLink).join("<br>")}</strong></td></tr>`
+		).join("");
+	}
+
+	function recordEvidenceMatrix(context) {
+		const records = context.record_evidence || [];
+		if (!records.length) return `<p>${__("No record evidence is available.")}</p>`;
+		const headers = records.map((record) => {
+			const groups = (record.current_identity_groups || []).length
+				? (record.current_identity_groups || []).map(identityGroupLink).join("<br>")
+				: `<span class="text-muted">${__("Not currently linked")}</span>`;
+			return `<th>${recordLink(record.record_id)}<br><small>${esc(record.source || __("Unknown source"))}</small><br>` +
+				`<small>${__("Current group")}: ${groups}</small></th>`;
+		}).join("");
+		const rows = (context.evidence_attributes || []).map((attribute) =>
+			`<tr><th>${esc(attribute)}</th>${records.map((record) =>
+				`<td>${esc((record.values || {})[attribute] || "—")}</td>`
+			).join("")}</tr>`
+		).join("");
+		return `<div class="table-responsive"><table class="table table-bordered table-sm">` +
+			`<thead><tr><th>${__("Evidence")}</th>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+	}
+
 	function warningLabel(code) {
 		const labels = {
 			splits_active_identity_group: __("The final partition splits an active Identity Group."),
@@ -121,7 +177,10 @@
 		const warnings = preview.warnings || [];
 		const planned = preview.planned || {};
 		const noChange = Boolean(preview.already_represented);
-		const switchNotice = noChange
+		const approvalPending = Boolean(preview.seed_requires_approval && !preview.seed_approved);
+		const switchNotice = approvalPending
+			? `<div class="alert alert-info"><b>${__("Review-only result")}</b>: ${__("This frozen Activation Batch is still Reviewed. Nothing can be applied until a System Manager explicitly approves the batch and reopens this preview.")}</div>`
+			: noChange
 			? `<div class="alert alert-success">${__("The requested identity state is already represented. Apply records an audited no-change outcome and creates no Identity Decision, Group, Membership, or Exclusion.")}</div>`
 			: preview.materialization_enabled
 				? `<div class="alert alert-success">${__("Live Identity Materialization is enabled.")}</div>`
@@ -157,6 +216,18 @@
 				default: 0,
 			},
 		];
+		if (approvalPending) {
+			const reviewDialog = new frappe.ui.Dialog({
+				title: __("Preview Final Atomic Result — Approval Required"),
+				fields: [fields[0]],
+				primary_action_label: __("Close Preview"),
+				primary_action() {
+					reviewDialog.hide();
+				},
+			});
+			reviewDialog.show();
+			return;
+		}
 		if (warnings.length) {
 			fields.push({
 				fieldname: "confirm_safety_warnings",
@@ -237,6 +308,15 @@
 			const adjacentNote = context.adjacent_unreviewed_truncated
 				? `<div class="alert alert-warning">${__("Only the first {0} of {1} adjacent unresolved scopes are displayed.", [(context.adjacent_unreviewed_scopes || []).length, context.adjacent_unreviewed_count])}</div>`
 				: "";
+			const overlapRows = activeGroupOverlapRows(context.active_group_overlaps || []);
+			const groupRows = activeGroupRows(context.active_identity_groups || []);
+			const exclusionRows = activeExclusionRows(context.active_exclusions || []);
+			const approvalNote = context.seed_requires_approval && !context.seed_approved
+				? `<div class="alert alert-info"><b>${__("Batch status")}: ${esc(context.activation_batch_status)}</b>. ${__("You can inspect the entire overlap and preview a final partition now. Applying remains blocked until the batch is explicitly Approved.")}</div>`
+				: "";
+			const privacyNote = context.sensitive_values_visible
+				? `<div class="alert alert-warning">${__("Sensitive identity values are visible because this workflow is restricted to System Managers.")}</div>`
+				: `<div class="alert alert-info">${__("Identity values are masked for your current role.")}</div>`;
 			const dialog = new frappe.ui.Dialog({
 				title: __("Preview Combined Identity Component"),
 				size: "extra-large",
@@ -246,13 +326,18 @@
 						fieldtype: "HTML",
 						options:
 							`<div class="alert alert-success"><b>${__("Zero-write preview")}</b>: ${__("No Identity Decision, Group, Membership, Exclusion, or source status is changed on this screen.")}</div>` +
+							approvalNote +
 							`<p>${__("Assign records representing the same person to the same Group. Separate records remain singletons. The scope already includes every touched active group, active Different exclusion, and connected finalized pending decision.")}</p>` +
 							`<p><b>${__("Seed")}</b>: ${esc(context.seed_document)} (${esc(context.seed_origin)})<br>` +
 							`<b>${__("Complete scope")}</b>: ${esc((context.records || []).length)} ${__("records")}; ${esc((context.included_pending_scopes || []).length)} ${__("finalized pending scopes")}; ${esc(context.adjacent_unreviewed_count)} ${__("adjacent unresolved scopes")}</p>` +
 							`<p><b>${__("Current live partition")}</b><br>${groupText(context.current_groups || [])}</p>` +
 							`<p><b>${__("Suggested complete partition")}</b><br>${groupText(context.default_groups || [])}</p>` +
+							`<h5>${__("Why this component is an overlap")}</h5><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Pending decision")}</th><th>${__("Pending records")}</th><th>${__("Existing Identity Group")}</th><th>${__("Existing group members")}</th><th>${__("Shared record")}</th></tr></thead><tbody>${overlapRows || `<tr><td colspan="5">${__("No active Identity Group overlap; inspect exclusions and connected scopes below.")}</td></tr>`}</tbody></table></div>` +
+							`<h5>${__("Current active Identity Groups in scope")}</h5><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Identity Group")}</th><th>${__("Active members")}</th><th>${__("Originating Decision")}</th></tr></thead><tbody>${groupRows || `<tr><td colspan="3">${__("None")}</td></tr>`}</tbody></table></div>` +
+							`<h5>${__("Active Different exclusions in scope")}</h5><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Different pair")}</th><th>${__("Originating Decision")}</th><th>${__("Status")}</th></tr></thead><tbody>${exclusionRows || `<tr><td colspan="3">${__("None")}</td></tr>`}</tbody></table></div>` +
 							`<h5>${__("Included authoritative pending scopes")}</h5><div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Route")}</th><th>${__("Document")}</th><th>${__("Result")}</th><th>${__("Records")}</th><th>${__("Splink probability")}</th></tr></thead><tbody>${included}</tbody></table></div>` +
-							`<h5>${__("Adjacent unresolved evidence—not included")}</h5>${adjacentNote}<div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Route")}</th><th>${__("Document")}</th><th>${__("Status")}</th><th>${__("Records")}</th><th>${__("Splink probability")}</th></tr></thead><tbody>${adjacent || `<tr><td colspan="5">${__("None")}</td></tr>`}</tbody></table></div>`,
+							`<h5>${__("Adjacent unresolved evidence—not included")}</h5>${adjacentNote}<div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Route")}</th><th>${__("Document")}</th><th>${__("Status")}</th><th>${__("Records")}</th><th>${__("Splink probability")}</th></tr></thead><tbody>${adjacent || `<tr><td colspan="5">${__("None")}</td></tr>`}</tbody></table></div>` +
+							`<h5>${__("Complete-scope identity evidence — side by side")}</h5>${privacyNote}${recordEvidenceMatrix(context)}`,
 					},
 					{ fieldtype: "Section Break", label: __("Final complete partition") },
 					{

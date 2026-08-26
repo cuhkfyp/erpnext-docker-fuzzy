@@ -1,12 +1,12 @@
 frappe.ui.form.on("CCD Identity Activation Batch", {
 	refresh(frm) {
-		const canResolveOverlap = frappe.user.has_role("System Manager") &&
-			frm.doc.status === "Approved";
+		const canPreviewOverlap = frappe.user.has_role("System Manager") &&
+			["Reviewed", "Approved"].includes(frm.doc.status);
 		if (frm.fields_dict.items && frm.fields_dict.items.grid) {
 			frm.fields_dict.items.grid.update_docfield_property(
 				"resolve_overlap",
 				"hidden",
-				canResolveOverlap ? 0 : 1,
+				canPreviewOverlap ? 0 : 1,
 			);
 			frm.fields_dict.items.grid.refresh();
 		}
@@ -69,8 +69,8 @@ frappe.ui.form.on("CCD Identity Activation Item", {
 	resolve_overlap(frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
 		if (!(frappe.user_roles || []).includes("System Manager")) return;
-		if (frm.doc.status !== "Approved") {
-			frappe.msgprint(__("Approve the frozen Activation Batch before resolving an overlap."));
+		if (!["Reviewed", "Approved"].includes(frm.doc.status)) {
+			frappe.msgprint(__("Only a Reviewed or Approved frozen Activation Batch can preview an overlap."));
 			return;
 		}
 		if (!["Planned", "Failed", "Exception"].includes(row.status)) {

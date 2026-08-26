@@ -10,6 +10,8 @@ import frappe
 
 from db_connector.api_fuzzy_canary import (
     _change_recommendation_status,
+    _display_evidence_value,
+    _has_sensitive_access,
     _refresh_run_counts,
     _snapshot_hash,
 )
@@ -202,8 +204,10 @@ def _component_scope(name: str) -> dict[str, Any]:
 def _activation_scope(name: str) -> dict[str, Any]:
     item = frappe.get_doc(ACTIVATION_ITEM_DOCTYPE, name)
     batch = frappe.get_doc(ACTIVATION_BATCH_DOCTYPE, item.parent)
-    if batch.status != "Approved":
-        frappe.throw("The Tiered component's Activation Batch is not approved")
+    if batch.status not in {"Reviewed", "Approved"}:
+        frappe.throw(
+            "The Tiered component's Activation Batch must be Reviewed or Approved"
+        )
     if item.status not in {"Planned", "Failed", "Exception"}:
         frappe.throw("Only an unapplied Activation Item can start overlap resolution")
     canary = frappe.get_doc("CCD Match Canary Run", batch.canary_run)
@@ -262,6 +266,7 @@ def _activation_scope(name: str) -> dict[str, Any]:
         "probability": None,
         "recommendation_ids": tuple(sorted(str(value) for value in recommendation_ids)),
         "activation_batch": str(batch.name),
+        "activation_batch_status": str(batch.status),
         "canary_run": str(batch.canary_run),
         "source_doctype": str(canary.doctype),
         "source_document": str(canary.name),
@@ -277,6 +282,22 @@ def _load_scope(doctype: str, name: str) -> dict[str, Any]:
     if doctype == ACTIVATION_ITEM_DOCTYPE:
         return _activation_scope(name)
     frappe.throw("Unsupported overlap-resolution seed DocType")
+
+
+def _require_activation_seed_approved_for_apply(
+    seed_doctype: str, seed_document: str
+) -> None:
+    """Keep Reviewed Activation Items preview-only until explicit approval."""
+    if seed_doctype != ACTIVATION_ITEM_DOCTYPE:
+        return
+    item = frappe.get_doc(ACTIVATION_ITEM_DOCTYPE, seed_document)
+    batch_status = frappe.db.get_value(
+        ACTIVATION_BATCH_DOCTYPE, item.parent, "status"
+    )
+    if str(batch_status or "") != "Approved":
+        frappe.throw(
+            "Approve the frozen Activation Batch before applying an overlap resolution"
+        )
 
 
 def _connected_finalized_pending_scopes(
@@ -684,17 +705,92 @@ def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
     adjacent, adjacent_total = _adjacent_unreviewed(record_ids, included)
 
     seed_policy = _policy(seed["policy_snapshot_json"])
+    sensitive_values_visible = _has_sensitive_access()
+    evidence_attributes = list(seed_policy.attributes())
     seed_fingerprints = {}
     modified = {}
     record_summaries = []
+    memberships_by_record: dict[str, list[Any]] = {}
+    for membership in memberships:
+        memberships_by_record.setdefault(str(membership.ccd_master), []).append(
+            membership
+        )
+    record_evidence = []
     for record_id in record_ids:
         row = dict(record_rows[record_id])
         row["source"] = str(row.get("ccd_reg_source") or row.get("source") or "")
         seed_fingerprints[record_id] = identity_fingerprint(row, seed_policy)
         modified[record_id] = str(row.get("modified") or "")
-        record_summaries.append(
-            {"record_id": record_id, "source": row["source"]}
+        current_group_names = sorted(
+            {
+                str(membership.identity_group)
+                for membership in memberships_by_record.get(record_id, [])
+            }
         )
+        record_summaries.append(
+            {
+                "record_id": record_id,
+                "source": row["source"],
+                "current_identity_groups": current_group_names,
+            }
+        )
+        record_evidence.append(
+            {
+                "record_id": record_id,
+                "source": row["source"],
+                "current_identity_groups": current_group_names,
+                "values": {
+                    attribute: _display_evidence_value(
+                        seed_policy.value(row, attribute), sensitive_values_visible
+                    )
+                    for attribute in evidence_attributes
+                },
+            }
+        )
+
+    active_identity_groups = []
+    for group in groups:
+        members = sorted(
+            str(membership.ccd_master)
+            for membership in memberships
+            if str(membership.identity_group) == str(group.name)
+        )
+        active_identity_groups.append(
+            {
+                "identity_group": str(group.name),
+                "status": str(group.status),
+                "originating_decision": str(group.originating_decision),
+                "records": members,
+            }
+        )
+    active_exclusion_summaries = [
+        {
+            "exclusion": str(row.name),
+            "left_record": str(row.left_record),
+            "right_record": str(row.right_record),
+            "originating_decision": str(row.originating_decision),
+            "status": str(row.status),
+        }
+        for row in exclusions
+    ]
+    active_group_overlaps = []
+    for scope in included:
+        scope_records = set(str(value) for value in scope["records"])
+        for group in active_identity_groups:
+            shared_records = sorted(scope_records.intersection(group["records"]))
+            if not shared_records:
+                continue
+            active_group_overlaps.append(
+                {
+                    "pending_doctype": str(scope["doctype"]),
+                    "pending_document": str(scope["name"]),
+                    "pending_origin": str(scope["origin"]),
+                    "pending_records": sorted(scope_records),
+                    "identity_group": group["identity_group"],
+                    "identity_group_records": group["records"],
+                    "shared_records": shared_records,
+                }
+            )
 
     membership_fields = (
         "name",
@@ -770,6 +866,9 @@ def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
         "record_ids": record_ids,
         "record_rows": record_rows,
         "record_summaries": record_summaries,
+        "record_evidence": record_evidence,
+        "evidence_attributes": evidence_attributes,
+        "sensitive_values_visible": sensitive_values_visible,
         "fingerprints": seed_fingerprints,
         "modified": modified,
         "memberships": memberships,
@@ -777,6 +876,9 @@ def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
         "exclusions": exclusions,
         "decisions": decisions,
         "current_groups": current_groups,
+        "active_identity_groups": active_identity_groups,
+        "active_exclusions": active_exclusion_summaries,
+        "active_group_overlaps": active_group_overlaps,
         "prior_same_groups": tuple(prior_same_groups),
         "included": included,
         "included_summaries": included_summaries,
@@ -904,7 +1006,13 @@ def _preview(
         "scope_fingerprint": context["scope_fingerprint"],
         "resolution_key": key,
         "records": context["record_summaries"],
+        "record_evidence": context["record_evidence"],
+        "evidence_attributes": context["evidence_attributes"],
+        "sensitive_values_visible": context["sensitive_values_visible"],
         "current_groups": context["current_groups"],
+        "active_identity_groups": context["active_identity_groups"],
+        "active_exclusions": context["active_exclusions"],
+        "active_group_overlaps": context["active_group_overlaps"],
         "default_groups": context["default_groups"],
         "replacement_groups": replacement_groups,
         "replacement_exclusions": replacement_exclusions,
@@ -922,6 +1030,17 @@ def _preview(
         "overridden_pending_scopes": overridden_pending,
         "already_represented": not changed,
         "changed": changed,
+        "seed_requires_approval": (
+            context["seed"]["doctype"] == ACTIVATION_ITEM_DOCTYPE
+        ),
+        "seed_approved": (
+            context["seed"]["doctype"] != ACTIVATION_ITEM_DOCTYPE
+            or context["seed"].get("activation_batch_status") == "Approved"
+        ),
+        "activation_batch": context["seed"].get("activation_batch", ""),
+        "activation_batch_status": context["seed"].get(
+            "activation_batch_status", ""
+        ),
         "planned": {
             "replacement_decision_type": _decision_type(replacement_groups),
             "ended_groups": len(context["groups"]) if changed else 0,
@@ -1250,6 +1369,7 @@ def apply_combined_component_resolution(
     if not reason:
         frappe.throw("A resolution reason is required")
     demonstration = _as_bool(is_demonstration)
+    _require_activation_seed_approved_for_apply(seed_doctype, seed_document)
 
     submitted_groups = _load_list(replacement_groups_json, "Final identity partition")
     preliminary = _preview(seed_doctype, seed_document, submitted_groups)

@@ -726,11 +726,14 @@ Splink Same/Different decisions: an exact checked set of 1–25
 of overlapping CCD participants, and one atomic Apply operation.
 
 Each finalized pending Candidate/Component form also exposes **Preview Combined
-Identity Component** to System Managers. Approved Activation Batch rows expose
-**Resolve Overlap** only to System Managers. The dialog displays authoritative
-included sources separately from adjacent unresolved evidence, current and
-suggested partitions, explicit All Same/All Different/Partial controls, and an
-audited Already-Represented outcome.
+Identity Component** to System Managers. Reviewed and Approved Activation Batch
+rows expose **Preview / Resolve Overlap** only to System Managers. A Reviewed
+batch can preview but cannot Apply. The dialog displays authoritative included
+sources separately from adjacent unresolved evidence, the exact pending-to-live
+Group intersection and shared bridge record, current Group members/Decision,
+active Different exclusions, a side-by-side complete-scope evidence matrix,
+current and suggested partitions, explicit All Same/All Different/Partial
+controls, and an audited Already-Represented outcome.
 
 Tiered Preview Approve All lists unsafe components with Recommendation links.
 For a component whose only safety failure is structural identity overlap, a
@@ -995,3 +998,13 @@ relationship locks, circuit-breaker enforcement, deterministic no-change
 idempotency, source lifecycle updates, audit events, and deployment/migration
 coverage. Materialization remains off after deployment; preview and tests do
 not authorize or create a new live identity relationship.
+
+### 25.1 Review-before-approval improvement — 2026-08-26
+
+Tiered Overlap Resolution batches now expose their zero-write combined preview
+in `Reviewed` state. This removes the need to approve a batch merely to learn
+which existing Group caused `partial_existing_identity_group`. The preview
+shows the pending records, existing Group and members, shared record,
+originating Decision, exclusions, and governed attributes side by side. A
+separate server-side approval guard ensures a Reviewed item cannot be applied,
+even when Materialization is enabled.

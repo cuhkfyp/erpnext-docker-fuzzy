@@ -88,9 +88,9 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
   creating the versioned replacement. Each application creates an immutable
   `CCD Identity Correction`; no CCD Master record is edited or merged.
 - A unified System-Manager-only **Combined Identity Component** workflow for a
-  finalized pending Splink decision, Exception Component Review, or approved
-  Tiered Activation Item that overlaps existing identity state. Its zero-write
-  preview recursively includes complete active Groups, applicable active
+  finalized pending Splink decision, Exception Component Review, or reviewed/
+  approved Tiered Activation Item that overlaps existing identity state. Its
+  zero-write preview recursively includes complete active Groups, applicable active
   Different exclusions, and all connected finalized pending sources across the
   three routes. Unreviewed work remains adjacent evidence only. The operator
   chooses All Same, All Different, or one complete Partial partition; Apply is
@@ -101,9 +101,14 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
 - Tiered structural overlaps are reachable without weakening ordinary batch
   safety: Preview Approve All links each unsafe component to a Recommendation;
   a manager may freeze exactly one structurally overlapping component into an
-  **Overlap Resolution** batch, review/approve it, and use the Exception item's
-  Resolve Overlap action. Stale or non-structural unsafe components remain
-  rejected, and ordinary batch Apply refuses unresolved Exception items.
+  **Overlap Resolution** batch and use the Exception item's **Preview / Resolve
+  Overlap** action while the batch is still Reviewed. The preview explicitly
+  identifies the pending records, existing Identity Group, shared bridge
+  record, current members/Decision, active Different exclusions, and displays
+  every complete-scope record side by side. Reviewed batches are preview-only;
+  Apply remains server-blocked until explicit approval. Stale or non-structural
+  unsafe components remain rejected, and ordinary batch Apply refuses
+  unresolved Exception items.
 - Corrected Component Review evidence now separates the immutable reviewer
   outcome from the live identity state. The original decision is labelled
   **Original reviewed grouping (historical)**, while the latest decision in its
@@ -219,7 +224,7 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
 | Identity exclusions/events | 9 active exclusions / 163 events |
 | Complete identity corrections | 4 total (3 applied / 1 superseded) |
 | Combined overlap resolutions | 0 |
-| Activation batches | 4 (`Applied`; 10 Applied and 1 Corrected items) |
+| Activation batches | 5 (4 Applied / 1 Reviewed; 10 Applied, 1 Corrected, and 1 Exception items) |
 | Finalized Component Reviews | 9 (7 Applied / 2 Corrected) |
 | Applied Splink candidates | 5 |
 | Reversed Splink candidates | 2 |
@@ -267,9 +272,11 @@ Before any further activation:
 6. enable Materialization only long enough to Apply the one approved batch,
    then disable it and repeat post-write verification.
 
-Materialization is currently off. Existing pilot links remain visible and
-reversible, but no new identity links can be created until a separately
-authorized route temporarily enables the global switch.
+At the 2026-08-26 read-only validation checkpoint, Materialization was enabled;
+the overlap-preview deployment did not change that setting. Batch `sg3sn8ot6e`
+remains Reviewed and its server-side approval guard prevents Apply. If there is
+no active authorized write window, the operator should disable Materialization;
+existing pilot links remain visible and reversible either way.
 
 Server transfer, clean-target installation, backup/restore, cutover, rollback,
 and new-centre onboarding are covered in
