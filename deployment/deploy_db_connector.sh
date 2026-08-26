@@ -92,6 +92,7 @@ for container in "${containers[@]}"; do
 			db_connector/api_identity_review_batch.py \
 			db_connector/identity_resolution_setup.py \
 			db_connector/identity_snapshot_backfill.py \
+			db_connector/synthetic_overlap_fixture.py \
 			db_connector/hooks.py \
 			db_connector/api_ccd_fuzzy.md \
 			db_connector/MATCHING_PILOT.md \
