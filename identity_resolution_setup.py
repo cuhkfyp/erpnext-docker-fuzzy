@@ -6,41 +6,32 @@ import frappe
 
 
 IDENTITY_CLIENT_SCRIPT = "CCD Master Identity Resolution"
+IDENTITY_LIST_CLIENT_SCRIPT = "CCD Master Identity Resolution List"
 
 
-def _install_identity_client_script() -> dict[str, object]:
-    """Load the CCD Master renderer through the path supported by custom DocTypes."""
+def _upsert_identity_client_script(
+    *, name: str, view: str, public_filename: str, enabled: bool
+) -> dict[str, object]:
     script = frappe.read_file(
-        frappe.get_app_path(
-            "db_connector",
-            "public",
-            "js",
-            "ccd_master_identity_resolution.js",
-        )
+        frappe.get_app_path("db_connector", "public", "js", public_filename)
     )
-    # FormMeta.add_code() intentionally skips doctype_js hooks for custom
-    # DocTypes.  CCD Master is custom on this site, so an enabled Client Script
-    # is required for the renderer to reach the browser.  Keep it disabled on a
-    # future site where CCD Master is standard; the existing doctype_js hook is
-    # the correct path there and loading both would register duplicate handlers.
-    enabled = bool(frappe.db.get_value("DocType", "CCD Master", "custom"))
     values = {
         "dt": "CCD Master",
-        "view": "Form",
+        "view": view,
         "enabled": enabled,
         "script": script,
     }
-    created = not frappe.db.exists("Client Script", IDENTITY_CLIENT_SCRIPT)
+    created = not frappe.db.exists("Client Script", name)
     if created:
         frappe.get_doc(
             {
                 "doctype": "Client Script",
-                "name": IDENTITY_CLIENT_SCRIPT,
+                "name": name,
                 **values,
             }
         ).insert(ignore_permissions=True)
     else:
-        client_script = frappe.get_doc("Client Script", IDENTITY_CLIENT_SCRIPT)
+        client_script = frappe.get_doc("Client Script", name)
         changed = any(
             client_script.get(fieldname) != value
             for fieldname, value in values.items()
@@ -48,12 +39,33 @@ def _install_identity_client_script() -> dict[str, object]:
         if changed:
             client_script.update(values)
             client_script.save(ignore_permissions=True)
-    frappe.clear_cache(doctype="CCD Master")
-    return {
-        "name": IDENTITY_CLIENT_SCRIPT,
-        "enabled": enabled,
-        "created": created,
+    return {"name": name, "view": view, "enabled": enabled, "created": created}
+
+
+def _install_identity_client_scripts() -> dict[str, dict[str, object]]:
+    """Load CCD Master form/list integrations through the custom-DocType path."""
+    # FormMeta.add_code() intentionally skips doctype_js hooks for custom
+    # DocTypes, and the same boundary applies to list scripts. CCD Master is
+    # custom on this site, so enabled Client Scripts are required for both the
+    # form renderer and the list entry point. Keep them disabled on a future
+    # standard DocType, where the normal hooks provide the same code.
+    enabled = bool(frappe.db.get_value("DocType", "CCD Master", "custom"))
+    installed = {
+        "form": _upsert_identity_client_script(
+            name=IDENTITY_CLIENT_SCRIPT,
+            view="Form",
+            public_filename="ccd_master_identity_resolution.js",
+            enabled=enabled,
+        ),
+        "list": _upsert_identity_client_script(
+            name=IDENTITY_LIST_CLIENT_SCRIPT,
+            view="List",
+            public_filename="ccd_master_identity_resolution_list.js",
+            enabled=enabled,
+        ),
     }
+    frappe.clear_cache(doctype="CCD Master")
+    return installed
 
 
 def _identity_custom_fields() -> dict[str, list[dict[str, object]]]:
@@ -135,7 +147,7 @@ def install_identity_resolution() -> dict[str, object]:
     from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
     create_custom_fields(_identity_custom_fields(), update=True)
-    client_script = _install_identity_client_script()
+    client_scripts = _install_identity_client_scripts()
     _add_indexes()
     migration = _migrate_recommendation_terms()
     # Reading the Single creates no business data and preserves the default-off
@@ -147,7 +159,10 @@ def install_identity_resolution() -> dict[str, object]:
             "CCD Master-ccd_identity_resolution_tab",
             "CCD Master-ccd_identity_resolution_html",
         ],
-        "client_script": client_script,
+        # Keep the original singular key for callers written before the List
+        # Client Script was introduced.
+        "client_script": client_scripts["form"],
+        "client_scripts": client_scripts,
         "materialization_enabled": bool(settings.materialization_enabled),
         "recommendation_term_migration": migration,
         "activation_item_source_backfill": activation_item_source_backfill,

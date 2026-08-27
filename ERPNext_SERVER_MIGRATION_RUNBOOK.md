@@ -79,7 +79,7 @@ list is not a promise that every app is required for a feature-only target, but
 it is required for an exact full-site restore unless an app-removal migration
 has been separately designed and tested.
 
-### 2.1 CCD Master identity-view loading boundary
+### 2.1 CCD Master identity-view and list-register loading boundary
 
 `CCD Master` is a custom DocType (`tabDocType.custom = 1`) on the current site.
 Frappe intentionally skips `doctype_js` hooks while building form metadata for
@@ -92,18 +92,27 @@ doctype_js = {
 }
 ```
 
-`db_connector.identity_resolution_setup.install_identity_resolution` reads that
+`db_connector.identity_resolution_setup.install_identity_resolution` reads the
 versioned JavaScript and idempotently creates or updates an enabled Form Client
-Script named **CCD Master Identity Resolution** when `CCD Master` is custom. If
-a future target uses a standard `CCD Master`, the managed Client Script is kept
-disabled and the normal `doctype_js` hook supplies the same renderer, avoiding
-duplicate form handlers.
+Script named **CCD Master Identity Resolution** when `CCD Master` is custom. It
+also installs the **CCD Master Identity Resolution List** Client Script, whose
+button opens the standard **CCD Identity Resolution Register** Script Report.
+If a future target uses a standard `CCD Master`, both managed Client Scripts are
+kept disabled and the normal `doctype_js` / `doctype_list_js` hooks supply the
+same integrations, avoiding duplicate handlers.
 
 The tab's HTML is dynamic. No group/member summary is stored in the CCD Master
 document itself: the form script calls
 `db_connector.api_identity_resolution.get_identity_resolution` and renders the
 response. A visible but empty tab means the renderer did not load or execute;
 it does not prove that Membership rows are absent.
+
+The List button follows the same non-denormalized design. The register derives
+`Linked`, `Needs Revalidation`, and fingerprint-current `Resolved Separately`
+states from Identity Membership/Group/Decision/Exclusion rows at read time. Do
+not replace it with custom summary fields maintained on CCD Master: those
+writes would change `modified` and can correctly invalidate frozen candidate or
+recommendation snapshots.
 
 ## 3. Required artifacts
 
@@ -361,6 +370,9 @@ identity hooks instead of blindly overwriting it. Required integrations are:
 - the CCD Master `doctype_js` source file plus the managed **CCD Master Identity
   Resolution** Client Script installed by `install_identity_resolution` when
   CCD Master is custom;
+- the CCD Master `doctype_list_js` source file plus the managed **CCD Master
+  Identity Resolution List** Client Script, and the standard **CCD Identity
+  Resolution Register** report files;
 - CCD Master `on_update` event for fingerprint revalidation; and
 - daily `db_connector.api_identity_qc.run_qc_monitor` scheduling.
 
@@ -747,6 +759,10 @@ PYTHONPATH=.:./db_connector \
 - CCD Master contains the Identity Resolution tab/custom HTML field;
 - an enabled **CCD Master Identity Resolution** Client Script exists when CCD
   Master is custom, and its source contains `load_identity_resolution`;
+- an enabled **CCD Master Identity Resolution List** Client Script exists when
+  CCD Master is custom; the CCD Master List shows **Identity Resolution
+  Register**, and that report opens with `Linked`, `Needs Revalidation`, and
+  `Resolved Separately` filters plus Group/member-count filters;
 - identity membership/exclusion/event indexes exist;
 - `CCD Match Reviewer`, `CCD Match Sensitive Reviewer`, and System Manager
   permissions behave as designed;

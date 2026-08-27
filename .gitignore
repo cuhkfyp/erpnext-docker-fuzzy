@@ -30,6 +30,8 @@
 !db_connector/__init__.py
 !db_connector/doctype/
 !db_connector/doctype/**
+!db_connector/report/
+!db_connector/report/**
 !tests/
 !tests/**
 !CCD_TIERED_EVIDENCE_AND_SPLINK_TECHNICAL_GUIDE.md
@@ -50,6 +52,7 @@ public/*
 !public/js/
 public/js/*
 !public/js/ccd_master_identity_resolution.js
+!public/js/ccd_master_identity_resolution_list.js
 !public/js/identity_component_correction.js
 
 # Never track generated or sensitive runtime material.

@@ -8,7 +8,7 @@
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
-| Deployment | Schema, services, controllers, managed CCD Master Client Script, and frontend assets deployed |
+| Deployment | Schema, services, controllers, managed CCD Master Form/List Client Scripts, and frontend assets deployed |
 | Materialization | Disabled by default (`materialization_enabled = 0`) |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
 | Live identity writes | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
@@ -122,6 +122,14 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
   for the current custom CCD Master DocType. Frappe skips `doctype_js` hooks for
   custom DocTypes, so checking the form metadata is a mandatory deployment
   acceptance test.
+- A read-only **CCD Identity Resolution Register** Script Report and an
+  idempotently managed **CCD Master Identity Resolution List** Client Script.
+  The CCD Master List button opens server-backed filters for current identity
+  state, CCD/source/group, Group status and member count, and current Different
+  relationships. The register recomputes fingerprint-scoped current state from
+  the governed identity objects; it deliberately stores no derived fields on
+  CCD Master, so using it cannot modify source records or stale frozen matching
+  snapshots.
 - Recommendation lifecycle vocabulary migrated to
   Proposed/Approved/Exception/Withdrawn/Superseded without changing the live
   recommendation population.
@@ -168,6 +176,15 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
 - The Component Review and Splink Review Candidate list hooks and frontend
   assets are deployed. Their bulk APIs reject ineligible rows without writing
   and report the global switch state.
+- On 2026-08-27 the deployed **CCD Identity Resolution Register** returned 99
+  current resolved CCD Masters: 84 `Linked`, zero `Needs Revalidation`, and 15
+  fingerprint-current `Resolved Separately`. Live checks also exercised the
+  Linked/minimum-group-size and Separate/active-Different filters, confirmed
+  the standard Report and enabled custom-DocType List Client Script, and found
+  both Materialization and the automation circuit breaker at `0`. The report
+  returned the same governed result for an existing CCD Match Reviewer while
+  rejecting Guest with `CCD Match Reviewer role is required`. The deployment
+  did not update any CCD Master document.
 - The two-record Splink false-Same correction schema and form are deployed.
   Candidate `8ac22119c8` passed the zero-write eligibility preview with exactly
   one active Group and two active Memberships while Materialization was off.

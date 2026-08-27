@@ -12,6 +12,7 @@ doctype_js = {
 }
 
 doctype_list_js = {
+    "CCD Master": "public/js/ccd_master_identity_resolution_list.js",
     "CCD Match Component Review": "public/js/ccd_match_component_review_list.js",
     "CCD Match Review Candidate": "public/js/ccd_match_review_candidate_list.js",
 }
