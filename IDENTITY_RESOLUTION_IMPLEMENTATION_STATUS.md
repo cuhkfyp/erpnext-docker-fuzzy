@@ -5,13 +5,15 @@
 | Item | Verified state |
 | --- | --- |
 | Date | 2026-08-25 UTC |
+| Status updated | 2026-08-28 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
 | Deployment | Schema, services, controllers, managed CCD Master Form/List Client Scripts, and frontend assets deployed |
 | Materialization | Disabled by default (`materialization_enabled = 0`) |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
-| Live identity writes | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
+| 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
+| Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 
 The predecessor session completed the workflow specification and pushed it at
 commit `cfef788`. This fresh session recovered that durable artifact, audited
@@ -225,7 +227,11 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
   `partial_existing_identity_group` from the already identified Splink/Tiered
   overlap and is not eligible for a batch.
 
-### Live read-only state
+### Historical pre-overlap read-only state (2026-08-25 snapshot)
+
+This table is the immutable pre-overlap acceptance baseline, not a current
+inventory. Later controlled development tests intentionally added overlap and
+correction audits; their exact evidence is recorded in the following matrix.
 
 | Measure | Result |
 | --- | ---: |
@@ -249,6 +255,54 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
 | Reversed Splink candidates | 2 |
 | Review batches | 0 |
 | QC investigations | 0 |
+
+### Completed overlap acceptance matrix — development
+
+The following browser tests were completed on 2026-08-26 and 2026-08-27 using
+the deployed workflows. Each successful write has an immutable **CCD Identity
+Overlap Resolution** audit. IDs in the tables are retained so another operator
+can reproduce the audit trail without relying on this conversation. The three
+synthetic route pairs use the isolated records documented in
+`SYNTHETIC_OVERLAP_TEST_GUIDE.md`; they are development evidence, not production
+identity assertions.
+
+#### Route-combination coverage
+
+| Route combination | Applied source sequence | Overlap Resolution | Observed result | Acceptance |
+| --- | --- | --- | --- | --- |
+| Tiered Evidence ↔ Splink | Splink candidate `9209ece5f3`, then Tiered recommendation `rsuqpl6o3l` / Activation Item `sg3e2q8s90` | `66qehmis6i` | The complete three-record scope replaced the touched two-member Splink Group atomically | Pass |
+| Tiered Evidence ↔ Exception Component | Canary `c9ar8irjoh`, then Component Review `c9pgvrnb5i` | `cd9u47trjp` | The synthetic three-record combined scope was applied as one Group | Pass |
+| Tiered Evidence ↔ Tiered Evidence | Canary `c9rmhiqd5t`, then recommendation `c9r0h2l7eg` | `6jf2eq47pg` | The later synthetic Tiered edge expanded and replaced the earlier two-record Group atomically | Pass |
+| Splink ↔ Splink | Candidate `0c9c266414`, then candidate `f8a4546e22` | `618ri00drh` | The shared-record bridge produced the expected complete three-member Group | Pass |
+| Splink ↔ Exception Component | Candidate `4f4117525a`, then Component Review `l2s0d4o677` | `h3d9b677fb` | The complete four-record scope replaced the touched Splink Group atomically | Pass |
+| Exception Component ↔ Exception Component | Component Review `c9sa51sbfi`, then Component Review `c9s1cprvlp` | `gq809ba7gn` | The synthetic shared-record bridge produced the expected complete three-member Group | Pass |
+
+This covers the complete unordered route cross-product: each route against
+itself and each of the three pairwise cross-route combinations.
+
+#### Result-mode and safety coverage
+
+| Behaviour | Test source / immutable audit | Observed result | Acceptance |
+| --- | --- | --- | --- |
+| Already Represented / No Change | Candidate `8acbcca1ee`; Overlap Resolution `fpeumc18r9` | Status `No Change`; no Decision, Group, Membership, or Exclusion was created or ended | Pass |
+| Partial Match | Existing candidate `007bb1c300`, then candidate `609cd5fe5e`; Overlap Resolution `4gk9d6et1i` | One two-record Group remained active, the third record remained separate, and two cross-partition Different exclusions were created | Pass |
+| All Different | Existing candidate `00115bf214`, then candidate `a548d9e68c`; Overlap Resolution `opumkjd37b` | The old Group and two Memberships ended; all three records became singletons with three pairwise Different exclusions | Pass |
+| Bridge two active Groups | Groups `0t7rirlenu` and `vknjkjc60g` through false bridge candidate `cc8e335528`; Overlap Resolution `m2tq57q3pn` | Both complete Groups were absorbed into one five-member result; no partial Group was left behind | Pass |
+| Override active Different | Candidate `ca5fc0b764`; Overlap Resolution `ohgcu05pg2` | Six active cross-group exclusions were explicitly superseded before one five-member Same Group was created | Pass |
+| Stale after preview | Candidate `fe4cfb9294` | Apply failed closed with both `source_modified_after_snapshot` and `identity_fingerprint_changed`; no Overlap Resolution or identity write was created | Pass |
+| Correct an applied overlap — split bridge back | Correction `1o8s384r8t` against the decision from `m2tq57q3pn` | The temporary five-member bridge Group ended and the original two complete Groups were recreated with cross-group exclusions | Pass |
+| Correct an applied overlap — restore Different partition | Correction `pitqlh34sk` against the decision from `ohgcu05pg2` | The temporary five-member Group ended and the prior two-group partition plus six exclusions was recreated | Pass |
+
+The `Superseded` status now shown on overlap audits `m2tq57q3pn` and
+`ohgcu05pg2` is the expected result of the two successful correction tests, not
+a failed overlap application. Together these tests accept All Same, Partial
+Match, All Different, and Already Represented/No Change; complete-group
+bridging; explicit Different override; stale-snapshot/fingerprint rejection;
+and correction of an applied overlap. This completes functional overlap
+acceptance on the development site. It does not authorize production
+materialization, establish production identity truth for synthetic records, or
+replace backup, migration-rehearsal, QC/automation, and management-approval
+gates.
 
 ### Zero-write activation preview
 
