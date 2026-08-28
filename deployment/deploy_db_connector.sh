@@ -84,6 +84,7 @@ for container in "${containers[@]}"; do
 			db_connector/api_fuzzy_review_queue.py \
 			db_connector/api_fuzzy_splink_experiment.py \
 			db_connector/api_identity_activation.py \
+			db_connector/api_identity_automation.py \
 			db_connector/api_identity_correction.py \
 			db_connector/api_identity_human.py \
 			db_connector/api_identity_overlap.py \
@@ -93,6 +94,7 @@ for container in "${containers[@]}"; do
 			db_connector/identity_resolution_setup.py \
 			db_connector/identity_snapshot_backfill.py \
 			db_connector/synthetic_overlap_fixture.py \
+			db_connector/synthetic_qc_automation_fixture.py \
 			db_connector/hooks.py \
 			db_connector/api_ccd_fuzzy.md \
 			db_connector/MATCHING_PILOT.md \

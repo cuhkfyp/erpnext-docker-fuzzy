@@ -24,7 +24,7 @@ frappe.ui.form.on("CCD Identity Activation Batch", {
 			});
 		}
 		const hasStructuralOverlap = (frm.doc.items || []).some((item) => item.status === "Exception");
-		if (frm.doc.status === "Approved" && !hasStructuralOverlap) {
+		if (frm.doc.status === "Approved" && !hasStructuralOverlap && !frm.doc.is_automatic) {
 			frm.add_custom_button(__("Apply Approved Batch"), () => {
 				frappe.confirm(
 					__("Run fresh safety checks and create reversible Identity Decisions, Groups, and Memberships? This is blocked while Live Identity Materialization is disabled or paused."),
@@ -37,7 +37,7 @@ frappe.ui.form.on("CCD Identity Activation Batch", {
 				);
 			});
 		}
-		if (frm.doc.status === "Failed") {
+		if (frm.doc.status === "Failed" && !frm.doc.is_automatic) {
 			frm.add_custom_button(__("Revalidate for Retry"), () => {
 				frappe.confirm(
 					__("Re-run the frozen component and safety checks before returning this batch to Approved?"),

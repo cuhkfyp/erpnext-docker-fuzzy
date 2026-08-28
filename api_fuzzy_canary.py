@@ -738,6 +738,7 @@ def get_recommendation_evidence(recommendation_name: str) -> dict[str, Any]:
     submitted = any(row.reviewer == frappe.session.user for row in ordinary)
     payload["can_submit_qc"] = bool(
         recommendation.qc_selected
+        and recommendation.qc_assigned_at
         and not payload["stale"]
         and recommendation.qc_review_status in OPEN_REVIEW_STATUSES
         and not submitted
@@ -1210,6 +1211,8 @@ def _update_qc_review_state(recommendation: Any) -> None:
         else:
             recommendation.qc_review_status = "Adjudicated"
             recommendation.qc_final_label = adjudication.label
+            if not recommendation.qc_finalized_at:
+                recommendation.qc_finalized_at = frappe.utils.now_datetime()
         return
     labels = [row.label for row in ordinary]
     if "Unsure" in labels:
@@ -1219,8 +1222,27 @@ def _update_qc_review_state(recommendation: Any) -> None:
     elif len(set(labels)) == 1:
         recommendation.qc_review_status = "Agreed"
         recommendation.qc_final_label = labels[0]
+        if not recommendation.qc_finalized_at:
+            recommendation.qc_finalized_at = frappe.utils.now_datetime()
     else:
         recommendation.qc_review_status = "Needs Adjudication"
+
+
+def _locked_qc_recommendation(recommendation_name: str) -> Any:
+    """Use the same Run -> Recommendation lock order as QC assignment."""
+    from db_connector.api_identity_qc import _lock_named_rows
+
+    run_name = frappe.db.get_value(
+        RECOMMENDATION_DOCTYPE, recommendation_name, "canary_run"
+    )
+    if not run_name:
+        frappe.throw("The QC recommendation no longer exists")
+    _lock_named_rows(RUN_DOCTYPE, (str(run_name),))
+    _lock_named_rows(RECOMMENDATION_DOCTYPE, (recommendation_name,))
+    recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, recommendation_name)
+    if str(recommendation.canary_run) != str(run_name):
+        frappe.throw("The QC recommendation changed while it was being locked")
+    return recommendation
 
 
 @frappe.whitelist()
@@ -1230,9 +1252,13 @@ def submit_recommendation_qc(
     _require_reviewer()
     if label not in {"Same", "Different", "Unsure"}:
         frappe.throw("QC label must be Same, Different, or Unsure")
-    recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, recommendation_name)
+    recommendation = _locked_qc_recommendation(recommendation_name)
     if not recommendation.qc_selected:
         frappe.throw("This recommendation is not in the random QC sample")
+    if not recommendation.qc_assigned_at:
+        frappe.throw(
+            "This QC case has not been released by a manager or the governed QC cadence"
+        )
     if _recommendation_stale(recommendation):
         recommendation.db_set(
             {"qc_stale": 1, "qc_review_status": "Stale"}, update_modified=False
@@ -1282,7 +1308,7 @@ def adjudicate_recommendation_qc(
         frappe.throw("QC adjudication must be Same or Different")
     if not str(notes or "").strip():
         frappe.throw("Adjudication notes are required")
-    recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, recommendation_name)
+    recommendation = _locked_qc_recommendation(recommendation_name)
     if _recommendation_stale(recommendation):
         frappe.throw("This recommendation is stale. Review it in a new canary.")
     if recommendation.qc_review_status != "Needs Adjudication":

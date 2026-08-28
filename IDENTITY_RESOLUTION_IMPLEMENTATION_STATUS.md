@@ -4,7 +4,7 @@
 
 | Item | Verified state |
 | --- | --- |
-| Date | 2026-08-25 UTC |
+| Date | 2026-08-28 UTC |
 | Status updated | 2026-08-28 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
@@ -12,7 +12,9 @@
 | Deployment | Schema, services, controllers, managed CCD Master Form/List Client Scripts, and frontend assets deployed |
 | Materialization | Disabled by default (`materialization_enabled = 0`) |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
+| Automatic QC / Tiered | Both separately controlled and disabled (`automatic_qc_assignment_enabled = 0`, `automatic_tiered_enabled = 0`) |
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
+| 2026-08-28 current totals | 60 Decisions, 56 Groups, 136 Memberships, 33 Exclusions, and 381 Events; unchanged by the QC/automation migration |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 
 The predecessor session completed the workflow specification and pushed it at
@@ -30,6 +32,15 @@ CCD Master source documents.
 On 2026-08-25, the unified overlap resolver was deployed and tested with
 Materialization still off. Its live tests used transaction rollback; they did
 not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
+
+On 2026-08-28, continuous QC governance and bounded Automatic Tiered were
+deployed with Materialization, Automatic QC, and Automatic Tiered all off. The
+migration added schema and controls only; the identity-object totals remained
+exactly unchanged and `surfshark-wireguard` remained healthy throughout. After
+a full backup, the development-only QC/automation fixture was created as Canary
+`o2c67pgdv9`: six isolated Proposed/Available Tiered components, three initially
+selected but unassigned for QC and three eligible for cadence replenishment.
+Fixture creation left the identity-object totals unchanged.
 
 ## Implemented controls
 
@@ -58,9 +69,13 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
   batch document.
 - Optional non-zero Splink Review Batches. Creating no batch correctly leaves
   assigned work at zero.
-- Asynchronous QC sampling, rolling Wilson precision monitoring, overdue-case
-  checks, investigations, revalidation state, and an automation circuit
-  breaker.
+- Continuous QC release, SLA/cadence, deterministic replenishment, finalization-
+  ordered rolling Wilson precision, overdue checks, immutable investigations,
+  current-shared-Group revalidation, and a global Tiered circuit breaker.
+- Separate default-off, manager-only and audited controls for Automatic QC and
+  bounded Automatic Tiered. Each automatic batch freezes its authorization
+  revision/Event, skips unsafe complete components, and rechecks every control
+  under lock; ordinary batch Apply cannot apply an automatic batch.
 - Permission-masked identity fields and an Identity Resolution tab on CCD
   Master. Legacy fuzzy fields are retained but are not written by this system.
 - Dynamic ungrouped-state wording: a fingerprint-current Different decision is
@@ -142,9 +157,13 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
 
 - All new and modified DocType JSON files parse successfully.
 - Python compilation succeeds.
-- The complete test suite passes: 74 tests, 0 failures, including transitive
-  overlap partition, Different-constraint conflict, and active-group split
-  detection tests.
+- The changed automation/identity/overlap/correction suite passes 24/24 in both
+  the workspace and deployed Frappe container. In broad container discovery,
+  62 tests passed; two older import-only test classes could not initialize
+  because the unrelated private-app `__init__.py` now imports `api_ai` while
+  those legacy tests replace Frappe with a minimal stub. Product imports,
+  migration, and runtime startup succeeded; the legacy test harness remains a
+  separate cleanup item rather than being hidden as a passing full suite.
 - Frappe migration, role/policy setup, workflow installation, asset build,
   cache clear, and service restart completed.
 - The frontend-local public renderer is served with HTTP 200, and live CCD
@@ -153,6 +172,11 @@ not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
 - All backend, scheduler, and queue containers are running; two workers are
   online.
 - Re-running setup is designed to be idempotent.
+- The 2026-08-28 zero-write Automatic Tiered preview returned both automatic
+  controls off, Materialization off, no authorized Canary/Policy, zero selected
+  components, zero planned identity objects, and `would_write_now = false`.
+  Decision/Group/Membership/Exclusion/Event counts remained
+  `60/56/136/33/381` afterward.
 - The deployed combined preview was exercised against finalized Splink
   candidate `d41a94b39e` inside an isolated rollback-only transaction. It
   expanded the complete active two-record Group, included the one authoritative
@@ -331,25 +355,22 @@ excluded from planned writes, leaving 7,018 planned member records.
 
 ## Next controlled decision
 
-The development pilot does not authorize a production rollout or wider wave.
-Before any further activation:
+Functional overlap acceptance is complete. The next controlled step is the
+dedicated QC/automation acceptance in
+`SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md`. The full pre-fixture backup completed
+at 2026-08-28 17:30 UTC under
+`sites/frontend/private/backups/20260828_172630-frontend-*`. Fixture Canary
+`o2c67pgdv9` is created and passed pristine verification. The next operator
+actions are to verify assignment gating and masking, exercise QC Same and the
+deliberate QC Different breaker/recovery, prove overdue/stale replenishment, and
+apply only a bounded automatic synthetic cycle.
 
-1. complete browser acceptance for Linked, Resolved Separately, and Not Grouped
-   CCD Master records;
-2. verify the twenty-five active Groups, fifty-eight active Memberships, nine
-   active Exclusions, 163 Events,
-   masking, QC assignments, idempotent re-Apply behavior, and correction path;
-3. demonstrate the bounded pilot and obtain explicit management authorization;
-4. create and inspect a new component-atomic batch for the authorized scope;
-5. take a fresh full backup immediately before that next write window; and
-6. enable Materialization only long enough to Apply the one approved batch,
-   then disable it and repeat post-write verification.
-
-Materialization is currently off at the latest 2026-08-26 read-only checkpoint;
-the overlap-preview deployments did not change that setting. Batch `sg3sn8ot6e`
-remains Reviewed and its server-side approval guard also prevents Apply.
-Existing pilot links remain visible and reversible while no new identity links
-can be created.
+Materialization, Automatic QC, and Automatic Tiered are currently off. No
+production rollout, wider development wave, or unattended write is authorized
+by this implementation. Production remains gated by migration rehearsal,
+fresh backup, named reviewer/manager ownership, completed browser acceptance,
+and an explicit management decision covering the exact Canary, Policy, cadence,
+SLA, and component limit.
 
 Server transfer, clean-target installation, backup/restore, cutover, rollback,
 and new-centre onboarding are covered in

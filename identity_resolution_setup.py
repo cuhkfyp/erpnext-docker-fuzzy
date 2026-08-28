@@ -7,6 +7,26 @@ import frappe
 
 IDENTITY_CLIENT_SCRIPT = "CCD Master Identity Resolution"
 IDENTITY_LIST_CLIENT_SCRIPT = "CCD Master Identity Resolution List"
+SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
+
+
+def _backfill_fail_closed_automation_defaults() -> dict[str, int]:
+    """Initialize newly added controls without changing an existing decision."""
+    defaults = {
+        "automatic_tiered_enabled": 0,
+        "automatic_qc_assignment_enabled": 0,
+        "automation_paused": 0,
+        "automation_control_revision": 0,
+        "automatic_tiered_components_per_run": 10,
+        "automatic_tiered_schedule": "Daily",
+        "qc_assignment_interval_days": 7,
+    }
+    initialized = 0
+    for fieldname, value in defaults.items():
+        if frappe.db.get_single_value(SETTINGS_DOCTYPE, fieldname) in (None, ""):
+            frappe.db.set_single_value(SETTINGS_DOCTYPE, fieldname, value)
+            initialized += 1
+    return {"initialized": initialized}
 
 
 def _upsert_identity_client_script(
@@ -112,7 +132,11 @@ def _add_indexes() -> None:
 
 def _migrate_recommendation_terms() -> dict[str, int]:
     if not frappe.db.table_exists("CCD Match Recommendation"):
-        return {"active_to_approved": 0, "reversed_to_withdrawn": 0}
+        return {
+            "active_to_approved": 0,
+            "reversed_to_withdrawn": 0,
+            "qc_finalized_at_backfilled": 0,
+        }
     active = frappe.db.count("CCD Match Recommendation", {"status": "Active"})
     reversed_count = frappe.db.count("CCD Match Recommendation", {"status": "Reversed"})
     if active:
@@ -127,6 +151,22 @@ def _migrate_recommendation_terms() -> dict[str, int]:
         "UPDATE `tabCCD Match Recommendation` SET rollout_state = 'Available' "
         "WHERE COALESCE(rollout_state, '') = ''"
     )
+    qc_finalized_at_backfilled = 0
+    if frappe.get_meta("CCD Match Recommendation").has_field("qc_finalized_at"):
+        qc_finalized_at_backfilled = frappe.db.count(
+            "CCD Match Recommendation",
+            {
+                "qc_review_status": ["in", ["Agreed", "Adjudicated"]],
+                "qc_finalized_at": ["is", "not set"],
+            },
+        )
+        if qc_finalized_at_backfilled:
+            frappe.db.sql(
+                "UPDATE `tabCCD Match Recommendation` "
+                "SET qc_finalized_at = modified "
+                "WHERE qc_review_status IN ('Agreed', 'Adjudicated') "
+                "AND qc_finalized_at IS NULL"
+            )
     if frappe.db.table_exists("CCD Match Canary Run"):
         from db_connector.api_fuzzy_canary import _refresh_run_counts
 
@@ -137,6 +177,7 @@ def _migrate_recommendation_terms() -> dict[str, int]:
     return {
         "active_to_approved": int(active),
         "reversed_to_withdrawn": int(reversed_count),
+        "qc_finalized_at_backfilled": int(qc_finalized_at_backfilled),
     }
 
 
@@ -150,9 +191,8 @@ def install_identity_resolution() -> dict[str, object]:
     client_scripts = _install_identity_client_scripts()
     _add_indexes()
     migration = _migrate_recommendation_terms()
-    # Reading the Single creates no business data and preserves the default-off
-    # materialization switch established in the DocType schema.
-    settings = frappe.get_single("CCD Identity Resolution Settings")
+    automation_defaults = _backfill_fail_closed_automation_defaults()
+    settings = frappe.get_single(SETTINGS_DOCTYPE)
     activation_item_source_backfill = backfill_activation_item_source_pairs()
     return {
         "custom_fields": [
@@ -164,6 +204,11 @@ def install_identity_resolution() -> dict[str, object]:
         "client_script": client_scripts["form"],
         "client_scripts": client_scripts,
         "materialization_enabled": bool(settings.materialization_enabled),
+        "automatic_tiered_enabled": bool(settings.automatic_tiered_enabled),
+        "automatic_qc_assignment_enabled": bool(
+            settings.automatic_qc_assignment_enabled
+        ),
+        "automation_defaults": automation_defaults,
         "recommendation_term_migration": migration,
         "activation_item_source_backfill": activation_item_source_backfill,
     }

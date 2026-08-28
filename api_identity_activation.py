@@ -27,6 +27,7 @@ RUN_DOCTYPE = "CCD Match Canary Run"
 RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 BATCH_DOCTYPE = "CCD Identity Activation Batch"
 EVENT_DOCTYPE = "CCD Match Recommendation Event"
+SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
 
 
 def _json(value: Any) -> str:
@@ -284,6 +285,7 @@ def _selection_fingerprint(
     run_name: str,
     selection_method: str,
     selected: list[tuple[str, list[Any]]],
+    automation_control_revision: int = 0,
 ) -> str:
     payload = {
         "run": run_name,
@@ -296,6 +298,8 @@ def _selection_fingerprint(
             for key, rows in selected
         ],
     }
+    if automation_control_revision:
+        payload["automation_control_revision"] = int(automation_control_revision)
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -310,6 +314,9 @@ def _create_activation_batch(
     is_demonstration: int | str = 0,
     *,
     allow_structural_overlap: bool = False,
+    is_automatic: bool = False,
+    automation_control_revision: int = 0,
+    automation_authorization_event: str = "",
 ) -> dict[str, Any]:
     _require_manager()
     allowed_methods = {
@@ -320,6 +327,8 @@ def _create_activation_batch(
     }
     if allow_structural_overlap:
         allowed_methods.add("Overlap Resolution")
+    if is_automatic:
+        allowed_methods.add("Automatic Tiered")
     if selection_method not in allowed_methods:
         frappe.throw("Unsupported Activation Batch selection method")
     run = _run(run_name)
@@ -352,7 +361,12 @@ def _create_activation_batch(
             )
     elif allow_structural_overlap:
         frappe.throw("This component is safe; use a normal Activation Batch")
-    selection_fingerprint = _selection_fingerprint(run.name, selection_method, selected)
+    selection_fingerprint = _selection_fingerprint(
+        run.name,
+        selection_method,
+        selected,
+        int(automation_control_revision or 0) if is_automatic else 0,
+    )
     existing = frappe.db.get_value(
         BATCH_DOCTYPE, {"selection_fingerprint": selection_fingerprint}, "name"
     )
@@ -375,6 +389,9 @@ def _create_activation_batch(
             "idempotency_key": idempotency_key,
             "is_pilot_wave": int(is_pilot_wave or 0),
             "is_demonstration": int(is_demonstration or 0),
+            "is_automatic": int(is_automatic),
+            "automation_control_revision": int(automation_control_revision or 0),
+            "automation_authorization_event": automation_authorization_event or None,
             "status": "Reviewed",
             "selected_component_count": preview["selected_component_count"],
             "selected_recommendation_count": preview["selected_recommendation_count"],
@@ -411,6 +428,79 @@ def _create_activation_batch(
     batch.insert(ignore_permissions=True)
     frappe.db.commit()
     return {"batch": batch.name, "status": batch.status, **{k: v for k, v in preview.items() if k != "components"}}
+
+
+def preview_automatic_component_selection(
+    run_name: str, component_limit: int
+) -> dict[str, Any]:
+    """Select the first bounded safe components while reporting skipped conflicts."""
+    run = _run(run_name)
+    limit = int(component_limit or 0)
+    if limit < 1 or limit > 100:
+        frappe.throw("Automatic component limit must be between 1 and 100")
+    selected: list[tuple[str, list[Any]]] = []
+    skipped = []
+    for component_key, rows in _selected_components(run.name):
+        summary = _preview_components(run, [(component_key, rows)])["components"][0]
+        if summary["safe"]:
+            selected.append((component_key, rows))
+            if len(selected) >= limit:
+                break
+        else:
+            skipped.append(summary)
+    preview = _preview_components(run, selected) if selected else {
+        "run": run.name,
+        "zero_write": True,
+        "selected_component_count": 0,
+        "selected_recommendation_count": 0,
+        "safe_component_count": 0,
+        "unsafe_component_count": 0,
+        "stale_component_count": 0,
+        "planned_identity_group_count": 0,
+        "planned_membership_count": 0,
+        "conflict_counts": {},
+        "components": [],
+    }
+    preview["component_keys"] = [key for key, _rows in selected]
+    preview["skipped_unsafe_component_count"] = len(skipped)
+    preview["skipped_components"] = skipped
+    return preview
+
+
+def create_automatic_activation_batch(
+    run_name: str,
+    component_limit: int,
+    automation_control_revision: int,
+    automation_authorization_event: str,
+) -> dict[str, Any]:
+    """Freeze one pre-authorized bounded automatic batch; applying is separate."""
+    _require_manager()
+    selection = preview_automatic_component_selection(run_name, component_limit)
+    if not selection["component_keys"]:
+        return {
+            "status": "No Eligible Components",
+            "batch": "",
+            **selection,
+        }
+    result = _create_activation_batch(
+        run_name,
+        "Automatic Tiered",
+        None,
+        selection["component_keys"],
+        0,
+        0,
+        allow_structural_overlap=False,
+        is_automatic=True,
+        automation_control_revision=int(automation_control_revision or 0),
+        automation_authorization_event=automation_authorization_event,
+    )
+    return {
+        **result,
+        "skipped_unsafe_component_count": selection[
+            "skipped_unsafe_component_count"
+        ],
+        "skipped_components": selection["skipped_components"],
+    }
 
 
 @frappe.whitelist()
@@ -565,6 +655,11 @@ def revalidate_failed_activation_batch(batch_name: str) -> dict[str, Any]:
     """Re-run the frozen selection preview before allowing a failed retry."""
     _require_manager()
     batch = frappe.get_doc(BATCH_DOCTYPE, batch_name)
+    if batch.is_automatic:
+        frappe.throw(
+            "An automatic batch is immutable and cannot be manually revalidated; "
+            "a later authorized cycle must create a new frozen batch"
+        )
     if batch.status != "Failed":
         frappe.throw("Only a failed Activation Batch can be revalidated for retry")
     run = _run(batch.canary_run)
@@ -606,10 +701,48 @@ def _reasons(rows: list[Any]) -> list[str]:
     return sorted(values)
 
 
-@frappe.whitelist()
-def apply_activation_batch(batch_name: str) -> dict[str, Any]:
+def _automatic_batch_authorization_blockers(batch: Any) -> list[str]:
+    """Recheck every unattended-write control while holding the Settings lock."""
+    from db_connector.api_identity_automation import _configuration_blockers
+    from db_connector.api_identity_qc import _lock_settings
+
+    _lock_settings()
+    settings = frappe.get_single(SETTINGS_DOCTYPE)
+    blockers = _configuration_blockers(settings, require_enabled=True)
+    if int(settings.automation_control_revision or 0) != int(
+        batch.automation_control_revision or 0
+    ):
+        blockers.append("automation_control_revision_changed")
+    if str(settings.automatic_tiered_authorization_event or "") != str(
+        batch.automation_authorization_event or ""
+    ):
+        blockers.append("automation_authorization_event_changed")
+    if str(settings.automatic_tiered_canary or "") != str(batch.canary_run or ""):
+        blockers.append("authorized_canary_changed")
+    if str(settings.automatic_tiered_policy or "") != str(batch.matching_policy or ""):
+        blockers.append("authorized_policy_changed")
+    return sorted(set(blockers))
+
+
+def _apply_activation_batch(
+    batch_name: str, *, allow_automatic: bool = False
+) -> dict[str, Any]:
     _require_manager()
     batch = frappe.get_doc(BATCH_DOCTYPE, batch_name)
+    if batch.is_automatic:
+        if not allow_automatic:
+            frappe.throw(
+                "Automatic Tiered batches can be applied only by the governed automation worker"
+            )
+        automatic_blockers = _automatic_batch_authorization_blockers(batch)
+        if automatic_blockers:
+            frappe.throw(
+                "Automatic Tiered batch authorization is no longer valid: "
+                + ", ".join(automatic_blockers)
+            )
+        # Refetch after the Settings lock so this transaction cannot continue
+        # with a stale batch object while a competing cycle advances it.
+        batch = frappe.get_doc(BATCH_DOCTYPE, batch_name)
     if batch.status == "Applied":
         return {
             "batch": batch.name,
@@ -742,6 +875,12 @@ def apply_activation_batch(batch_name: str) -> dict[str, Any]:
         )
         frappe.db.commit()
         raise
+
+
+@frappe.whitelist()
+def apply_activation_batch(batch_name: str) -> dict[str, Any]:
+    """Apply a manager-controlled manual batch; automatic batches are private."""
+    return _apply_activation_batch(batch_name, allow_automatic=False)
 
 
 def _set_component_hold(recommendation_name: str, *, held: bool, reason: str = "") -> dict[str, Any]:

@@ -17,8 +17,12 @@ function add_review_navigation(frm) {
 		}, __("Review"));
 	}
 	if (frm.doc.qc_sample_count) {
-		frm.add_custom_button(__("Review QC Cohort"), () => {
-			frappe.set_route("List", "CCD Match Recommendation", { canary_run: frm.doc.name, qc_selected: 1 });
+		frm.add_custom_button(__("Review Assigned QC"), () => {
+			frappe.set_route("List", "CCD Match Recommendation", {
+				canary_run: frm.doc.name,
+				qc_selected: 1,
+				qc_assigned_at: ["is", "set"],
+			});
 		}, __("Review"));
 	}
 	frm.add_custom_button(__("View Activation Batches"), () => {

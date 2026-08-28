@@ -25,6 +25,10 @@ This repository contains two deliberately separate paths:
 - `api_fuzzy_splink_experiment.py` reproduces an approved frozen evaluation
   for read-only training-size research. It returns sanitized aggregates, makes
   no database writes, and cannot replace the approved model or queue.
+- `api_identity_qc.py` and `api_identity_automation.py` provide continuous QC,
+  governed circuit-breaker recovery, and separately authorized default-off
+  bounded Tiered materialization. They do not make Splink probabilistic output
+  automatic.
 
 ## Management POC
 
@@ -44,10 +48,14 @@ The deployed follow-up implementation is specified in
 It defines reversible identity groups and memberships, Tiered and human-review
 materialization, continuous QC, optional review batches, deliberate rollout
 holds, bulk-approval testing, and the next management demo. The code, schema,
-and UI are deployed in guarded default-off mode; no live identity links have
-been materialized. See
+and UI are deployed in guarded default-off mode. Controlled development
+acceptance has created reversible identity/audit objects, but Materialization,
+Automatic QC, and Automatic Tiered are currently off. See
 [`IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`](IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md)
-for the verified boundary.
+for the verified boundary, [`ERPNext_SERVER_MIGRATION_RUNBOOK.md`](ERPNext_SERVER_MIGRATION_RUNBOOK.md)
+for transfer, and
+[`SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md`](SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md)
+for the development QC/automation acceptance matrix.
 
 Before 2026-08-19, the ERPNext evaluation approvals and Pilot promotion were
 recorded by the project operator, not management. Management reviewed the POC
@@ -231,9 +239,12 @@ service to create reversible Groups/Memberships or fingerprint-scoped
 Different exclusions.
 
 A deterministic 100-pair sample of passing Proposed recommendations is marked
-`Selected for QC` and uses the same blinded `Same` / `Different` / `Unsure`
-workflow. The canary form links directly to both the component queue and the QC
-queue.
+`Selected for QC`, but preselection alone does not permit review. A manager or
+the separately enabled cadence releases a bounded shared-work-pool cohort,
+starts its SLA, and uses the same blinded `Same` / `Different` / `Unsure`
+workflow. Completed cases remain immutable; unfinished stale cases and exhausted
+preselection are replenished deterministically. The canary form links directly
+to assigned QC work.
 
 Each recommendation stores the frozen policy version, source-record snapshot,
 reason codes, safety status, and opaque pair/cluster fingerprints. Separate

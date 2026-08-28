@@ -5,11 +5,11 @@
 | Item | Value |
 | --- | --- |
 | Purpose | Move the guarded CCD matching and identity-resolution setup to another ERPNext server |
-| Runbook date | 2026-08-25 UTC |
+| Runbook date | 2026-08-28 UTC |
 | Implementation code checkpoint | The reviewed Git commit containing this runbook, or a reviewed successor |
 | Source site at writing | `frontend` |
 | Source framework baseline | Frappe 15.73.0 / ERPNext 15.70.0 |
-| Required activation state during transfer | Live materialization disabled |
+| Required activation state during transfer | Live materialization, Automatic QC, and Automatic Tiered disabled |
 | Includes | Feature-only installation, full-site transfer, complete matching-evidence rebuild, validation, cutover, rollback, and new-centre guidance |
 | Does not authorize | Identity activation, destructive CCD merge, or deletion of audit history |
 
@@ -210,16 +210,21 @@ Before either transfer mode:
 
 1. record the current Identity Resolution Settings and live object counts;
 2. set `materialization_enabled = 0`;
-3. keep the site in maintenance mode or stop user/background writes during the
+3. use the governed actions to set `automatic_tiered_enabled = 0` and
+   `automatic_qc_assignment_enabled = 0`;
+4. keep the site in maintenance mode or stop user/background writes during the
    final full-site backup;
-4. finish or deliberately stop long-running queue jobs;
-5. do not run source and target as writable production sites simultaneously;
-6. record the exact component commit and full private-app source revision; and
-7. verify a rollback owner and cutover decision-maker are available.
+5. finish or deliberately stop long-running queue jobs;
+6. do not run source and target as writable production sites simultaneously;
+7. record the exact component commit and full private-app source revision; and
+8. verify a rollback owner and cutover decision-maker are available.
 
 `automation_paused = 0` means no QC circuit breaker is currently tripped. It
 does not disable the circuit-breaker feature. During transfer, the global
-`materialization_enabled = 0` switch is the primary fail-closed control.
+`materialization_enabled = 0` switch is the primary fail-closed control. The
+two automatic enable flags are separate authorizations and must also be off so
+the restored target cannot begin assignments or writes when its scheduler
+starts.
 
 ## 6. Mode A — full-site lift-and-shift
 
@@ -457,6 +462,10 @@ implementation values at this checkpoint are:
 | Current Review cutoff | `0.938995074` | Review-priority cutoff for the approved snapshot only; never an automatic Same threshold |
 | Materialization | Off | Must remain off throughout evidence generation and review |
 | Automation paused | Normally 0 | Zero means the QC circuit breaker has not tripped |
+| Automatic QC Assignment | Off | Separate governed authorization to release/replenish QC work |
+| Automatic Tiered Materialization | Off | Separate governed authorization for unattended bounded writes |
+| Maximum automatic components | 10 | Per-transaction limit; valid range 1–100 |
+| QC cadence / SLA / rolling window | 10 every 7 days / 14 days / latest 100 | Governed configuration; rolling window cannot be below 73 |
 
 Create the roles and default Draft policy idempotently when this is a fresh
 feature installation:
@@ -483,7 +492,9 @@ In **CCD Identity Resolution Settings**, keep:
 
 ```text
 Live Identity Materialization Enabled = off
-New Automatic Materialization Paused  = off, unless an investigation requires pause
+Automatic QC Assignment Enabled = off
+Automatic Tiered Materialization Enabled = off
+Tiered Automation Paused = off, unless an investigation requires pause
 ```
 
 The pilot-wave, holdout, QC cadence, QC window, SLA, and review-batch fields are
@@ -707,7 +718,8 @@ Do not enable live materialization until all checks pass.
 ### 9.1 Software and process checks
 
 - target Frappe/ERPNext/app revisions match the approved manifest;
-- every web/scheduler/queue process imports all identity API modules;
+- every web/scheduler/queue process imports all identity API modules, including
+  `api_identity_qc` and `api_identity_automation`;
 - `bench --site <target-site> doctor` reports healthy workers;
 - dependency imports for DuckDB, Splink, RapidFuzz, pypinyin, and hanziconv pass;
 - the app asset build and raw public renderer exist on the frontend;
@@ -772,7 +784,9 @@ PYTHONPATH=.:./db_connector \
 - ordinary and Sensitive Reviewers cannot invoke the combined-overlap preview
   or Apply APIs, and the Activation Item overlap control is hidden from them;
 - Sensitive Reviewers/System Managers see only their permitted values; and
-- Identity Resolution Settings reports materialization disabled.
+- Identity Resolution Settings reports Materialization, Automatic QC, and
+  Automatic Tiered disabled; and
+- a zero-write Automatic Tiered preview reports `would_write_now = false`.
 
 ### 9.3 Data checks by mode
 
@@ -781,24 +795,24 @@ manifest. At the current checkpoint they are:
 
 | Object | Expected current count |
 | --- | ---: |
-| Proposed Tiered recommendations | 3,517 |
-| Approved Tiered recommendations | 10 |
-| Superseded Tiered recommendations | 1 |
-| Exception recommendations | 433 |
-| Exception component reviews | 191 |
+| Proposed Tiered recommendations | 3,513 |
+| Approved Tiered recommendations | 14 |
+| Superseded Tiered recommendations | 4 |
+| Exception recommendations | 436 |
+| Exception component reviews | 194 (13 Agreed / 181 Unreviewed) |
 | Splink Review Pool | 11,177 |
 | Splink work assigned | 0 |
-| Identity Decisions | 33 total (27 active / 6 superseded) |
-| Identity Groups | 30 total (25 active / 5 ended) |
-| Identity Memberships | 68 total (58 active / 10 ended) |
-| Active Identity Exclusions | 9 |
-| Applied Activation batches | 4 (10 Applied / 1 Corrected items) |
-| Finalized Component Reviews | 9 (7 Applied / 2 Corrected) |
-| Applied Splink candidates | 5 |
-| Reversed Splink candidates | 2 |
-| Complete identity corrections | 4 total (3 applied / 1 superseded) |
-| Combined overlap resolutions | 0 |
+| Identity Decisions | 60 total (38 active / 22 superseded) |
+| Identity Groups | 56 total (34 active / 22 ended) |
+| Identity Memberships | 136 total (84 active / 52 ended) |
+| Identity Exclusions | 33 total (22 active / 11 superseded) |
+| Activation batches | 12 total (11 Applied / 1 Reviewed; 14 Applied / 4 Corrected / 1 Exception items) |
+| Component materialization | 9 Applied / 4 Corrected / 181 Not Final |
+| Splink materialization | 9 Applied / 2 Pending / 10 Reversed / 1 Superseded / 11,155 Not Final |
+| Complete identity corrections | 7 total (5 applied / 2 superseded) |
+| Combined overlap resolutions | 12 total (9 Applied / 1 No Change / 2 Superseded) |
 | Human Review batches | 0 |
+| QC investigations | 0 |
 
 These are checkpoint values, not permanent constants. If migration occurs after
 authorized operations, compare against a fresh signed source manifest instead.
@@ -818,6 +832,10 @@ If a Ready canary exists, run **Preview Approve All** and confirm:
 
 Do not test Apply merely to prove the migration. Apply is an activation action
 and requires its own backup, authorization, and bounded batch.
+
+Also run **Preview Automatic Tiered Run** with all three write/release controls
+off. It must create no batch or identity object and must report the disabled
+Materialization/Automatic QC/Automatic Tiered blockers.
 
 Also run the legacy fingerprint preview from section 6.5 and require all of the
 following before activation:
@@ -1244,6 +1262,48 @@ therefore include `api_identity_overlap.py`, `fuzzy_matching/overlap.py`, the
 `CCD Identity Overlap Resolution` DocType, its global JavaScript asset, and the
 Activation Item `Resolve Overlap` field—not only the older correction files.
 
+### 11.7 Authorize continuous QC and bounded Automatic Tiered
+
+Do not treat a restored Settings row as management authorization. On a new
+server, keep both automatic controls off until the migrated scheduler, roles,
+masking, QC state, Canary, Policy snapshot, and backup/rollback path pass
+acceptance.
+
+The governed sequence is:
+
+1. with both automatic controls off, select the exact authorized Ready/Active
+   Canary and matching Pilot Policy and save the cadence, SLA, rolling window,
+   and per-cycle component limit;
+2. assign a small QC release manually and verify two independent reviewers,
+   masking, finalization, and the resulting next-cadence timestamp;
+3. enable **Automatic QC Assignment** with a reason and exact Settings-ID
+   confirmation;
+4. keep Materialization off and run **Preview Automatic Tiered Run**; inspect
+   every selected/skipped component and require `No records were written`;
+5. take a fresh backup, enable Materialization, then enable **Automatic Tiered**
+   with a reason and exact Settings-ID confirmation;
+6. run one bounded cycle, inspect its immutable automatic Activation Batch,
+   authorization Event/control revision, Decisions, Groups, Memberships, and
+   idempotent next-cycle behavior; and
+7. stop Automatic Tiered and/or Materialization immediately if unattended
+   writes are not yet formally authorized.
+
+Configuration is frozen while either automatic control is enabled. A control
+or Materialization change invalidates an already frozen automatic batch before
+Apply. Automatic batches cannot be applied or revalidated through the ordinary
+manual batch APIs.
+
+A finalized QC Different trips the global breaker and changes only the current
+Group shared by both endpoints, plus that Group's current Memberships, to
+`Needs Revalidation`. Resolve the immutable Investigation, correct or explicitly
+revalidate that Group, stop Automatic Tiered, run **Preview Governed Resume**,
+and resume only when no investigation, overdue case, rolling precision failure,
+or genuine unresolved Pilot-policy failure remains. Resume clears the breaker;
+it does not re-enable Automatic Tiered.
+
+Use `SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md` for the development acceptance
+matrix. Never transfer its synthetic records as production identity truth.
+
 ## 12. Sign-off checklist
 
 Before declaring transfer complete, record:
@@ -1261,6 +1321,8 @@ Before declaring transfer complete, record:
 - [ ] permissions/masking checks;
 - [ ] combined-overlap API/DocType/asset and non-manager denial checks;
 - [ ] materialization disabled;
+- [ ] Automatic QC and Automatic Tiered disabled;
+- [ ] automatic zero-write preview reports no possible write;
 - [ ] zero-write preview result, when a canary exists;
 - [ ] rollback owner/window; and
 - [ ] separate activation authorization status.
@@ -1277,6 +1339,9 @@ Before declaring transfer complete, record:
 | Idempotent schema/custom-field/Client-Script setup | `identity_resolution_setup.py` |
 | Timestamp-guarded legacy snapshot repair | `identity_snapshot_backfill.py` |
 | Pending/active overlap expansion and atomic resolution | `api_identity_overlap.py`, `fuzzy_matching/overlap.py`, and `public/js/identity_overlap_resolution.js` |
+| Continuous QC, breaker, and governed recovery | `api_identity_qc.py` and `fuzzy_matching/automation.py` |
+| Default-off bounded unattended Tiered | `api_identity_automation.py` and `api_identity_activation.py` |
+| Development QC/automation acceptance | `SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md` and `synthetic_qc_automation_fixture.py` |
 | Exact versioned component | Git commit recorded in Document control |
 
 If these sources disagree, stop before activation and reconcile the

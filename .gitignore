@@ -14,6 +14,7 @@
 !api_fuzzy_review_queue.py
 !api_fuzzy_splink_experiment.py
 !api_identity_activation.py
+!api_identity_automation.py
 !api_identity_correction.py
 !api_identity_human.py
 !api_identity_qc.py
@@ -21,6 +22,7 @@
 !api_identity_review_batch.py
 !identity_resolution_setup.py
 !synthetic_overlap_fixture.py
+!synthetic_qc_automation_fixture.py
 !hooks.py
 
 # Implementation packages added after the baseline commit.
@@ -45,6 +47,7 @@
 !IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md
 !ERPNext_SERVER_MIGRATION_RUNBOOK.md
 !SYNTHETIC_OVERLAP_TEST_GUIDE.md
+!SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md
 !deployment/
 !deployment/**
 !public/

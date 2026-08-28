@@ -13,10 +13,11 @@
 
 This plan consolidates the decisions made after the POC and remains the design
 contract for the implementation. The schema, services, controls, and user
-interfaces are now deployed. Materialization remains disabled and no live
-identity links, activation batches, holds, review assignments, or QC
-investigations have been created. See `IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`
-for the verified deployment state.
+interfaces are now deployed. Controlled development acceptance has since
+created reversible identity/audit objects, while Materialization and both
+automatic controls are currently disabled. See
+`IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md` for the current verified counts
+and deployment state.
 
 ## 1. Outcome
 
@@ -550,11 +551,12 @@ adjudication. No Identity Decision or Membership is materialized.
 QC monitors an authorized rule; it should not require all 100 current QC cases
 to be finalized before every activation wave.
 
-The current stable sample contains 100 Proposed Tiered recommendations. The
-target workflow is asynchronous:
+The original stable sample contains 100 Proposed Tiered recommendations. The
+implemented workflow is asynchronous and continuously replenished:
 
 - activation may proceed after batch approval and safety checks;
-- the 100 cases remain a stable rolling-monitoring cohort;
+- finalized cases remain immutable history while stale unfinished cases and
+  exhausted preselection are replenished deterministically;
 - a configurable cadence assigns a small number, initially suggested as 10 per
   week;
 - every positive QC result uses independent confirmation;
@@ -566,7 +568,9 @@ target workflow is asynchronous:
 
 A confirmed QC `Different` must:
 
-1. end or suspend the affected Memberships;
+1. suspend only the current Group shared by both reviewed endpoints and all of
+   that Group's current Memberships; never trust a historical Group link stored
+   on the Recommendation;
 2. mark the recommendation/decision as a QC failure;
 3. pause new automatic materialization for the affected rule/source-pair scope;
 4. open a manager investigation; and
@@ -583,8 +587,9 @@ materialization rather than silently claiming ongoing validation. Existing
 memberships remain visible and auditable; they are not automatically erased
 solely because reviews are late.
 
-Changed QC records become stale and are replaced by a new deterministic sample
-case from the eligible population.
+Changed unfinished QC records become stale and are replaced by a new
+deterministic sample case from the eligible population. A completed QC result
+remains immutable evidence even if its source record changes later.
 
 ## 15. Change, revalidation, split and reversal
 
@@ -819,10 +824,14 @@ activation scope.
 
 ### Phase 5 — continuous QC and circuit breakers
 
-1. Add QC dashboard and cadence controls.
-2. Implement local pause, membership suspension/end and investigation records.
-3. Implement rolling precision/confidence monitoring.
-4. Implement overdue-QC pause for new materialization.
+Implemented on the development site on 2026-08-28:
+
+1. QC release/cadence dashboard controls and deterministic replenishment;
+2. current-shared-Group suspension, immutable investigation, and governed
+   revalidation/resolution records;
+3. rolling precision/Wilson monitoring ordered by finalization time;
+4. overdue-QC pause for unattended materialization; and
+5. separate default-off, bounded Automatic Tiered authorization and execution.
 
 ### Phase 6 — optional Review Batches
 
@@ -1011,3 +1020,42 @@ shows the pending records, existing Group and members, shared record,
 originating Decision, exclusions, and governed attributes side by side. A
 separate server-side approval guard ensures a Reviewed item cannot be applied,
 even when Materialization is enabled.
+
+## 26. Implementation update — 2026-08-28 QC and bounded automation
+
+Continuous QC governance and the default-off unattended Tiered worker are now
+implemented and deployed in guarded mode.
+
+- Random QC preselection no longer means the work is reviewable. A manager or
+  the governed cadence must release a bounded set, which starts `Assigned At`,
+  `Due At`, and an immutable `QC Assign` Event.
+- The cadence is separately enabled, defaults off, assigns no more than the
+  configured bounded count, and deterministically replenishes beyond the
+  original cohort. Disabling it prevents new releases but does not stop the
+  daily safety monitor from checking already assigned work.
+- QC rolling order uses finalization time. The lifetime completion count remains
+  visible while Same/Different, precision, and Wilson values describe the
+  configured latest window. A manager-adjudged `QC Review Error` stays in audit
+  history but is explicitly excluded from precision.
+- A finalized QC Different opens one immutable investigation, trips the global
+  breaker, and marks only the current shared Group and its current Memberships
+  `Needs Revalidation`. Historical Groups are untouched. Governed resolution
+  can reactivate a revalidated Group, but a genuine `Relationship Corrected`
+  policy failure prevents the same Pilot policy from being reauthorized.
+- Automatic QC Assignment and Automatic Tiered Materialization have separate
+  manager-only, audited enable/disable controls. Governed configuration cannot
+  change while either control is enabled. The ordinary Materialization switch
+  remains an independent final write gate.
+- Each Automatic Tiered cycle freezes at most 100 configured complete
+  components (default 10), skips held/stale/unsafe/overlapping components,
+  records its authorization Event and control revision, and rechecks every
+  control under lock before one atomic Apply. Automatic batches cannot use the
+  ordinary manual Apply or failed-batch revalidation APIs.
+- Migration initializes new controls fail-closed. On the 2026-08-28 deployment,
+  Materialization, Automatic QC, and Automatic Tiered all remained off, and the
+  existing Identity Decision/Group/Membership/Exclusion/Event counts were
+  unchanged.
+
+The six-component development acceptance fixture and exact operator procedure
+are in `SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md`. Its browser acceptance is still
+required before any production authorization.

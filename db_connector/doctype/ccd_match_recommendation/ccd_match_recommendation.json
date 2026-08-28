@@ -8,7 +8,7 @@
   "left_record", "right_record", "left_source", "right_source", "source_pair",
   "left_modified_at", "right_modified_at", "left_identity_fingerprint", "right_identity_fingerprint", "model_tier", "blocking_routes", "reason_codes_json",
   "cluster_fingerprint", "cluster_size", "status", "rollout_state", "hold_reason", "held_at", "held_by", "activation_batch", "identity_decision", "identity_group", "safety_reasons_json", "component_review",
-  "qc_section", "qc_selected", "qc_assigned_at", "qc_due_at", "qc_review_status", "qc_final_label", "qc_stale", "qc_failure_action", "qc_review_labels",
+  "qc_section", "qc_selected", "qc_assigned_at", "qc_due_at", "qc_review_status", "qc_final_label", "qc_finalized_at", "qc_stale", "qc_failure_action", "qc_review_labels",
   "approved_at", "approved_by", "activated_at", "activated_by", "ended_at", "ended_by", "end_reason", "supersedes",
   "evidence_html"
  ],
@@ -48,6 +48,7 @@
   {"fieldname": "qc_due_at", "fieldtype": "Datetime", "label": "QC Due At", "read_only": 1},
   {"fieldname": "qc_review_status", "fieldtype": "Select", "in_list_view": 1, "label": "QC Review Status", "options": "\nUnreviewed\nPartially Reviewed\nNeeds Adjudication\nPositive Confirmation Required\nAgreed\nAdjudicated\nStale", "read_only": 1},
   {"fieldname": "qc_final_label", "fieldtype": "Select", "in_list_view": 1, "label": "QC Final Label", "options": "\nSame\nDifferent", "read_only": 1},
+  {"fieldname": "qc_finalized_at", "fieldtype": "Datetime", "label": "QC Finalized At", "read_only": 1},
   {"default": "0", "fieldname": "qc_stale", "fieldtype": "Check", "label": "QC Stale", "read_only": 1},
   {"fieldname": "qc_failure_action", "fieldtype": "Small Text", "label": "QC Circuit-Breaker Action", "read_only": 1},
   {"fieldname": "qc_review_labels", "fieldtype": "Table", "hidden": 1, "label": "QC Review Labels", "options": "CCD Match Review Label", "permlevel": 2, "read_only": 1},

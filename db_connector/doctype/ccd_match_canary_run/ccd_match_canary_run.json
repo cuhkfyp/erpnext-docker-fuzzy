@@ -10,7 +10,8 @@
   "record_count", "candidate_count", "candidate_truncated", "skipped_blocks_json",
   "high_candidate_count", "proposed_count", "exception_count", "active_count", "materialized_group_count", "materialized_membership_count",
   "reversed_count", "superseded_count", "exception_component_count", "exception_review_complete_count",
-  "qc_sample_count", "qc_review_complete_count", "qc_same_count", "qc_different_count", "qc_precision", "qc_wilson_lower", "qc_wilson_upper", "qc_overdue_count", "qc_automation_state", "summary_json", "error_summary"
+  "qc_sample_count", "qc_review_complete_count", "qc_same_count", "qc_different_count", "qc_precision_excluded_count", "qc_precision", "qc_wilson_lower", "qc_wilson_upper", "qc_overdue_count", "qc_automation_state",
+  "qc_last_assignment_at", "qc_next_assignment_at", "qc_assignment_cycle_count", "qc_replenished_count", "summary_json", "error_summary"
  ],
  "fields": [
   {"fieldname": "matching_policy", "fieldtype": "Link", "in_list_view": 1, "label": "Matching Policy", "options": "CCD Matching Policy", "read_only": 1, "reqd": 1},
@@ -44,11 +45,16 @@
   {"fieldname": "qc_review_complete_count", "fieldtype": "Int", "label": "QC Reviews Complete", "read_only": 1},
   {"fieldname": "qc_same_count", "fieldtype": "Int", "label": "QC Confirmed Same", "read_only": 1},
   {"fieldname": "qc_different_count", "fieldtype": "Int", "label": "QC Confirmed Different", "read_only": 1},
+  {"fieldname": "qc_precision_excluded_count", "fieldtype": "Int", "label": "QC Review Errors Excluded from Precision", "read_only": 1},
   {"fieldname": "qc_precision", "fieldtype": "Float", "label": "Rolling QC Precision (0-1)", "precision": "6", "read_only": 1},
   {"fieldname": "qc_wilson_lower", "fieldtype": "Float", "label": "QC Wilson 95% Lower (0-1)", "precision": "6", "read_only": 1},
   {"fieldname": "qc_wilson_upper", "fieldtype": "Float", "label": "QC Wilson 95% Upper (0-1)", "precision": "6", "read_only": 1},
   {"fieldname": "qc_overdue_count", "fieldtype": "Int", "label": "Overdue QC Cases", "read_only": 1},
   {"default": "Monitoring", "fieldname": "qc_automation_state", "fieldtype": "Select", "label": "QC Automation State", "options": "Monitoring\nPaused", "read_only": 1},
+  {"fieldname": "qc_last_assignment_at", "fieldtype": "Datetime", "label": "Last QC Assignment At", "read_only": 1},
+  {"fieldname": "qc_next_assignment_at", "fieldtype": "Datetime", "label": "Next QC Assignment At", "read_only": 1},
+  {"default": "0", "fieldname": "qc_assignment_cycle_count", "fieldtype": "Int", "label": "QC Assignment Cycles", "read_only": 1},
+  {"default": "0", "fieldname": "qc_replenished_count", "fieldtype": "Int", "label": "Continuous QC Cases Added", "read_only": 1},
   {"fieldname": "summary_json", "fieldtype": "Code", "label": "Aggregate Safety Summary", "options": "JSON", "read_only": 1},
   {"fieldname": "error_summary", "fieldtype": "Small Text", "label": "Error Summary", "read_only": 1}
  ],

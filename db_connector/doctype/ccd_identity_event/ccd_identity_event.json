@@ -11,7 +11,7 @@
   {"fieldname": "identity_decision", "fieldtype": "Link", "label": "Identity Decision", "options": "CCD Identity Decision", "read_only": 1},
   {"fieldname": "identity_group", "fieldtype": "Link", "label": "Identity Group", "options": "CCD Identity Group", "read_only": 1},
   {"fieldname": "identity_membership", "fieldtype": "Link", "label": "Identity Membership", "options": "CCD Identity Membership", "read_only": 1},
-  {"fieldname": "event_type", "fieldtype": "Select", "in_list_view": 1, "label": "Event Type", "options": "Create\nApprove\nActivate\nHold\nRelease\nRevalidate\nNeeds Revalidation\nEnd\nWithdraw\nSplit\nSupersede\nPause\nResume\nQC Failure", "read_only": 1, "reqd": 1},
+  {"fieldname": "event_type", "fieldtype": "Select", "in_list_view": 1, "label": "Event Type", "options": "Create\nApprove\nActivate\nHold\nRelease\nRevalidate\nNeeds Revalidation\nEnd\nWithdraw\nSplit\nSupersede\nEnable\nDisable\nPause\nResume\nQC Assign\nQC Failure\nResolve", "read_only": 1, "reqd": 1},
   {"fieldname": "from_status", "fieldtype": "Data", "label": "From Status", "read_only": 1},
   {"fieldname": "to_status", "fieldtype": "Data", "label": "To Status", "read_only": 1},
   {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason", "read_only": 1, "reqd": 1},
