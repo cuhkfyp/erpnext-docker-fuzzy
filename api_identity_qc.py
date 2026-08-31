@@ -836,13 +836,29 @@ def resolve_qc_investigation(
     notes = str(notes or "").strip()
     if not notes:
         frappe.throw("Resolution notes are required")
+
+    # Keep the lock order aligned with the monitor (Canary -> Investigation ->
+    # Group/Membership).  The governed resolution changes which finalized rows
+    # are comparable for precision, so its persisted Canary rollup must be
+    # refreshed in the same transaction instead of waiting for the next daily
+    # monitor cycle.
+    canary_run = str(
+        frappe.db.get_value(INVESTIGATION_DOCTYPE, investigation_name, "canary_run")
+        or ""
+    )
+    if not canary_run:
+        frappe.throw("The QC Investigation has no Canary Run")
+    _lock_named_rows(RUN_DOCTYPE, (canary_run,))
     _lock_named_rows(INVESTIGATION_DOCTYPE, (investigation_name,))
     investigation = frappe.get_doc(INVESTIGATION_DOCTYPE, investigation_name)
     if investigation.status == "Resolved":
+        qc_rollup = refresh_qc_monitor(canary_run)
+        frappe.db.commit()
         return {
             "investigation": investigation.name,
             "status": "Already Resolved",
             "resolution_event": investigation.resolution_event or "",
+            "qc_rollup": qc_rollup,
         }
     if investigation.status != "Open":
         frappe.throw("Only an Open QC Investigation may be resolved")
@@ -893,12 +909,14 @@ def resolve_qc_investigation(
         },
         update_modified=False,
     )
+    qc_rollup = refresh_qc_monitor(canary_run)
     frappe.db.commit()
     return {
         "investigation": investigation.name,
         "status": "Resolved",
         "resolution_event": event,
         "revalidated_memberships": revalidated_memberships,
+        "qc_rollup": qc_rollup,
     }
 
 
