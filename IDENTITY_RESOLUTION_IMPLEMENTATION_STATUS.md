@@ -4,8 +4,8 @@
 
 | Item | Verified state |
 | --- | --- |
-| Date | 2026-08-28 UTC |
-| Status updated | 2026-08-28 UTC |
+| Date | 2026-08-31 UTC |
+| Status updated | 2026-08-31 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
@@ -14,8 +14,9 @@
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
 | Automatic QC / Tiered | Both separately controlled and disabled (`automatic_qc_assignment_enabled = 0`, `automatic_tiered_enabled = 0`) |
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
-| 2026-08-28 current totals | 60 Decisions, 56 Groups, 136 Memberships, 33 Exclusions, and 381 Events; unchanged by the QC/automation migration |
+| 2026-08-31 current totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
+| QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
 
 The predecessor session completed the workflow specification and pushed it at
 commit `cfef788`. This fresh session recovered that durable artifact, audited
@@ -41,6 +42,20 @@ a full backup, the development-only QC/automation fixture was created as Canary
 `o2c67pgdv9`: six isolated Proposed/Available Tiered components, three initially
 selected but unassigned for QC and three eligible for cadence replenishment.
 Fixture creation left the identity-object totals unchanged.
+
+On 2026-08-31, the fixture completed its controlled browser and scheduler
+acceptance. Two bounded Automatic Tiered cycles applied four isolated complete
+components; the QC workflow then exercised masked independent review, a
+deliberate Different result and governed investigation recovery, deterministic
+pool replenishment, the seven-day cadence gate, an overdue-SLA pause, source
+staleness, Membership/Group revalidation, governed Resume, and exact-repeat
+idempotency. The acceptance checkpoint ended with 64 Decisions, 60 Groups, 144
+Memberships, 33 Exclusions, 416 Events, 14 Activation Batches (13 Applied / 1
+Reviewed), and one resolved QC Investigation. Later manual development
+demonstrations at 16:18 and 16:26 created two additional Same Decisions,
+Groups, and four Memberships;
+the larger current totals in the table above therefore are not attributed to
+the QC scheduler.
 
 ## Implemented controls
 
@@ -328,6 +343,61 @@ materialization, establish production identity truth for synthetic records, or
 replace backup, migration-rehearsal, QC/automation, and management-approval
 gates.
 
+### Completed QC and bounded-automation acceptance matrix — development
+
+The browser and scheduler acceptance described in
+`SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md` was completed on 2026-08-31 against the
+isolated six-component fixture Canary `o2c67pgdv9` and policy `pilot-1.6`. A
+fresh pre-write backup was taken at
+`sites/frontend/private/backups/20260831_102011-frontend-*`. All fixture
+identities are synthetic development evidence; none is a production identity
+assertion or production authorization.
+
+The tested governed configuration was:
+
+| Control | Accepted value |
+| --- | --- |
+| Maximum complete components per Automatic Tiered execution | 2 |
+| Automatic Tiered scheduler hook | Daily |
+| QC cases per cadence | 2 |
+| QC assignment interval | 7 days |
+| QC SLA | 14 days |
+| Rolling QC window | 100 comparable finalized cases |
+| Materialization during bounded write exercises | Explicitly enabled, then disabled |
+| Automatic controls after acceptance | Automatic QC off; Automatic Tiered off |
+
+| Behaviour | Test source / immutable audit | Observed result | Acceptance |
+| --- | --- | --- | --- |
+| Independent QC and masking | First two assigned fixture Recommendations; one System Manager and one ordinary `CCD Match Reviewer` | Two different reviewers produced the required final result. The ordinary reviewer saw masked evidence and no CCD Master links; the manager saw only role-permitted full evidence | Pass |
+| Zero-write automatic preview | Settings preview for Canary `o2c67pgdv9` | Selected two complete components / two Recommendations and planned two Groups / four Memberships. With controls off it reported the exact operational blockers and wrote no record | Pass |
+| Bounded Automatic Tiered | Automatic batches `2qds16kh0f` and `74rnvcp089` | Each independently applied exactly two complete components and created two Groups / four Memberships. The second cycle advanced to different Proposed components rather than duplicating the first | Pass |
+| QC Different circuit breaker | Recommendation `o2d9m3ndmj`; affected Group `2qh35g8jdb`; Investigation `ftkk4gd01f` | A deliberate finalized Different paused the global Tiered circuit breaker, opened one Investigation, and changed only the current shared Group and its Memberships to Needs Revalidation. A blocked cycle created no identity object | Pass |
+| Governed QC-review-error recovery | Investigation `ftkk4gd01f`; Resolve event `ksdeed5aiq`; Group revalidation event `ksdogi5vda`; Resume event `km0gunvljd` | `QC Review Error` preserved the immutable Different history, reactivated the affected Group/Memberships, and excluded that adjudged reviewer mistake from rolling precision. Governed Resume cleared the breaker without re-enabling Automatic Tiered | Pass |
+| Source staleness and identity revalidation | Recommendation `o2ftcsdsre`; CCD Master `HKSR0762581`; Membership `74s5tu1hvk`; Group `74s9mntmlj`; Events `al9tahdk0s` and `pfcc5e4792` | Editing one governed source value made the unfinished QC snapshot Stale and changed the live Membership/Group to Needs Revalidation. Restoring the source and using governed revalidation returned both to Active; the QC Recommendation correctly remained Stale | Pass |
+| Scheduled cadence and deterministic replenishment | Automatic QC Assign event `3qnhng8pse`; Recommendations `o2foiqsla2` and `o2f11mfeca` | A synthetically due cadence assigned exactly two cases, advanced the next cadence by seven days, increased sample count 4→6, assignment cycles 2→3, and replenished count 1→3 | Pass |
+| Cadence idempotency | Immediate repeat of `run_qc_monitor` | Assigned zero additional cases, created no second cadence Event, and left every identity-object and batch count unchanged | Pass |
+| Overdue SLA breaker | Recommendation `o2foiqsla2`; Pause event `vc32rlr1ob` | Moving the open case due date into the past produced one overdue case, changed the Canary to Paused, and set `pause_reason = qc_sla_overdue:1`. A repeat monitor created no duplicate Pause event or identity write | Pass |
+| Overdue recovery | Recommendation `o2foiqsla2`; Resume event `6isgd4k54a` | Independent Same finalization cleared the overdue count. Governed Resume returned the Canary to Monitoring while leaving Automatic Tiered off | Pass |
+| Remaining-QC closure | Recommendation `o2f11mfeca` | Independent Same finalization left zero open assigned non-stale QC cases, so no fixture SLA remains capable of becoming overdue | Pass |
+| Live scheduler registration | Scheduled Job Type `api_identity_qc.run_qc_monitor` | Frappe scheduler enabled; job frequency Daily; `stopped = 0`; two workers online; recorded scheduled execution at `2026-08-31 00:00:51` UTC. The persistent process is `bench schedule`; generic workers execute the short-lived Python method | Pass |
+
+At the final fixture checkpoint, Canary `o2c67pgdv9` is Active and Monitoring
+with six selected QC cases: five finalized, four comparable Same, zero
+comparable Different, one adjudged review error excluded from precision, and
+one Stale unfinished snapshot. Rolling precision is `1.0`; its Wilson 95% lower
+bound is `0.510099980`, as expected for only four comparable successes. The
+100-case rolling window is not complete, so the precision circuit breaker is
+not yet eligible to decide policy reliability. Overdue count is zero,
+assignment cycles are three, and three cases were added through continuous
+replenishment.
+
+The acceptance ended fail-closed: Live Materialization, Automatic QC, and
+Automatic Tiered are all off; the circuit breaker is clear; and the authorized
+synthetic Canary, policy, and bounded test values remain recorded but inert.
+The daily monitor remains registered so already-existing QC safety state would
+still be checked, but with no open assigned non-stale fixture case and both
+automatic controls off it cannot create a QC assignment or identity object.
+
 ### Zero-write activation preview
 
 For canary `p1mucmhogd`, **Preview Approve All** returned:
@@ -355,22 +425,22 @@ excluded from planned writes, leaving 7,018 planned member records.
 
 ## Next controlled decision
 
-Functional overlap acceptance is complete. The next controlled step is the
-dedicated QC/automation acceptance in
-`SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md`. The full pre-fixture backup completed
-at 2026-08-28 17:30 UTC under
-`sites/frontend/private/backups/20260828_172630-frontend-*`. Fixture Canary
-`o2c67pgdv9` is created and passed pristine verification. The next operator
-actions are to verify assignment gating and masking, exercise QC Same and the
-deliberate QC Different breaker/recovery, prove overdue/stale replenishment, and
-apply only a bounded automatic synthetic cycle.
+Functional overlap and QC/automation acceptance are complete on the development
+site. The next controlled phase is production migration/readiness assessment,
+not another automatic development wave. It must include a clean-target
+migration rehearsal, a fresh post-acceptance backup checkpoint, verification of
+scheduled backups and restore, named reviewer/manager ownership, production
+capacity and monitoring checks, and an explicit management decision covering
+the exact production Canary, Policy, QC cadence, SLA, rolling window, automatic
+component limit, and rollback authority.
 
-Materialization, Automatic QC, and Automatic Tiered are currently off. No
-production rollout, wider development wave, or unattended write is authorized
-by this implementation. Production remains gated by migration rehearsal,
-fresh backup, named reviewer/manager ownership, completed browser acceptance,
-and an explicit management decision covering the exact Canary, Policy, cadence,
-SLA, and component limit.
+Materialization, Automatic QC, and Automatic Tiered are currently off, and the
+circuit breaker is clear. The retained synthetic Canary and policy settings are
+inert acceptance evidence and do not authorize production use. No production
+rollout, wider development wave, or unattended write is implicit in this
+status. Manual demonstrations must keep Automatic Tiered off; enable Live
+Materialization only for the deliberate creation step, and disable it again for
+any correction or rollback exercise.
 
 Server transfer, clean-target installation, backup/restore, cutover, rollback,
 and new-centre onboarding are covered in
