@@ -66,6 +66,40 @@ def _set_single_values(values: dict[str, Any]) -> None:
         frappe.db.set_single_value(SETTINGS_DOCTYPE, fieldname, value)
 
 
+def _monitored_canary_names() -> tuple[str, ...]:
+    """Return active QC Canaries whose cached breaker state must stay aligned."""
+    return tuple(
+        sorted(
+            str(name)
+            for name in frappe.get_all(
+                RUN_DOCTYPE,
+                filters={
+                    "status": ["in", ["Ready", "Active"]],
+                    "qc_sample_count": [">", 0],
+                },
+                pluck="name",
+                limit_page_length=10_000,
+            )
+        )
+    )
+
+
+def _set_canary_automation_state(run_names: Iterable[str], state: str) -> int:
+    updated = 0
+    for run_name in tuple(sorted({str(name) for name in run_names if str(name)})):
+        if frappe.db.get_value(RUN_DOCTYPE, run_name, "qc_automation_state") == state:
+            continue
+        frappe.db.set_value(
+            RUN_DOCTYPE,
+            run_name,
+            "qc_automation_state",
+            state,
+            update_modified=False,
+        )
+        updated += 1
+    return updated
+
+
 def _control_nonce(action: str, revision: int, reason: str) -> str:
     return hashlib.sha256(
         f"{action}\x1f{revision}\x1f{reason}\x1f{frappe.session.user}".encode()
@@ -930,13 +964,27 @@ def resume_tiered_automation(
     reason = str(reason or "").strip()
     if not reason:
         frappe.throw("A resume reason is required")
+
+    # The monitor locks Canary rows before the global Settings row. Preserve
+    # that order here so the governed Resume can align every monitored
+    # Canary's cached state without introducing a lock-order inversion.
+    monitored_canaries = _monitored_canary_names()
+    _lock_named_rows(RUN_DOCTYPE, monitored_canaries)
     _lock_settings()
     settings = frappe.get_single(SETTINGS_DOCTYPE)
     blockers = _resume_blockers()
     if blockers:
         frappe.throw("Tiered automation cannot resume: " + ", ".join(blockers))
     if not settings.automation_paused:
-        return {"status": "Already Clear", "event": ""}
+        refreshed = _set_canary_automation_state(
+            monitored_canaries, "Monitoring"
+        )
+        frappe.db.commit()
+        return {
+            "status": "Already Clear",
+            "event": "",
+            "refreshed_canaries": refreshed,
+        }
     revision = int(settings.automation_control_revision or 0) + 1
     prior_scope = str(settings.pause_scope or "")
     prior_reason = str(settings.pause_reason or "")
@@ -960,8 +1008,14 @@ def resume_tiered_automation(
             "prior_reason": prior_reason,
         },
     )
+    refreshed = _set_canary_automation_state(monitored_canaries, "Monitoring")
     frappe.db.commit()
-    return {"status": "Monitoring", "event": event, "revision": revision}
+    return {
+        "status": "Monitoring",
+        "event": event,
+        "revision": revision,
+        "refreshed_canaries": refreshed,
+    }
 
 
 @frappe.whitelist()
