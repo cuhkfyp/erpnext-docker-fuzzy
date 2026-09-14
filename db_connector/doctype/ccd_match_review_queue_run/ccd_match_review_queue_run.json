@@ -22,7 +22,7 @@
   {"fieldname": "splink_adapter_version", "fieldtype": "Data", "label": "Splink Adapter Version", "read_only": 1, "reqd": 1},
   {"fieldname": "review_threshold", "fieldtype": "Float", "in_list_view": 1, "label": "Approved Maximum-F1 Review Cutoff", "precision": "12", "read_only": 1, "reqd": 1},
   {"default": "maximum_calibration_f1", "fieldname": "threshold_objective", "fieldtype": "Data", "label": "Threshold Objective", "read_only": 1, "reqd": 1},
-  {"default": "Queued", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Queued\nProfiling\nGenerating Candidates\nTraining and Scoring Splink\nWriting Review Queue\nReady\nFailed", "read_only": 1},
+  {"default": "Queued", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Queued\nProfiling\nGenerating Candidates\nTraining and Scoring Splink\nWriting Review Queue\nReady\nFailed\nStale\nSuperseded", "read_only": 1},
   {"fieldname": "snapshot_at", "fieldtype": "Datetime", "label": "Snapshot At", "read_only": 1, "reqd": 1},
   {"fieldname": "record_count", "fieldtype": "Int", "label": "Governed Record Count", "read_only": 1},
   {"fieldname": "snapshot_stale_record_count", "fieldtype": "Int", "label": "Changed Frozen-Snapshot Records", "read_only": 1},

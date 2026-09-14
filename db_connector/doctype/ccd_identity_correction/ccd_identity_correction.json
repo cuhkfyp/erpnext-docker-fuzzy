@@ -4,7 +4,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "correction_key", "status", "source_identity_decision", "source_origin", "source_origin_doctype", "source_origin_document",
+  "correction_key", "status", "source_population_status", "source_retirement_run", "source_retired_at", "source_identity_decision", "source_origin", "source_origin_doctype", "source_origin_document",
   "scope_fingerprint", "participant_records_json", "prior_identity_decisions_json", "prior_identity_groups_json",
   "prior_memberships_json", "prior_exclusions_json", "replacement_groups_json", "replacement_exclusions_json",
   "correction_reason", "warnings_json", "is_demonstration", "applied_at", "applied_by", "replacement_identity_decision",
@@ -14,6 +14,9 @@
  "fields": [
   {"fieldname": "correction_key", "fieldtype": "Data", "hidden": 1, "label": "Correction Key", "read_only": 1, "reqd": 1, "unique": 1},
   {"default": "Applying", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Applying\nApplied\nSuperseded", "read_only": 1, "reqd": 1},
+  {"default": "Current", "fieldname": "source_population_status", "fieldtype": "Select", "in_list_view": 1, "label": "Source Population", "options": "Current\nHistorical Source Retired", "read_only": 1},
+  {"fieldname": "source_retirement_run", "fieldtype": "Link", "label": "Source Retirement Run", "options": "CCD Identity Retirement Run", "read_only": 1},
+  {"fieldname": "source_retired_at", "fieldtype": "Datetime", "label": "Source Retired At", "read_only": 1},
   {"fieldname": "source_identity_decision", "fieldtype": "Link", "in_list_view": 1, "label": "Corrected Identity Decision", "options": "CCD Identity Decision", "read_only": 1, "reqd": 1},
   {"fieldname": "source_origin", "fieldtype": "Data", "in_list_view": 1, "label": "Original Decision Origin", "read_only": 1, "reqd": 1},
   {"fieldname": "source_origin_doctype", "fieldtype": "Link", "label": "Original Origin DocType", "options": "DocType", "read_only": 1, "reqd": 1},

@@ -4,8 +4,8 @@
 
 | Item | Verified state |
 | --- | --- |
-| Date | 2026-08-31 UTC |
-| Status updated | 2026-08-31 UTC |
+| Date | 2026-09-14 UTC |
+| Status updated | 2026-09-14 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
@@ -14,7 +14,9 @@
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
 | Automatic QC / Tiered | Both separately controlled and disabled (`automatic_qc_assignment_enabled = 0`, `automatic_tiered_enabled = 0`) |
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
-| 2026-08-31 current totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
+| 2026-08-31 historical totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
+| 2026-09-13 integrity restoration | Audited orphan retirement run `6v6b99amn6` applied; the post-repair audit reports zero active issues and zero planned writes while retaining marked historical evidence |
+| Current matching gate | `pilot-1.7` provenance valid; threshold run `tuvlt5me82` and High validation `i04u936qii` are in Review with no management approval; no replacement Canary or queue may be created yet |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 | QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
 
@@ -56,6 +58,85 @@ demonstrations at 16:18 and 16:26 created two additional Same Decisions,
 Groups, and four Memberships;
 the larger current totals in the table above therefore are not attributed to
 the QC scheduler.
+
+## Identity integrity restoration — 2026-09-13/14
+
+The approved **Restore Identity Integrity and Regenerate Matching** operation
+was implemented and deployed through its explicit human-review gate. It did not
+authorize a new identity-materialization wave.
+
+Before any code change, a full ERPNext backup was created as
+`20260913_185936-frontend-*`. The site configuration, database, public files,
+and private files passed format/integrity checks and were re-hashed after the
+deployment. The three specifically approved September 8 backup prefixes
+(`095918`, `095932`, and `145947`) were already absent when the exact-target
+cleanup ran; no unrelated backup was removed. The volume remained 96% used
+with approximately 11 GB free at the final checkpoint.
+
+The first live write was orphan lifecycle repair `6v6b99amn6`. It closed or
+staled unfinished work that referenced missing CCD Masters, ended 102 current
+Memberships and 43 Groups, withdrew 47 active Decisions, superseded 22 active
+Exclusions, and preserved completed reviews and identity history with explicit
+retirement markers. The final zero-write audit reports:
+
+- `active_issue_count = 0`;
+- `planned_write_count = 0`;
+- Live Materialization, Automatic QC, and Automatic Tiered all disabled; and
+- historical references retained rather than rebound to recreated records.
+
+Future source removal now uses one System-Manager-only lifecycle service. It
+requires a zero-write preview, exact 64-character scope fingerprint, mandatory
+reason, disabled materialization/automation controls, locked population
+recheck, lifecycle updates before source deletion, 1,000-row chunks, immutable
+`CCD Identity Retirement Run` audit, and idempotent replay. The same service is
+wired into governed CCD Registration cancellation; ordinary cancellation fails
+closed. A rollback-only live probe verified wrong-fingerprint rejection,
+exact-scope deletion, idempotent replay, and zero persisted probe rows/audits.
+A connection-local 100,000-key scale probe deleted 100 chunks in 1.469 seconds
+and left zero rows; it never inserted an ERPNext document.
+
+Reviewer access was corrected for the named reviewer account: `ccd-user` and
+`System Manager` were removed, existing sessions were terminated, and live
+permission checks denied CCD Master read/create/write/delete/report/export/
+print plus the legacy whitelisted mutation API. The account retains masked
+`CCD Match Reviewer` access. The legacy `CCD Registration Before Cancel`
+Server Script is disabled in favor of the governed hook.
+
+Matching policy `pilot-1.7` freezes the latest submitted CCD Registration
+revision, stable source key, exact field mapping fingerprint, registration
+modified time, and source-profile flags for each of ten governed sources. Its
+provenance audit is valid with no issues. Three one-record sources without a
+submitted Registration remain unchanged and deliberately excluded rather than
+silently governed.
+
+Fresh shadow generation produced:
+
+| Run | Purpose | Current state | Sample |
+| --- | --- | --- | ---: |
+| `tuvlt5me82` | Threshold Evaluation | Reviewing / Pending Management Review | 500 pairs; 100 double-review assignments |
+| `i04u936qii` | High Tier Validation | Reviewing / Pending Management Review | 100 unseen deterministic-High pairs; all 100 double-reviewed |
+
+The samples have zero labels, zero stale pairs, and no pair overlap. The High
+population contained 74,489 eligible candidates. Candidate generation reached
+the configured 1,000,000-pair safety ceiling and recorded truncation rather
+than exceeding it. An earlier High attempt `u02eo99bma` was killed by host OOM
+before committing a sample and remains immutably recorded as Failed. Evaluation
+scoring was then changed to train once and batch-score only the selected review
+pairs, eliminating the million-row probability frame; the replacement run
+completed successfully with Splink 4.0.16 and DuckDB 1.5.5.
+
+The deployed suite passes 89 unit tests plus Python/JavaScript syntax checks and
+a local synthetic Splink training/inference smoke test. Atomic generation
+replacement is implemented but has not run: it supersedes only unfinished old
+work after a replacement generation reaches Ready, while preserving completed
+human outcomes and applied/corrected history in the same transaction.
+
+The next permitted actions are independent human review, required
+adjudication, finalization, and explicit management approval of both fresh
+runs. Only then may `pilot-1.7` be promoted and a new full-population Canary and
+optional Review queue be generated. Unified-person materialization remains a
+later gate requiring an accepted clean Canary and another fresh verified
+backup.
 
 ## Implemented controls
 

@@ -33,7 +33,7 @@
   {"fieldname": "cluster_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Cluster Fingerprint", "permlevel": 2, "read_only": 1},
   {"fieldname": "cluster_size", "fieldtype": "Int", "label": "Cluster Size", "read_only": 1},
   {"default": "Proposed", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Recommendation Status", "options": "Proposed\nApproved\nException\nWithdrawn\nSuperseded", "read_only": 1},
-  {"default": "Available", "fieldname": "rollout_state", "fieldtype": "Select", "in_list_view": 1, "label": "Rollout State", "options": "Available\nHeld\nApplied\nStale", "read_only": 1},
+  {"default": "Available", "fieldname": "rollout_state", "fieldtype": "Select", "in_list_view": 1, "label": "Rollout State", "options": "Available\nHeld\nApplied\nStale\nSuperseded", "read_only": 1},
   {"fieldname": "hold_reason", "fieldtype": "Small Text", "label": "Deliberate Hold Reason", "read_only": 1},
   {"fieldname": "held_at", "fieldtype": "Datetime", "label": "Held At", "read_only": 1},
   {"fieldname": "held_by", "fieldtype": "Link", "label": "Held By", "options": "User", "read_only": 1},

@@ -35,6 +35,7 @@ from db_connector.fuzzy_matching.canary import (
 )
 from db_connector.fuzzy_matching.correction import partition_for_display
 from db_connector.fuzzy_matching.identity import identity_fingerprint
+from db_connector.fuzzy_matching.generation import supersede_prior_canary_generations
 from db_connector.fuzzy_matching.models import build_evidence, tiered_result
 from db_connector.fuzzy_matching.policy import MatchingPolicy
 from db_connector.fuzzy_matching.security import mask_identifier
@@ -634,6 +635,7 @@ def run_canary(run_name: str) -> None:
             "random_qc_sample_count": review_workflow["qc_sample_count"],
             "production_records_modified": False,
         }
+        summary["generation_replacement"] = supersede_prior_canary_generations(run)
         run.db_set("high_candidate_count", len(high_edges), update_modified=False)
         run.db_set("summary_json", _json(summary), update_modified=False)
         _refresh_run_counts(run.name)
@@ -681,6 +683,27 @@ def _recommendation_stale(recommendation: Any) -> bool:
 
 def _pair_evidence_payload(recommendation: Any) -> dict[str, Any]:
     _run, policy = _run_and_policy(recommendation.canary_run)
+    left_exists = bool(frappe.db.exists("CCD Master", recommendation.left_record))
+    right_exists = bool(frappe.db.exists("CCD Master", recommendation.right_record))
+    if not left_exists or not right_exists:
+        return {
+            "recommendation": recommendation.name,
+            "status": recommendation.status,
+            "left": {"alias": "Left", "source": recommendation.left_source},
+            "right": {"alias": "Right", "source": recommendation.right_source},
+            "attributes": [],
+            "sensitive_values_visible": False,
+            "stale": True,
+            "historical_source_retired": True,
+            "historical_message": "Historical source retired",
+            "component_review": recommendation.component_review or "",
+            "qc_selected": bool(recommendation.qc_selected),
+            "qc_review_status": recommendation.qc_review_status or "",
+            "qc_final_label": recommendation.qc_final_label or "",
+            "qc_assigned_at": recommendation.qc_assigned_at or "",
+            "qc_due_at": recommendation.qc_due_at or "",
+            "qc_failure_action": recommendation.qc_failure_action or "",
+        }
     left = frappe.get_doc("CCD Master", recommendation.left_record).as_dict()
     right = frappe.get_doc("CCD Master", recommendation.right_record).as_dict()
     left["source"] = recommendation.left_source
@@ -974,6 +997,7 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
         limit_page_length=100,
     )
     raw_by_id = {str(row.name): dict(row) for row in raw_rows}
+    missing_record_ids = sorted(set(record_ids) - set(raw_by_id))
     source_by_id: dict[str, str] = {}
     for recommendation in recommendations:
         source_by_id[str(recommendation.left_record)] = recommendation.left_source
@@ -981,7 +1005,20 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
     sensitive = _has_sensitive_access()
     records = []
     for record_id in record_ids:
-        raw = raw_by_id[record_id]
+        raw = raw_by_id.get(record_id)
+        if raw is None:
+            records.append(
+                {
+                    "alias": aliases[record_id],
+                    "source": source_by_id.get(record_id, ""),
+                    "source_retired": True,
+                    "attributes": {
+                        attribute: "Historical source retired"
+                        for attribute in policy.attributes()
+                    },
+                }
+            )
+            continue
         records.append(
             {
                 "alias": aliases[record_id],
@@ -1015,10 +1052,13 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
     ]
     stale = _component_stale(review)
     if stale and not review.stale:
+        stale_values = {"stale": 1}
+        if review.review_status not in FINAL_REVIEW_STATUSES:
+            stale_values["review_status"] = "Stale"
         frappe.db.set_value(
             COMPONENT_REVIEW_DOCTYPE,
             review.name,
-            {"stale": 1, "review_status": "Stale"},
+            stale_values,
             update_modified=False,
         )
     ordinary = [row for row in review.review_submissions if not row.is_adjudication]
@@ -1034,7 +1074,11 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
     )
     return {
         "review": review.name,
-        "status": "Stale" if stale else review.review_status,
+        "status": (
+            review.review_status
+            if review.review_status in FINAL_REVIEW_STATUSES
+            else ("Stale" if stale else review.review_status)
+        ),
         "final_decision": review.final_decision or "",
         "final_groups": final_groups,
         "materialization_status": review.materialization_status or "Not Final",
@@ -1048,6 +1092,8 @@ def get_component_evidence(review_name: str) -> dict[str, Any]:
         "pair_options": pair_options,
         "sensitive_values_visible": sensitive,
         "stale": stale,
+        "historical_source_retired": bool(missing_record_ids),
+        "historical_message": "Historical source retired" if missing_record_ids else "",
         "can_submit": bool(
             not stale
             and review.review_status in OPEN_REVIEW_STATUSES

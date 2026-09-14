@@ -99,19 +99,21 @@ experiment did not change `pilot-splink-1.1`, the approved `0.938995074` Review
 cutoff, or the existing Review queue.
 
 The experiment also exposed a deployment reproducibility issue: although
-`requirements.txt` declares DuckDB 1.5.5, the long worker selected DuckDB 1.4.5
-from its image environment because that path currently precedes the persistent
-dependency target. Both experiment arms used 1.4.5, so their resource comparison
-is internally consistent. No new probability model or threshold may be promoted
-until dependency precedence is made deterministic and the model is recalibrated
-under the resulting new adapter/runtime version.
+`requirements.txt` declared DuckDB 1.5.5, the long worker selected DuckDB 1.4.5
+from its image environment. Both historical experiment arms used 1.4.5, so
+their resource comparison is internally consistent. The deployment helper now
+fails unless every installed package exactly matches `requirements.txt`; the
+verified 2026-09 runtime is Splink 4.0.16 and DuckDB 1.5.5. No historical
+probability model or threshold was carried across that runtime change.
 
 After bounded training, ordinary Splink predictions remain restricted to the
-safeguarded population blocking rules. The adapter then uses the same trained
-model to directly score only the already-selected review pairs that were not
-emitted by those rules (hard limit: 5,000). Direct scoring does not create a new
-candidate, production match, or cluster; it gives each governed label a
-comparable statistical score.
+safeguarded population blocking rules. Evaluation runs use the same trained
+model to score only their exact selected pairs in bounded SQL batches joined
+by an opaque pair sequence. The adapter requires exactly one score per
+requested pair and fails closed on an omitted, duplicated, or unrelated score.
+This requested-pair path does not create a new candidate, production match, or
+cluster; it gives each governed label a comparable statistical score without
+materializing a population-scale prediction frame.
 
 If Splink is unavailable or cannot train on a sparse run, the run continues
 with the deterministic models and records a sanitized warning. The optional
@@ -358,13 +360,20 @@ The human final label never rewrites the stored model tier `Review`. Queue
 generation and review do not link/merge people, change `Is Matched?`, or write
 the production Matching Score table.
 
-The current pilot queue completed on 251,520 governed records and 821,592
+The historical pre-restoration pilot queue completed on 251,520 governed records and 821,592
 candidate pairs. It excluded 3,961 Tiered High pairs and 1,097 prior human-used
 pairs, scored all 816,534 remaining eligible pairs, and stored 11,177 at or
 above `0.938995074`. Candidate generation was complete, the 5,000-record
 training cohort had zero stale endpoints, and no CCD Master record changed
 during generation. The 11,177 rows are an optional ranked pool, not a mandatory
-backlog.
+backlog. It was marked stale during the 2026-09 identity-integrity restoration
+and must not be treated as the current generation.
+
+The current `pilot-1.7` gate consists of Threshold Evaluation `tuvlt5me82`
+(500 pairs, 100 double reviews) and High Tier Validation `i04u936qii` (100
+pairs, all double-reviewed). Both are `Reviewing` with zero submitted labels.
+No replacement canary or queue may be generated until the reviews and approval
+gates complete; materialization and both automatic controls remain disabled.
 
 ## Operations
 
@@ -381,10 +390,18 @@ bench --site <site> execute db_connector.api_fuzzy_evaluation.install_matching_r
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_default_pilot_policy
 ```
 
-Both helper commands are idempotent. The second creates `pilot-1.6` only when
-missing and imports governed source mappings. HKID is the only default trusted
-global identifier and is still gated per value by complete-format/check-digit
-validation.
+Both helper commands are idempotent. The second creates the `pilot-1.6`
+baseline only when missing and imports governed source mappings. For a new
+generation, clone it into a revision that freezes stable Registration source
+keys and current mapping fingerprints:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_evaluation.create_policy_revision \
+  --kwargs '{"source_policy":"pilot-1.6","target_policy":"pilot-1.7"}'
+```
+
+HKID is the only default trusted global identifier and is still gated per
+value by complete-format/check-digit validation.
 
 ### 2. Profile and configure
 
@@ -398,7 +415,7 @@ identifiers remain unverified until separately approved.
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
-  --kwargs '{"policy_name":"pilot-1.6","sample_size":500,"double_review_count":100}'
+  --kwargs '{"policy_name":"pilot-1.7","sample_size":500,"double_review_count":100}'
 ```
 
 `install_evaluation_run` is deliberately bench-only and avoids putting an
@@ -409,7 +426,7 @@ For a separate positive-enriched blocking benchmark, use:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_positive_benchmark_run \
-  --kwargs '{"policy_name":"pilot-1.6","sample_size":100,"double_review_count":20}'
+  --kwargs '{"policy_name":"pilot-1.7","sample_size":100,"double_review_count":20}'
 ```
 
 This benchmark discovers unseen cross-source pairs from legacy score rows at or
@@ -424,7 +441,7 @@ tier on fresh predictions with:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_high_tier_validation_run \
-  --kwargs '{"policy_name":"pilot-1.6","sample_size":100}'
+  --kwargs '{"policy_name":"pilot-1.7","sample_size":100}'
 ```
 
 This run selects a reproducible uniform bottom-k sample from all previously

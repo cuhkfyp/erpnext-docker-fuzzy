@@ -10,6 +10,7 @@
 | Management decision | Limited follow-up workflow approved on 2026-08-19 |
 | Approved workflow scope | Tiered Evidence for reversible safety-gated recommendations; Splink above the selected cutoff for optional human-review ordering |
 | Explicitly not authorized | Destructive record merging, automatic `Is Matched?`, legacy Matching Score writes, or probabilistic automatic High |
+| Integrity-restoration update | Implemented 2026-09-13/14 through the mandatory `pilot-1.7` human-review gate; materialization and automatic controls remain disabled |
 
 This plan consolidates the decisions made after the POC and remains the design
 contract for the implementation. The schema, services, controls, and user
@@ -1059,3 +1060,47 @@ implemented and deployed in guarded mode.
 The six-component development acceptance fixture and exact operator procedure
 are in `SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md`. Its browser acceptance is still
 required before any production authorization.
+
+## 27. Restore Identity Integrity and Regenerate Matching — 2026-09-13/14
+
+This decision-complete recovery phase supersedes the old live matching
+generations without rewriting historical outcomes.
+
+1. Take and verify a fresh full ERPNext backup before changing code or identity
+   state. Remove only separately approved backup targets.
+2. With Materialization, Automatic QC, and Automatic Tiered disabled, preview
+   all identity artifacts referencing missing CCD Masters. Require a frozen
+   fingerprint and reason, then atomically stale unfinished recommendations,
+   reviews, candidates, evaluations, queues, and activation work; end or
+   revalidate current Groups/Memberships component-wide; withdraw current
+   Decisions; supersede current Different exclusions; mark completed history
+   as source-retired; and append an immutable retirement audit.
+3. Route every future CCD Master/generated-source bulk deletion and CCD
+   Registration cancellation through the same confirmed lifecycle service.
+   Enforce System Manager permission, stable source key, exact source scope,
+   locks/recheck, lifecycle-before-delete ordering, bounded chunks, rollback,
+   and idempotency. Standard cancellation must fail closed.
+4. Remove direct CCD Master permissions and mutation-API access from ordinary
+   reviewers while retaining the masked review surfaces they require.
+5. Create a new Draft policy from the latest submitted Registration revision
+   for each stable source key. Freeze exact revision, mapping fingerprint,
+   source-profile flags, and modified time. Refuse evaluation when provenance
+   is incomplete or stale; do not silently include a source without a submitted
+   Registration.
+6. Use the pinned local Splink/DuckDB runtime and bounded requested-pair scoring.
+   Generate a fresh threshold sample and a separate unseen deterministic-High
+   sample. All High-validation pairs require two independent reviews.
+7. Require complete review, adjudication, evaluation finalization, and explicit
+   management approval before policy promotion or Canary/queue generation.
+8. Publish a new generation atomically: only after the replacement is fully
+   generated may prior unfinished work in the same source scope become
+   Superseded/Stale. Preserve finalized human outcomes and applied/corrected
+   identity history. Failure rolls back the replacement transition.
+9. Do not create Unified-person materialization until the clean replacement
+   Canary is reviewed and accepted and another fresh full backup is verified.
+
+The live implementation reached step 7 with threshold run `tuvlt5me82` and
+High-validation run `i04u936qii` in Reviewing state. Steps 8 and 9 remain
+deliberately gated, not incomplete automation work. Current evidence and exact
+verification results are recorded in
+`IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`.

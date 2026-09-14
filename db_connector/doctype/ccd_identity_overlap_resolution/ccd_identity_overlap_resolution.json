@@ -4,7 +4,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "resolution_key", "status", "seed_doctype", "seed_document", "seed_origin",
+  "resolution_key", "status", "source_population_status", "source_retirement_run", "source_retired_at", "seed_doctype", "seed_document", "seed_origin",
   "scope_fingerprint", "participant_records_json", "included_pending_scopes_json", "adjacent_unreviewed_scopes_json",
   "prior_identity_decisions_json", "prior_identity_groups_json", "prior_memberships_json", "prior_exclusions_json",
   "replacement_groups_json", "replacement_exclusions_json", "resolution_reason", "warnings_json", "is_demonstration",
@@ -15,6 +15,9 @@
  "fields": [
   {"fieldname": "resolution_key", "fieldtype": "Data", "hidden": 1, "label": "Resolution Key", "read_only": 1, "reqd": 1, "unique": 1},
   {"default": "Applying", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Applying\nApplied\nNo Change\nSuperseded", "read_only": 1, "reqd": 1},
+  {"default": "Current", "fieldname": "source_population_status", "fieldtype": "Select", "in_list_view": 1, "label": "Source Population", "options": "Current\nHistorical Source Retired", "read_only": 1},
+  {"fieldname": "source_retirement_run", "fieldtype": "Link", "label": "Source Retirement Run", "options": "CCD Identity Retirement Run", "read_only": 1},
+  {"fieldname": "source_retired_at", "fieldtype": "Datetime", "label": "Source Retired At", "read_only": 1},
   {"fieldname": "seed_doctype", "fieldtype": "Link", "in_list_view": 1, "label": "Seed DocType", "options": "DocType", "read_only": 1, "reqd": 1},
   {"fieldname": "seed_document", "fieldtype": "Dynamic Link", "in_list_view": 1, "label": "Seed Document", "options": "seed_doctype", "read_only": 1, "reqd": 1},
   {"fieldname": "seed_origin", "fieldtype": "Data", "in_list_view": 1, "label": "Seed Decision Route", "read_only": 1, "reqd": 1},

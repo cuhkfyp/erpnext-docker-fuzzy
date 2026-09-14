@@ -26,6 +26,12 @@ doc_events = {
     "CCD Master": {
         "on_update": "db_connector.api_identity_resolution.handle_ccd_master_update",
     },
+    "CCD Registration": {
+        "validate": "db_connector.api_identity_retirement.validate_registration_source_key",
+        "before_submit": "db_connector.api_identity_retirement.before_submit_registration",
+        "before_cancel": "db_connector.api_identity_retirement.before_cancel_registration",
+        "on_cancel": "db_connector.api_identity_retirement.on_cancel_registration",
+    },
 }
 
 
@@ -43,6 +49,7 @@ scheduler_events = {
     "daily": [
         "db_connector.api_imis.run_macroFromERPNext",
         "db_connector.api_identity_qc.run_qc_monitor",
+        "db_connector.api_identity_retirement.run_scheduled_orphan_integrity_audit",
     ],
 }
 

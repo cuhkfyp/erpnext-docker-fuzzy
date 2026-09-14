@@ -66,6 +66,62 @@ def dependency_versions() -> dict[str, str]:
     return output
 
 
+def runtime_smoke_check() -> dict[str, Any]:
+    """Exercise pinned training and inference using synthetic, non-PII rows."""
+    records = [
+        {
+            "record_id": "A1",
+            "source": "A",
+            "chi_full": "王小明",
+            "eng_full": "WONG SIU MING",
+            "birthday": "1980-01-01",
+            "phone": "91234567",
+            "email": "a@example.invalid",
+        },
+        {
+            "record_id": "A2",
+            "source": "A",
+            "chi_full": "陳大文",
+            "eng_full": "CHAN TAI MAN",
+            "birthday": "1970-02-02",
+            "phone": "92345678",
+            "email": "b@example.invalid",
+        },
+        {
+            "record_id": "B1",
+            "source": "B",
+            "chi_full": "王小明",
+            "eng_full": "WONG SIU MING",
+            "birthday": "1980-01-01",
+            "phone": "91234567",
+            "email": "a@example.invalid",
+        },
+        {
+            "record_id": "B2",
+            "source": "B",
+            "chi_full": "陳大文",
+            "eng_full": "CHAN TAI MAN",
+            "birthday": "1970-02-02",
+            "phone": "92345678",
+            "email": "b@example.invalid",
+        },
+    ]
+    predictions = fit_predict(
+        records,
+        max_block_size=10,
+        max_prediction_pairs=20,
+        u_random_max_pairs=20,
+    )
+    return {
+        "dependencies": dependency_versions(),
+        "prediction_count": len(predictions),
+        "predicted_pairs": sorted(
+            [prediction.left_id, prediction.right_id]
+            for prediction in predictions
+        ),
+    }
+
+
 def fit_predict(
     records: Iterable[dict[str, Any]],
     *,

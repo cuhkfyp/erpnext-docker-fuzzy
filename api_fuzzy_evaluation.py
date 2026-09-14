@@ -203,10 +203,47 @@ def _fieldname_from_registration(value: Any) -> str:
     return str(value or "").split(":", 1)[0].strip()
 
 
+def _row_value(row: Any, fieldname: str, default: Any = "") -> Any:
+    if hasattr(row, "get"):
+        return row.get(fieldname) or default
+    return getattr(row, fieldname, default)
+
+
+def _registration_stable_source_key(registration: Any) -> str:
+    value = str(
+        getattr(registration, "ccd_stable_source_key", "")
+        or getattr(registration, "ccd_reg_doctype", "")
+        or registration.name
+    ).strip()
+    return value[len("CCD-REG-") :] if value.startswith("CCD-REG-") else value
+
+
+def _registration_mapping_fingerprint(registration: Any) -> str:
+    rows = []
+    for row in registration.get("fieldmatch") or []:
+        rows.append(
+            {
+                "idx": int(getattr(row, "idx", 0) or 0),
+                "ccd_fieldname": str(_row_value(row, "ccd_fieldname")),
+                "sys_fieldname": str(_row_value(row, "sys_fieldname")),
+                "assignment": str(_row_value(row, "assignment")),
+            }
+        )
+    payload = {
+        "registration": str(registration.name),
+        "stable_source_key": _registration_stable_source_key(registration),
+        "ccd_reg_doctype": str(getattr(registration, "ccd_reg_doctype", "")),
+        "fieldmatch": sorted(rows, key=lambda item: (item["idx"], item["sys_fieldname"])),
+    }
+    return hashlib.sha256(_json(payload).encode()).hexdigest()
+
+
 def _registration_profile_rows(registration: Any) -> list[dict[str, Any]]:
+    source_key = _registration_stable_source_key(registration)
+    mapping_fingerprint = _registration_mapping_fingerprint(registration)
     selected: dict[str, tuple[int, str, str]] = {}
     for row in registration.get("fieldmatch") or []:
-        fieldname = _fieldname_from_registration(row.sys_fieldname)
+        fieldname = _fieldname_from_registration(_row_value(row, "sys_fieldname"))
         definition = FIELD_TO_IDENTITY_ATTRIBUTE.get(fieldname)
         if not definition:
             continue
@@ -221,7 +258,10 @@ def _registration_profile_rows(registration: Any) -> list[dict[str, Any]]:
         default_field = DEFAULT_FIELDS[attribute]
         output.append(
             {
+                "stable_source_key": source_key,
                 "ccd_registration": registration.name,
+                "registration_modified": getattr(registration, "modified", "1970-01-01"),
+                "mapping_fingerprint": mapping_fingerprint,
                 "canonical_attribute": attribute,
                 "fieldname": configured[1] if configured else default_field,
                 "comparator": (
@@ -244,18 +284,48 @@ def _registration_profile_rows(registration: Any) -> list[dict[str, Any]]:
 def _policy_from_doc(doc: Any) -> MatchingPolicy:
     profiles: dict[str, dict[str, Any]] = {}
     for row in doc.get("source_profiles") or []:
-        source = str(row.ccd_registration)
+        source = str(row.get("stable_source_key") or row.ccd_registration)
         item = profiles.setdefault(
             source,
-            {"source": source, "field_map": {}, "identifier_scope": {}, "disabled_attributes": []},
+            {
+                "source": source,
+                "field_map": {},
+                "identifier_scope": {},
+                "disabled_attributes": [],
+                "registration_revision": str(row.ccd_registration or ""),
+                "registration_modified": str(row.get("registration_modified") or ""),
+                "registration_mapping_fingerprint": str(
+                    row.get("mapping_fingerprint") or ""
+                ),
+                "_source_profile_flags": [],
+            },
         )
         attribute = str(row.canonical_attribute)
+        item["_source_profile_flags"].append(
+            {
+                "canonical_attribute": attribute,
+                "fieldname": str(row.fieldname or ""),
+                "comparator": str(row.comparator or ""),
+                "identifier_scope": str(row.identifier_scope or ""),
+                "reliability_status": str(row.reliability_status or ""),
+                "enabled": int(bool(row.enabled)),
+            }
+        )
         if row.enabled:
             item["field_map"][attribute] = str(row.fieldname)
             if row.identifier_scope:
                 item["identifier_scope"][attribute] = str(row.identifier_scope).lower()
         else:
             item["disabled_attributes"].append(attribute)
+    for item in profiles.values():
+        flags = sorted(
+            item.pop("_source_profile_flags"),
+            key=lambda value: value["canonical_attribute"],
+        )
+        item["source_profile_flags_fingerprint"] = hashlib.sha256(
+            _json(flags).encode()
+        ).hexdigest()
+        item["source_profile_flags"] = flags
     trusted = [item.strip() for item in (doc.trusted_global_identifiers or "").split(",") if item.strip()]
     return MatchingPolicy.from_dict(
         {
@@ -285,6 +355,17 @@ def _policy_snapshot(policy: MatchingPolicy) -> dict[str, Any]:
                 "field_map": profile.field_map,
                 "identifier_scope": profile.identifier_scope,
                 "disabled_attributes": sorted(profile.disabled_attributes),
+                "registration_revision": profile.registration_revision,
+                "registration_modified": profile.registration_modified,
+                "registration_mapping_fingerprint": (
+                    profile.registration_mapping_fingerprint
+                ),
+                "source_profile_flags_fingerprint": (
+                    profile.source_profile_flags_fingerprint
+                ),
+                "source_profile_flags": [
+                    dict(item) for item in profile.source_profile_flags
+                ],
             }
             for profile in policy.source_profiles.values()
         ],
@@ -501,12 +582,36 @@ def _probability_map(
     training_records = _bounded_probability_records(records, required_record_ids)
     if not available():
         return {}, "splink_dependency_unavailable", len(training_records)
+    requested = {
+        tuple(sorted((str(left), str(right))))
+        for left, right in (requested_pairs or ())
+        if left and right and left != right
+    }
+    if requested_pairs is not None and not requested:
+        return {}, None, len(training_records)
+    scoring_records = None
+    if requested_pairs is not None:
+        required = {
+            record_id
+            for pair in requested
+            for record_id in pair
+        }
+        scoring_records = [
+            row
+            for row in records
+            if str(row.get("record_id") or "") in required
+        ]
     try:
         predictions = fit_predict(
             training_records,
             max_block_size=policy.max_block_size,
             max_prediction_pairs=policy.max_candidate_pairs,
-            requested_pairs=requested_pairs,
+            requested_pairs=requested,
+            scoring_records=scoring_records,
+            # Evaluation needs probabilities only for its already-selected,
+            # bounded human-review sample. Materialising a million-row full
+            # prediction frame here wastes memory and can OOM the worker.
+            batch_requested_pairs=requested_pairs is not None,
         )
     except (SplinkUnavailable, ValueError) as exc:
         return {}, str(exc), len(training_records)
@@ -585,6 +690,34 @@ def install_matching_roles() -> dict[str, str]:
     return _ensure_matching_roles()
 
 
+def _latest_registration_for_source(source: str) -> Any | None:
+    fields = ["name", "ccd_reg_doctype", "ccd_stable_source_key", "modified"]
+    rows = frappe.get_all(
+        "CCD Registration",
+        filters={"docstatus": 1, "ccd_stable_source_key": source},
+        fields=fields,
+        order_by="modified desc, creation desc, name desc",
+        limit_page_length=100,
+    )
+    if not rows:
+        from db_connector.api_identity_retirement import stable_source_key
+
+        candidates = frappe.get_all(
+            "CCD Registration",
+            filters={"docstatus": 1},
+            fields=fields,
+            order_by="modified desc, creation desc, name desc",
+            limit_page_length=100_000,
+        )
+        rows = [
+            row
+            for row in candidates
+            if row.ccd_reg_doctype
+            and stable_source_key(row.ccd_reg_doctype) == str(source)
+        ]
+    return frappe.get_doc("CCD Registration", rows[0].name) if rows else None
+
+
 def _sync_policy_source_profiles(policy_name: str) -> dict[str, Any]:
     policy_doc = frappe.get_doc("CCD Matching Policy", policy_name)
     if policy_doc.status != "Draft":
@@ -598,15 +731,17 @@ def _sync_policy_source_profiles(policy_name: str) -> dict[str, Any]:
     )
     policy_doc.set("source_profiles", [])
     imported_sources = []
+    selected_revisions = {}
     skipped_sources = []
     for source in record_sources:
-        if not frappe.db.exists("CCD Registration", source):
+        registration = _latest_registration_for_source(str(source))
+        if not registration:
             skipped_sources.append(source)
             continue
-        registration = frappe.get_doc("CCD Registration", source)
         for row in _registration_profile_rows(registration):
             policy_doc.append("source_profiles", row)
         imported_sources.append(source)
+        selected_revisions[str(source)] = str(registration.name)
     if not imported_sources:
         frappe.throw("No CCD Master sources have a matching CCD Registration")
     policy_doc.save(ignore_permissions=True)
@@ -615,8 +750,79 @@ def _sync_policy_source_profiles(policy_name: str) -> dict[str, Any]:
         "policy": policy_doc.name,
         "imported_sources": imported_sources,
         "skipped_sources": skipped_sources,
+        "selected_registration_revisions": selected_revisions,
         "profile_rows": len(policy_doc.source_profiles),
     }
+
+
+def _policy_provenance_audit(policy_name: str) -> dict[str, Any]:
+    policy_doc = frappe.get_doc("CCD Matching Policy", policy_name)
+    policy = _policy_from_doc(policy_doc)
+    issues: list[str] = []
+    sources = []
+    for source in policy.sources():
+        profile = policy.profile(source)
+        latest = _latest_registration_for_source(source)
+        current_fingerprint = (
+            _registration_mapping_fingerprint(latest) if latest else ""
+        )
+        if not latest:
+            issues.append(f"no_current_submitted_registration:{source}")
+        elif str(latest.name) != profile.registration_revision:
+            issues.append(
+                f"registration_revision_not_latest:{source}:"
+                f"{profile.registration_revision}:{latest.name}"
+            )
+        if not profile.registration_mapping_fingerprint:
+            issues.append(f"mapping_fingerprint_missing:{source}")
+        elif current_fingerprint != profile.registration_mapping_fingerprint:
+            issues.append(f"registration_mapping_changed:{source}")
+        if not profile.source_profile_flags_fingerprint:
+            issues.append(f"source_profile_flags_fingerprint_missing:{source}")
+        sources.append(
+            {
+                "stable_source_key": source,
+                "registration_revision": profile.registration_revision,
+                "is_latest_submitted_revision": bool(
+                    latest and str(latest.name) == profile.registration_revision
+                ),
+                "mapping_fingerprint": profile.registration_mapping_fingerprint,
+                "mapping_fingerprint_current": bool(
+                    current_fingerprint
+                    and current_fingerprint
+                    == profile.registration_mapping_fingerprint
+                ),
+                "source_profile_flags_fingerprint": (
+                    profile.source_profile_flags_fingerprint
+                ),
+            }
+        )
+    governed = set(policy.sources())
+    record_sources = {
+        str(value)
+        for value in frappe.db.sql_list(
+            """SELECT DISTINCT ccd_reg_source FROM `tabCCD Master`
+               WHERE COALESCE(ccd_reg_source, '') != ''"""
+        )
+    }
+    return {
+        "policy": policy_doc.name,
+        "policy_status": policy_doc.status,
+        "valid": not issues,
+        "issues": sorted(issues),
+        "source_count": len(sources),
+        "sources": sources,
+        "ungoverned_record_sources": sorted(record_sources - governed),
+        "snapshot_sha256": hashlib.sha256(
+            _json(_policy_snapshot(policy)).encode()
+        ).hexdigest(),
+    }
+
+
+@frappe.whitelist()
+def get_policy_provenance_audit(policy_name: str) -> dict[str, Any]:
+    _require_manager()
+    return _policy_provenance_audit(policy_name)
 
 
 @frappe.whitelist()
@@ -666,6 +872,47 @@ def ensure_default_pilot_policy(
     return _ensure_default_pilot_policy(policy_version)
 
 
+@frappe.whitelist()
+def create_policy_revision(
+    source_policy: str = DEFAULT_PILOT_POLICY_VERSION,
+    target_policy: str = "pilot-1.7",
+) -> dict[str, Any]:
+    """Clone governed policy controls, then import only current revisions."""
+    _require_manager()
+    if frappe.db.exists("CCD Matching Policy", target_policy):
+        target = frappe.get_doc("CCD Matching Policy", target_policy)
+        if target.status != "Draft":
+            frappe.throw("An existing policy revision must remain Draft to resynchronize")
+        result = _sync_policy_source_profiles(target_policy)
+        result["created"] = False
+        return result
+    source = frappe.get_doc("CCD Matching Policy", source_policy)
+    target = frappe.get_doc(
+        {
+            "doctype": "CCD Matching Policy",
+            "policy_version": target_policy,
+            "title": f"CCD Recommendation-Only Matching Pilot {target_policy}",
+            "status": "Draft",
+            "trusted_global_identifiers": source.trusted_global_identifiers,
+            "high_precision_target": source.high_precision_target,
+            "minimum_high_samples": source.minimum_high_samples,
+            "minimum_positive_labels_per_split": (
+                source.minimum_positive_labels_per_split
+            ),
+            "max_block_size": source.max_block_size,
+            "max_candidate_pairs": source.max_candidate_pairs,
+            "notes": (
+                f"Cloned from {source.name}. Registration revisions and mapping "
+                "fingerprints were freshly synchronized for this generation."
+            ),
+        }
+    ).insert(ignore_permissions=True)
+    result = _sync_policy_source_profiles(target.name)
+    result["created"] = True
+    result["source_policy"] = source.name
+    return result
+
+
 def install_default_pilot_policy(
     policy_version: str = DEFAULT_PILOT_POLICY_VERSION,
 ) -> dict[str, Any]:
@@ -683,6 +930,12 @@ def _enqueue_evaluation(
     policy_doc = frappe.get_doc("CCD Matching Policy", policy_name)
     if policy_doc.status not in {"Draft", "Pilot"}:
         frappe.throw("Only Draft or Pilot policies may create shadow runs")
+    provenance = _policy_provenance_audit(policy_name)
+    if not provenance["valid"]:
+        frappe.throw(
+            "Policy registration provenance is stale: "
+            + ", ".join(provenance["issues"][:10])
+        )
     sample_size = max(1, min(int(sample_size), 5_000))
     double_review_count = max(0, min(int(double_review_count), sample_size))
     if run_purpose not in {
@@ -803,13 +1056,25 @@ def run_evaluation(run_name: str) -> None:
         run.db_set("skipped_blocks_json", _json(blocked.skipped_blocks), update_modified=False)
 
         run.db_set("status", "Scoring")
-        formulas = {
-            item.name: str(item.fuzzymachingscript or "")
+        revision_by_source = {
+            source: policy.profile(source).registration_revision
+            for source in sources
+        }
+        revision_names = [
+            revision for revision in revision_by_source.values() if revision
+        ]
+        formula_by_revision = {
+            str(item.name): str(item.fuzzymachingscript or "")
             for item in frappe.get_all(
                 "CCD Registration",
-                filters={"name": ["in", list(sources)]},
+                filters={"name": ["in", revision_names]},
                 fields=["name", "fuzzymachingscript"],
+                limit_page_length=max(len(revision_names), 1),
             )
+        }
+        formulas = {
+            source: formula_by_revision.get(revision, "")
+            for source, revision in revision_by_source.items()
         }
         historical_pair_keys: set[tuple[str, str]] = set()
         historical_candidate_exclusions = 0
@@ -1795,6 +2060,24 @@ def set_evaluation_approval(run_name: str, decision: str) -> dict[str, str]:
 def get_pair_evidence(pair_name: str) -> dict[str, Any]:
     _require_reviewer()
     pair = frappe.get_doc("CCD Match Evaluation Pair", pair_name)
+    left_exists = bool(frappe.db.exists("CCD Master", pair.left_record))
+    right_exists = bool(frappe.db.exists("CCD Master", pair.right_record))
+    if not left_exists or not right_exists:
+        if not pair.stale:
+            frappe.db.set_value(
+                "CCD Match Evaluation Pair",
+                pair.name,
+                "stale",
+                1,
+                update_modified=False,
+            )
+        return {
+            "pair": pair.name,
+            "stale": True,
+            "historical_source_retired": True,
+            "historical_message": "Historical source retired",
+            "attributes": {},
+        }
     left = frappe.get_doc("CCD Master", pair.left_record)
     right = frappe.get_doc("CCD Master", pair.right_record)
     sensitive = "System Manager" in frappe.get_roles() or SENSITIVE_ROLE in frappe.get_roles()

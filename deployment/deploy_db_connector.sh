@@ -78,6 +78,8 @@ for container in "${containers[@]}"; do
 		# Existing containers already contain the full private app. Overlay only
 		# the versioned fuzzy component and its Frappe module controllers.
 		for relative in \
+			db_connector/api_ccd.py \
+			db_connector/api_ccd_matching.py \
 			db_connector/api_ccd_fuzzy.py \
 			db_connector/api_fuzzy_evaluation.py \
 			db_connector/api_fuzzy_canary.py \
@@ -89,6 +91,7 @@ for container in "${containers[@]}"; do
 			db_connector/api_identity_human.py \
 			db_connector/api_identity_overlap.py \
 			db_connector/api_identity_qc.py \
+			db_connector/api_identity_retirement.py \
 			db_connector/api_identity_resolution.py \
 			db_connector/api_identity_review_batch.py \
 			db_connector/identity_resolution_setup.py \

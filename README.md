@@ -29,6 +29,10 @@ This repository contains two deliberately separate paths:
   governed circuit-breaker recovery, and separately authorized default-off
   bounded Tiered materialization. They do not make Splink probabilistic output
   automatic.
+- `api_identity_retirement.py` and `fuzzy_matching/retirement.py` provide the
+  common source-retirement/orphan-repair lifecycle. They preserve immutable
+  history, require stable Registration source keys, and prevent an ordinary
+  Registration cancellation from silently orphaning live identity state.
 
 ## Management POC
 
@@ -70,14 +74,16 @@ The locked 251,520-record POC snapshot contains 161,112 Production records
 POC metrics therefore describe a mixed governed population, not a separately
 measured Production-only result.
 
-The project-operator-initiated recommendation-canary preview is now `Ready`.
+The project-operator-initiated recommendation-canary preview was a historical
+`Ready` checkpoint before the 2026-09 identity-integrity restoration.
 On the same 251,520-record governed snapshot, 3,528 of 3,961 Tiered High
 candidates passed all gates as `Proposed`; 433 were isolated as one-to-many
 source conflicts. No recommendation is `Active`, and no production match field
 or CCD record was changed. See the sanitized aggregate result in
 [`POC_RESULTS.json`](POC_RESULTS.json).
 
-The separate optional Splink queue is also `Ready`. It excluded all 3,961
+The separate optional Splink queue was also a historical `Ready` checkpoint. It
+excluded all 3,961
 Tiered High pairs and 1,097 previously human-used pairs, scored all remaining
 816,534 governed candidates, and stored 11,177 at or above the selected
 `0.938995074` maximum-F1 cutoff. All remain model tier `Review`; none is an
@@ -89,7 +95,18 @@ budgets. The 5,000-record control completed with average precision 0.6242, ROC
 AUC 0.8714, and 73.33% precision in its top 30, but still produced no valid
 automatic High threshold. The equivalent 20,000-record run exceeded the
 worker's memory limit, so it produced no comparable accuracy result and is not
-a candidate model. The approved v1.1 cutoff and 11,177-row queue are unchanged.
+a candidate model. That experiment did not approve a new model or threshold.
+
+The current 2026-09-14 checkpoint is deliberately earlier in the release
+gate. Orphaned identity history was repaired, the old canary and queue were
+marked stale, and matching was regenerated under policy `pilot-1.7` with
+stable policy/source revision provenance. Threshold Evaluation `tuvlt5me82`
+(500 pairs, 100 double reviews) and High Tier Validation `i04u936qii` (100
+pairs, all double-reviewed) are both `Reviewing` with zero submitted labels.
+The pinned worker runtime is Splink 4.0.16 with DuckDB 1.5.5, including bounded
+requested-pair scoring. No replacement canary or Review Queue may be generated
+until both evaluations complete their independent human-review and approval
+gates. Materialization, Automatic QC, and Automatic Tiered remain disabled.
 
 ## Install the pilot
 
@@ -149,20 +166,28 @@ site configuration, encryption key, and every installed app. Follow
    remain available in CCD but do not silently become matching evidence.
 3. Leave identifier scope as `Unknown` or `Local` unless governance has proven
    that the identifier uses one shared organization-wide namespace. In
-   `pilot-1.6`, HKID is the approved exception, but it is global evidence only
+   `pilot-1.7`, HKID is the approved exception, but it is global evidence only
    when both values are complete and pass the HKID check-digit validation.
    Partial, masked, and invalid values remain review-only evidence.
-4. Start a 500-pair run with 100 double-reviewed pairs:
+4. Create a fresh policy revision so every Registration mapping is frozen with
+   its stable source key and current revision fingerprint:
+
+```bash
+bench --site <site> execute db_connector.api_fuzzy_evaluation.create_policy_revision \
+  --kwargs '{"source_policy":"pilot-1.6","target_policy":"pilot-1.7"}'
+```
+
+5. Start a 500-pair run with 100 double-reviewed pairs:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_evaluation_run \
-  --kwargs '{"policy_name":"pilot-1.6","sample_size":500,"double_review_count":100}'
+  --kwargs '{"policy_name":"pilot-1.7","sample_size":500,"double_review_count":100}'
 ```
 
-5. Review the generated `CCD Match Evaluation Pair` documents as `Same`,
+6. Review the generated `CCD Match Evaluation Pair` documents as `Same`,
    `Different`, or `Unsure`. Resolve disagreements through adjudication. Every
    observed `Same` automatically requires a second independent confirmation.
-6. Finalize only after all intended labels are complete:
+7. Finalize only after all intended labels are complete:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.finalize_evaluation \
@@ -187,12 +212,12 @@ that tier on a fresh uniform sample of unseen High predictions:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_evaluation.install_high_tier_validation_run \
-  --kwargs '{"policy_name":"pilot-1.6","sample_size":100}'
+  --kwargs '{"policy_name":"pilot-1.7","sample_size":100}'
 ```
 
 All 100 pairs are assigned for two independent reviews. The run reports High
 precision and its Wilson 95% confidence interval, but does not recalibrate
-score thresholds or alter production matching. Pilot 1.6 also discards
+score thresholds or alter production matching. Pilot 1.7 also discards
 malformed and obvious sequential Hong Kong phone placeholders before blocking
 or scoring.
 
@@ -203,14 +228,14 @@ approved Threshold Evaluation, promote it from Draft to Pilot:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_canary.install_promote_policy_to_pilot \
-  --kwargs '{"policy_name":"pilot-1.6"}'
+  --kwargs '{"policy_name":"pilot-1.7"}'
 ```
 
 Create a preview run:
 
 ```bash
 bench --site <site> execute db_connector.api_fuzzy_canary.install_canary_run \
-  --kwargs '{"policy_name":"pilot-1.6"}'
+  --kwargs '{"policy_name":"pilot-1.7"}'
 ```
 
 The preview fails closed if candidate generation is truncated or skips any

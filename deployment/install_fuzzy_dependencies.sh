@@ -14,7 +14,7 @@ fi
 required_hash="$(sha256sum "$REQUIREMENTS" | awk '{print $1}')"
 if [[ -f "$STAMP" ]] && [[ "$(<"$STAMP")" == "$required_hash" ]]; then
 	if PYTHONPATH="$TARGET${PYTHONPATH:+:$PYTHONPATH}" "$BENCH_DIR/env/bin/python" -c \
-		'import duckdb, hanziconv, pypinyin, rapidfuzz, splink' >/dev/null 2>&1; then
+		'import importlib.metadata as m, pathlib; r=pathlib.Path("'"$REQUIREMENTS"'"); expected=dict(line.strip().split("==",1) for line in r.read_text().splitlines() if "==" in line and not line.lstrip().startswith("#")); actual={name:m.version(name) for name in expected}; assert actual == expected, (actual, expected); import duckdb, hanziconv, pypinyin, rapidfuzz, splink' >/dev/null 2>&1; then
 		echo "Pinned fuzzy dependencies are already installed."
 		exit 0
 	fi
@@ -37,5 +37,5 @@ rm -rf -- "$previous"
 trap - EXIT
 
 PYTHONPATH="$TARGET${PYTHONPATH:+:$PYTHONPATH}" "$BENCH_DIR/env/bin/python" -c \
-	'import duckdb, hanziconv, pypinyin, rapidfuzz, splink'
+	'import importlib.metadata as m, pathlib; r=pathlib.Path("'"$REQUIREMENTS"'"); expected=dict(line.strip().split("==",1) for line in r.read_text().splitlines() if "==" in line and not line.lstrip().startswith("#")); actual={name:m.version(name) for name in expected}; assert actual == expected, (actual, expected); import duckdb, hanziconv, pypinyin, rapidfuzz, splink; print(actual)'
 echo "Installed pinned fuzzy dependencies in the persistent sites volume."

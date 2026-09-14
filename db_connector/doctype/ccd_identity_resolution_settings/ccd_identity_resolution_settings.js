@@ -4,6 +4,7 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		add_qc_control(frm);
 		add_tiered_control(frm);
 		add_breaker_control(frm);
+		add_integrity_control(frm);
 		frm.add_custom_button(__("Preview Automatic Tiered Run"), () => preview_automatic(frm), __("Automation"));
 		if (frm.doc.automatic_tiered_enabled) {
 			frm.add_custom_button(
@@ -24,6 +25,79 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		}
 	},
 });
+
+function add_integrity_control(frm) {
+	frm.add_custom_button(
+		__("Preview Orphan Lifecycle Repair"),
+		() => frappe.call({
+			method: "db_connector.api_identity_retirement.preview_orphan_retirement",
+			freeze: true,
+			callback(response) {
+				show_orphan_repair_preview(frm, response.message || {});
+			},
+		}),
+		__("Identity Integrity"),
+	);
+}
+
+function show_orphan_repair_preview(frm, result) {
+	const counts = result.active_issue_counts || {};
+	const enabled = Object.entries(result.controls_enabled || {})
+		.filter(([, value]) => value)
+		.map(([name]) => name);
+	const countRows = Object.entries(counts)
+		.map(([name, value]) => `<tr><td>${esc(name.replaceAll("_", " "))}</td><td>${esc(value)}</td></tr>`)
+		.join("");
+	const dialog = new frappe.ui.Dialog({
+		title: __("Zero-write orphan lifecycle preview"),
+		fields: [
+			{
+				fieldname: "summary",
+				fieldtype: "HTML",
+				options:
+					`<div class="alert ${result.active_issue_count ? "alert-warning" : "alert-success"}">` +
+					`<p><b>${__("Missing CCD Masters")}</b>: ${esc(result.missing_ccd_master_count || 0)}<br>` +
+					`<b>${__("Active integrity issues")}</b>: ${esc(result.active_issue_count || 0)}<br>` +
+					`<b>${__("Planned writes")}</b>: ${esc(result.planned_write_count || 0)}</p>` +
+					`<p><b>${__("Frozen scope fingerprint")}</b>:<br><code>${esc(result.scope_fingerprint)}</code></p>` +
+					`<p><b>${__("Enabled safety controls")}</b>: ${enabled.length ? enabled.map(esc).join(", ") : __("None")}</p>` +
+					`<p><strong>${__("This preview changed no records.")}</strong></p></div>` +
+					`<table class="table table-bordered"><thead><tr><th>${__("Lifecycle action")}</th><th>${__("Count")}</th></tr></thead><tbody>${countRows}</tbody></table>`,
+			},
+			{ fieldname: "reason", fieldtype: "Small Text", label: __("Repair reason"), reqd: 1 },
+			{
+				fieldname: "confirm_scope_fingerprint",
+				fieldtype: "Data",
+				label: __("Type the exact scope fingerprint to confirm"),
+				reqd: 1,
+			},
+		],
+		primary_action_label: __("Apply Audited Lifecycle Repair"),
+		primary_action(values) {
+			if (values.confirm_scope_fingerprint !== result.scope_fingerprint) {
+				frappe.msgprint(__("The confirmation must exactly match the preview fingerprint."));
+				return;
+			}
+			if (enabled.length) {
+				frappe.msgprint(__("Disable all materialization and automation controls first."));
+				return;
+			}
+			frappe.call({
+				method: "db_connector.api_identity_retirement.apply_orphan_retirement",
+				args: values,
+				freeze: true,
+				callback(response) {
+					dialog.hide();
+					const applied = response.message || {};
+					frappe.msgprint(__("Retirement run {0}: {1}", [applied.retirement_run || "", applied.status || ""]));
+					frm.reload_doc();
+				},
+			});
+		},
+	});
+	if (!result.planned_write_count) dialog.get_primary_btn().prop("disabled", true);
+	dialog.show();
+}
 
 function esc(value) {
 	return frappe.utils.escape_html(String(value || ""));

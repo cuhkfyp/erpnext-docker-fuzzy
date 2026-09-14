@@ -6,7 +6,7 @@
  "field_order": [
   "canary_run", "matching_policy", "policy_version", "policy_snapshot_sha256", "snapshot_at",
   "selection_method", "selection_fingerprint", "idempotency_key", "is_pilot_wave", "is_demonstration", "is_automatic", "automation_control_revision", "automation_authorization_event",
-  "status", "selected_component_count", "selected_recommendation_count", "planned_group_count", "planned_membership_count",
+  "status", "source_population_status", "source_retirement_run", "source_retired_at", "selected_component_count", "selected_recommendation_count", "planned_group_count", "planned_membership_count",
   "created_group_count", "created_membership_count", "stale_count", "new_exception_count",
   "dry_run_at", "dry_run_by", "dry_run_json", "approved_at", "approved_by", "applied_at", "applied_by", "error_summary", "items"
  ],
@@ -24,7 +24,10 @@
   {"default": "0", "fieldname": "is_automatic", "fieldtype": "Check", "in_list_view": 1, "label": "Automatic Tiered Batch", "read_only": 1},
   {"default": "0", "fieldname": "automation_control_revision", "fieldtype": "Int", "label": "Automation Control Revision", "read_only": 1},
   {"fieldname": "automation_authorization_event", "fieldtype": "Link", "label": "Automation Authorization Event", "options": "CCD Identity Event", "read_only": 1},
-  {"default": "Draft", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Draft\nReviewed\nApproved\nApplying\nApplied\nFailed", "read_only": 1, "reqd": 1},
+  {"default": "Draft", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Draft\nReviewed\nApproved\nApplying\nApplied\nFailed\nStale\nSuperseded", "read_only": 1, "reqd": 1},
+  {"default": "Current", "fieldname": "source_population_status", "fieldtype": "Select", "in_list_view": 1, "label": "Source Population", "options": "Current\nHistorical Source Retired", "read_only": 1},
+  {"fieldname": "source_retirement_run", "fieldtype": "Link", "label": "Source Retirement Run", "options": "CCD Identity Retirement Run", "read_only": 1},
+  {"fieldname": "source_retired_at", "fieldtype": "Datetime", "label": "Source Retired At", "read_only": 1},
   {"fieldname": "selected_component_count", "fieldtype": "Int", "label": "Selected Components", "read_only": 1},
   {"fieldname": "selected_recommendation_count", "fieldtype": "Int", "label": "Selected Recommendations", "read_only": 1},
   {"fieldname": "planned_group_count", "fieldtype": "Int", "label": "Planned Identity Groups", "read_only": 1},

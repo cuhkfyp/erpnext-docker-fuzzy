@@ -97,7 +97,9 @@ function render_recommendation_evidence(frm, payload) {
 		? '<div class="alert alert-warning">' + __("Sensitive values are visible because your role permits them.") + "</div>"
 		: '<div class="alert alert-info">' + __("Identity values are masked. A Sensitive Reviewer or System Manager can see the full permitted values.") + "</div>";
 	const stale = payload.stale
-		? '<div class="alert alert-danger">' + __("The source record changed after this canary snapshot. Do not review this stale pair.") + "</div>"
+		? '<div class="alert alert-danger">' + (payload.historical_source_retired
+			? __("Historical source retired. The deleted CCD Master is not remapped to a recreated record.")
+			: __("The source record changed after this canary snapshot. Do not review this stale pair.")) + "</div>"
 		: "";
 	const rows = (payload.attributes || []).map((row) =>
 		`<tr><td>${esc(row.attribute)}</td><td>${esc(row.left)}</td>` +

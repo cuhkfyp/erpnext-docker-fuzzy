@@ -1,0 +1,37 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "retirement_key", "scope_type", "scope_fingerprint", "status", "reason",
+  "missing_record_count", "active_issue_count", "started_at", "started_by",
+  "completed_at", "completed_by", "preview_json", "result_json"
+ ],
+ "fields": [
+  {"fieldname": "retirement_key", "fieldtype": "Data", "hidden": 1, "label": "Retirement Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "scope_type", "fieldtype": "Select", "in_list_view": 1, "label": "Scope Type", "options": "Orphan Repair\nSource Retirement", "read_only": 1, "reqd": 1},
+  {"fieldname": "scope_fingerprint", "fieldtype": "Data", "label": "Frozen Scope Fingerprint", "read_only": 1, "reqd": 1},
+  {"default": "Applying", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Applying\nApplied\nFailed", "read_only": 1, "reqd": 1},
+  {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason", "read_only": 1, "reqd": 1},
+  {"fieldname": "missing_record_count", "fieldtype": "Int", "label": "Missing CCD Masters", "read_only": 1},
+  {"fieldname": "active_issue_count", "fieldtype": "Int", "label": "Active Integrity Issues", "read_only": 1},
+  {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At", "read_only": 1, "reqd": 1},
+  {"fieldname": "started_by", "fieldtype": "Link", "label": "Started By", "options": "User", "read_only": 1, "reqd": 1},
+  {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At", "read_only": 1},
+  {"fieldname": "completed_by", "fieldtype": "Link", "label": "Completed By", "options": "User", "read_only": 1},
+  {"fieldname": "preview_json", "fieldtype": "Code", "label": "Frozen Preview", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "result_json", "fieldtype": "Code", "label": "Applied Result", "options": "JSON", "permlevel": 1, "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Identity Retirement Run",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "started_at",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

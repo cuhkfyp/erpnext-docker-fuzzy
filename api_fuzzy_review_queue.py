@@ -27,6 +27,7 @@ from db_connector.fuzzy_matching.blocking import (
 )
 from db_connector.fuzzy_matching.models import build_evidence
 from db_connector.fuzzy_matching.identity import identity_fingerprint
+from db_connector.fuzzy_matching.generation import supersede_prior_queue_generations
 from db_connector.fuzzy_matching.policy import MatchingPolicy
 from db_connector.fuzzy_matching.security import mask_identifier
 from db_connector.fuzzy_matching.splink_adapter import (
@@ -494,6 +495,7 @@ def run_review_queue(run_name: str) -> None:
             "automatic_high_enabled": False,
             "production_records_modified": False,
         }
+        summary["generation_replacement"] = supersede_prior_queue_generations(run)
         run.db_set("queued_count", len(predictions), update_modified=False)
         run.db_set("summary_json", _json(summary), update_modified=False)
         _refresh_review_counts(run.name)
@@ -536,6 +538,54 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
     is_manager = "System Manager" in set(frappe.get_roles())
     run = frappe.get_doc(RUN_DOCTYPE, candidate.queue_run)
     policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
+    left_exists = bool(frappe.db.exists("CCD Master", candidate.left_record))
+    right_exists = bool(frappe.db.exists("CCD Master", candidate.right_record))
+    if not left_exists or not right_exists:
+        if not candidate.stale:
+            stale_values = {"stale": 1}
+            if candidate.review_status not in FINAL_REVIEW_STATUSES:
+                stale_values["review_status"] = "Stale"
+            frappe.db.set_value(
+                CANDIDATE_DOCTYPE,
+                candidate.name,
+                stale_values,
+                update_modified=False,
+            )
+        return {
+            "candidate": candidate.name,
+            "model_tier": "Review",
+            "left": {"alias": "Left", "source": candidate.left_source},
+            "right": {"alias": "Right", "source": candidate.right_source},
+            "attributes": [],
+            "sensitive_values_visible": False,
+            "stale": True,
+            "historical_source_retired": True,
+            "historical_message": "Historical source retired",
+            "review_status": (
+                candidate.review_status
+                if candidate.review_status in FINAL_REVIEW_STATUSES
+                else "Stale"
+            ),
+            "final_label": candidate.final_label or "",
+            "materialization_status": candidate.materialization_status or "Not Final",
+            "identity_decision": candidate.identity_decision or "",
+            "materialization_error": candidate.materialization_error or "",
+            "priority_rank": candidate.priority_rank,
+            "can_submit": False,
+            "can_adjudicate": False,
+            "can_materialize": False,
+            "can_reverse_materialization": False,
+            **(
+                {
+                    "probabilistic_score": candidate.probabilistic_score,
+                    "review_threshold": candidate.review_threshold,
+                    "blocking_routes": candidate.blocking_routes,
+                    "correction_decision": candidate.correction_decision or "",
+                }
+                if is_manager
+                else {}
+            ),
+        }
     left = frappe.get_doc("CCD Master", candidate.left_record).as_dict()
     right = frappe.get_doc("CCD Master", candidate.right_record).as_dict()
     left["source"] = candidate.left_source
@@ -555,10 +605,13 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
         )
     stale = _candidate_stale(candidate)
     if stale and not candidate.stale:
+        stale_values = {"stale": 1}
+        if candidate.review_status not in FINAL_REVIEW_STATUSES:
+            stale_values["review_status"] = "Stale"
         frappe.db.set_value(
             CANDIDATE_DOCTYPE,
             candidate.name,
-            {"stale": 1, "review_status": "Stale"},
+            stale_values,
             update_modified=False,
         )
     ordinary = [row for row in candidate.review_labels if not row.is_adjudication]
@@ -571,7 +624,11 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
         "attributes": attributes,
         "sensitive_values_visible": sensitive,
         "stale": stale,
-        "review_status": "Stale" if stale else candidate.review_status,
+        "review_status": (
+            candidate.review_status
+            if candidate.review_status in FINAL_REVIEW_STATUSES
+            else ("Stale" if stale else candidate.review_status)
+        ),
         "final_label": candidate.final_label or "",
         "materialization_status": candidate.materialization_status or "Not Final",
         "identity_decision": candidate.identity_decision or "",

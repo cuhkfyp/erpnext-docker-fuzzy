@@ -3,6 +3,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fuzzy_matching.policy import MatchingPolicy, SourceProfile
 from fuzzy_matching.types import CandidatePair, MatchTier
@@ -135,6 +136,44 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertEqual(len(first), 10)
         self.assertTrue({"R95", "R96"}.issubset(first_ids))
         self.assertEqual(first_ids, {row["record_id"] for row in second})
+
+    def test_probability_map_scores_only_the_bounded_requested_pairs(self):
+        records = [
+            {"record_id": "A1", "source": "A"},
+            {"record_id": "B1", "source": "B"},
+            {"record_id": "C1", "source": "C"},
+        ]
+        policy = MatchingPolicy(max_candidate_pairs=1_000_000)
+        captured = {}
+
+        def fake_fit(training_records, **kwargs):
+            captured["training_records"] = training_records
+            captured.update(kwargs)
+            return [
+                types.SimpleNamespace(
+                    left_id="A1", right_id="B1", probability=0.91
+                )
+            ]
+
+        with patch.object(self.module, "available", return_value=True), patch.object(
+            self.module, "fit_predict", side_effect=fake_fit
+        ):
+            probabilities, warning, training_count = self.module._probability_map(
+                records,
+                policy,
+                {"A1", "B1"},
+                {("A1", "B1")},
+            )
+
+        self.assertIsNone(warning)
+        self.assertEqual(training_count, 3)
+        self.assertEqual(probabilities, {("A1", "B1"): 0.91})
+        self.assertTrue(captured["batch_requested_pairs"])
+        self.assertEqual(captured["requested_pairs"], {("A1", "B1")})
+        self.assertEqual(
+            {row["record_id"] for row in captured["scoring_records"]},
+            {"A1", "B1"},
+        )
 
     def test_positive_benchmark_selection_is_deterministic_balanced_and_deduplicated(self):
         rows = [

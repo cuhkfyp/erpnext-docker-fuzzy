@@ -12,9 +12,9 @@ DEFAULT_VENDOR_PATH = "/home/frappe/frappe-bench/sites/.python-dependencies/db_c
 def activate_vendor() -> str | None:
     path = os.environ.get("DB_CONNECTOR_FUZZY_VENDOR_PATH", DEFAULT_VENDOR_PATH)
     if os.path.isdir(path) and path not in sys.path:
-        # Prefer packages already supplied by the ERPNext image. The pinned
-        # directory fills missing fuzzy dependencies without replacing Frappe's
-        # own runtime dependencies globally.
-        sys.path.append(path)
+        # Matching validations must use the exact audited dependency set.  A
+        # base-image DuckDB previously won because this path was appended,
+        # silently pairing Splink with the wrong runtime.
+        sys.path.insert(0, path)
         return path
     return None

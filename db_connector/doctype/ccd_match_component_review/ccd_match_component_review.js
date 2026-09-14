@@ -48,7 +48,9 @@ function render_component(frm, payload) {
 		? '<div class="alert alert-warning">' + __("Sensitive values are visible because your role permits them.") + "</div>"
 		: '<div class="alert alert-info">' + __("All identity values are masked. Equality is preserved for comparison; privileged reviewers can see full permitted values.") + "</div>";
 	const stale = payload.stale
-		? '<div class="alert alert-danger">' + __("At least one source record changed after the snapshot. This component is closed; create a new canary.") + "</div>"
+		? '<div class="alert alert-danger">' + (payload.historical_source_retired
+			? __("Historical source retired. Deleted CCD Masters remain historical and are not remapped to recreated records.")
+			: __("At least one source record changed after the snapshot. This component is closed; create a new canary.")) + "</div>"
 		: "";
 	const headers = (payload.attributes || []).map((attribute) => `<th>${component_esc(attribute)}</th>`).join("");
 	const records = (payload.records || []).map((record) => {

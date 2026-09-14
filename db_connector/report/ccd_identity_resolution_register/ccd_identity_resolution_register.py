@@ -31,11 +31,14 @@ MAXIMUM_LIMIT = 5_000
 
 def execute(filters: dict[str, Any] | None = None):
     _require_reader()
-    normalized = _normalized_filters(filters or {})
+    reveal_identifiers = bool(frappe.has_permission("CCD Master", "read"))
+    normalized = _normalized_filters(filters or {}, reveal_identifiers)
     rows = _current_resolution_rows()
     rows = _apply_filters(rows, normalized)
     matching_count = len(rows)
     rows = rows[: normalized.limit]
+    if not reveal_identifiers:
+        rows = _masked_rows(rows)
     message = None
     if matching_count > len(rows):
         message = _(
@@ -43,7 +46,7 @@ def execute(filters: dict[str, Any] | None = None):
             "or narrow the filters."
         ).format(len(rows), matching_count)
     return (
-        _columns(),
+        _columns(reveal_identifiers),
         rows,
         message,
         None,
@@ -55,12 +58,20 @@ def _require_reader() -> None:
     roles = set(frappe.get_roles())
     if not ({"System Manager", REVIEW_ROLE, SENSITIVE_ROLE} & roles):
         frappe.throw(_("CCD Match Reviewer role is required"), frappe.PermissionError)
-    if not frappe.has_permission("CCD Master", "read"):
-        frappe.throw(_("You cannot read CCD Master"), frappe.PermissionError)
 
 
-def _normalized_filters(filters: dict[str, Any]) -> frappe._dict:
+def _normalized_filters(
+    filters: dict[str, Any], reveal_identifiers: bool
+) -> frappe._dict:
     output = frappe._dict(filters)
+    if not reveal_identifiers and any(
+        output.get(fieldname)
+        for fieldname in ("ccd_master", "ccd_reg_source", "identity_group")
+    ):
+        frappe.throw(
+            _("Direct-record filters require CCD Master read permission"),
+            frappe.PermissionError,
+        )
     output.identity_state = str(output.get("identity_state") or "Any Resolved")
     if output.identity_state not in ALLOWED_STATES:
         frappe.throw(_("Unknown Identity State filter"))
@@ -117,8 +128,8 @@ def _current_resolution_rows() -> list[dict[str, Any]]:
     if not candidate_ids:
         return []
 
-    accessible_records = _accessible_record_rows(candidate_ids)
-    if not accessible_records:
+    existing_records = _existing_record_rows(candidate_ids)
+    if not existing_records:
         return []
     # Exclusion fingerprint validation needs both ends even when only one end
     # is visible to this user. The other record's values never enter the output.
@@ -153,6 +164,8 @@ def _current_resolution_rows() -> list[dict[str, Any]]:
             continue
         left = str(row.left_record)
         right = str(row.right_record)
+        if left not in identity_records or right not in identity_records:
+            continue
         if (
             current_fingerprint(left, decision_name) != str(row.left_fingerprint)
             or current_fingerprint(right, decision_name) != str(row.right_fingerprint)
@@ -180,13 +193,15 @@ def _current_resolution_rows() -> list[dict[str, Any]]:
         membership_by_record.setdefault(str(row.ccd_master), row)
 
     output = []
-    for record_id in sorted(accessible_records):
+    for record_id in sorted(existing_records):
         membership = membership_by_record.get(record_id)
         if membership:
             decision_name = str(membership.originating_decision)
-            decision = decisions[decision_name]
             group_name = str(membership.identity_group)
-            group = groups[group_name]
+            decision = decisions.get(decision_name)
+            group = groups.get(group_name)
+            if not decision or not group or record_id not in identity_records:
+                continue
             fingerprint_changed = (
                 current_fingerprint(record_id, decision_name)
                 != str(membership.identity_fingerprint)
@@ -199,7 +214,7 @@ def _current_resolution_rows() -> list[dict[str, Any]]:
             output.append(
                 {
                     "ccd_master": record_id,
-                    "ccd_reg_source": accessible_records[record_id].get(
+                    "ccd_reg_source": existing_records[record_id].get(
                         "ccd_reg_source"
                     )
                     or "",
@@ -223,11 +238,13 @@ def _current_resolution_rows() -> list[dict[str, Any]]:
         if not decision_names_for_record:
             continue
         decision_name = decision_names_for_record[0]
-        decision = decisions[decision_name]
+        decision = decisions.get(decision_name)
+        if not decision:
+            continue
         output.append(
             {
                 "ccd_master": record_id,
-                "ccd_reg_source": accessible_records[record_id].get(
+                "ccd_reg_source": existing_records[record_id].get(
                     "ccd_reg_source"
                 )
                 or "",
@@ -255,11 +272,13 @@ def _current_resolution_rows() -> list[dict[str, Any]]:
     )
 
 
-def _accessible_record_rows(record_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+def _existing_record_rows(record_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
     output: dict[str, dict[str, Any]] = {}
     ordered = sorted({str(record_id) for record_id in record_ids})
     for offset in range(0, len(ordered), 500):
-        rows = frappe.get_list(
+        # The report has its own role gate and masks identifiers before return.
+        # Bypassing CCD Master DocPerm here is required for masked-only review.
+        rows = frappe.get_all(
             "CCD Master",
             filters={"name": ["in", ordered[offset : offset + 500]]},
             fields=["name", "ccd_reg_source"],
@@ -283,11 +302,6 @@ def _identity_record_rows(record_ids: Iterable[str]) -> dict[str, dict[str, Any]
             values = dict(row)
             values["source"] = str(values.get("ccd_reg_source") or "")
             output[str(row.name)] = values
-    missing = sorted(set(ordered) - set(output))
-    if missing:
-        frappe.throw(
-            _("CCD Master records no longer exist: {0}").format(", ".join(missing[:5]))
-        )
     return output
 
 
@@ -343,18 +357,56 @@ def _apply_filters(
     return output
 
 
-def _columns() -> list[dict[str, Any]]:
+def _masked_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output = []
+    group_aliases: dict[str, str] = {}
+    for index, row in enumerate(rows, start=1):
+        masked = dict(row)
+        group_name = str(row.get("identity_group") or "")
+        if group_name and group_name not in group_aliases:
+            group_aliases[group_name] = f"Masked Group {len(group_aliases) + 1}"
+        masked.update(
+            {
+                "ccd_master": f"Masked Record {index}",
+                "ccd_reg_source": "Masked",
+                "identity_group": group_aliases.get(group_name, ""),
+                "decision": "",
+            }
+        )
+        output.append(masked)
+    return output
+
+
+def _columns(reveal_identifiers: bool) -> list[dict[str, Any]]:
     return [
-        {"fieldname": "ccd_master", "label": _("CCD Master"), "fieldtype": "Link", "options": "CCD Master", "width": 145},
+        {
+            "fieldname": "ccd_master",
+            "label": _("CCD Master") if reveal_identifiers else _("Masked Record"),
+            "fieldtype": "Link" if reveal_identifiers else "Data",
+            **({"options": "CCD Master"} if reveal_identifiers else {}),
+            "width": 145,
+        },
         {"fieldname": "ccd_reg_source", "label": _("CCD Registration Source"), "fieldtype": "Data", "width": 185},
         {"fieldname": "identity_state", "label": _("Identity State"), "fieldtype": "Data", "width": 165},
-        {"fieldname": "identity_group", "label": _("Identity Group"), "fieldtype": "Link", "options": GROUP_DOCTYPE, "width": 135},
+        {
+            "fieldname": "identity_group",
+            "label": _("Identity Group"),
+            "fieldtype": "Link" if reveal_identifiers else "Data",
+            **({"options": GROUP_DOCTYPE} if reveal_identifiers else {}),
+            "width": 135,
+        },
         {"fieldname": "group_status", "label": _("Group Status"), "fieldtype": "Data", "width": 145},
         {"fieldname": "active_group_members", "label": _("Active Group Members"), "fieldtype": "Int", "width": 165},
         {"fieldname": "membership_status", "label": _("Membership Status"), "fieldtype": "Data", "width": 155},
         {"fieldname": "active_different_relationships", "label": _("Active Different Relationships"), "fieldtype": "Int", "width": 205},
         {"fieldname": "decision_origin", "label": _("Decision Origin"), "fieldtype": "Data", "width": 170},
-        {"fieldname": "decision", "label": _("Current Decision"), "fieldtype": "Link", "options": DECISION_DOCTYPE, "width": 135},
+        {
+            "fieldname": "decision",
+            "label": _("Current Decision"),
+            "fieldtype": "Link" if reveal_identifiers else "Data",
+            **({"options": DECISION_DOCTYPE} if reveal_identifiers else {}),
+            "width": 135,
+        },
         {"fieldname": "policy_version", "label": _("Policy / Model Version"), "fieldtype": "Data", "width": 170},
         {"fieldname": "same_source_warning", "label": _("Same-source Warning"), "fieldtype": "Check", "width": 155},
     ]

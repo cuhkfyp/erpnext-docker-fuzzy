@@ -5,7 +5,7 @@
 | Item | Value |
 | --- | --- |
 | Purpose | Move the guarded CCD matching and identity-resolution setup to another ERPNext server |
-| Runbook date | 2026-08-28 UTC |
+| Runbook date | 2026-09-14 UTC |
 | Implementation code checkpoint | The reviewed Git commit containing this runbook, or a reviewed successor |
 | Source site at writing | `frontend` |
 | Source framework baseline | Frappe 15.73.0 / ERPNext 15.70.0 |
@@ -229,8 +229,10 @@ starts.
 ## 6. Mode A — full-site lift-and-shift
 
 Use this mode when the target will replace the current site and must preserve
-the current 3,961 recommendations, 11,177 review candidates, reviews, settings,
-and any identity history created in the future.
+all recommendations, review candidates, reviews, settings, retirement audits,
+and identity history. Do not use historical 3,961-recommendation or
+11,177-candidate checkpoint counts as current after the 2026-09 restoration;
+capture a fresh signed manifest from the source immediately before transfer.
 
 ### 6.1 Inventory the source
 
@@ -379,7 +381,11 @@ identity hooks instead of blindly overwriting it. Required integrations are:
   Identity Resolution List** Client Script, and the standard **CCD Identity
   Resolution Register** report files;
 - CCD Master `on_update` event for fingerprint revalidation; and
-- daily `db_connector.api_identity_qc.run_qc_monitor` scheduling.
+- the governed CCD Registration validation/submission/cancellation hooks in
+  `api_identity_retirement`;
+- daily `db_connector.api_identity_qc.run_qc_monitor` scheduling; and
+- daily `api_identity_retirement.run_scheduled_orphan_integrity_audit`
+  scheduling.
 
 Preserve every unrelated target hook.
 
@@ -391,11 +397,14 @@ Clone into a temporary staging directory, not directly over the app:
 transfer_stage="$(mktemp -d)"
 git clone https://github.com/cuhkfyp/erpnext-docker-fuzzy.git \
   "$transfer_stage/erpnext-docker-fuzzy"
-git -C "$transfer_stage/erpnext-docker-fuzzy" checkout a0ae535
+release_commit="$(git -C "$transfer_stage/erpnext-docker-fuzzy" rev-parse origin/main)"
+git -C "$transfer_stage/erpnext-docker-fuzzy" checkout --detach "$release_commit"
 mkdir -p "$transfer_stage/component"
-git -C "$transfer_stage/erpnext-docker-fuzzy" archive a0ae535 \
+git -C "$transfer_stage/erpnext-docker-fuzzy" archive "$release_commit" \
   | tar -x -C "$transfer_stage/component" -f -
 ```
+
+Record `release_commit` in the migration manifest before copying any file.
 
 Review the staged files and merge them into:
 
@@ -719,7 +728,8 @@ Do not enable live materialization until all checks pass.
 
 - target Frappe/ERPNext/app revisions match the approved manifest;
 - every web/scheduler/queue process imports all identity API modules, including
-  `api_identity_qc` and `api_identity_automation`;
+  `api_identity_qc`, `api_identity_automation`, and
+  `api_identity_retirement`;
 - `bench --site <target-site> doctor` reports healthy workers;
 - dependency imports for DuckDB, Splink, RapidFuzz, pypinyin, and hanziconv pass;
 - the app asset build and raw public renderer exist on the frontend;
@@ -766,8 +776,13 @@ PYTHONPATH=.:./db_connector \
 ### 9.2 Schema and security checks
 
 - every `CCD Identity *` (including `CCD Identity Correction` and `CCD Identity
-  Overlap Resolution`) and `CCD Match
+  Overlap Resolution` and `CCD Identity Retirement Run`) and `CCD Match
   Review Batch*` DocType loads;
+- the `CCD Identity Integrity Audit` report loads and its zero-write audit has
+  no active issue or planned write before matching regeneration;
+- submitted CCD Registrations have stable source keys and current revision
+  fingerprints, and ordinary cancellation fails closed when governed identity
+  state would otherwise be orphaned;
 - CCD Master contains the Identity Resolution tab/custom HTML field;
 - an enabled **CCD Master Identity Resolution** Client Script exists when CCD
   Master is custom, and its source contains `load_identity_resolution`;
@@ -790,32 +805,12 @@ PYTHONPATH=.:./db_connector \
 
 ### 9.3 Data checks by mode
 
-For a full-site transfer, compare aggregate counts with the frozen source
-manifest. At the current checkpoint they are:
-
-| Object | Expected current count |
-| --- | ---: |
-| Proposed Tiered recommendations | 3,513 |
-| Approved Tiered recommendations | 14 |
-| Superseded Tiered recommendations | 4 |
-| Exception recommendations | 436 |
-| Exception component reviews | 194 (13 Agreed / 181 Unreviewed) |
-| Splink Review Pool | 11,177 |
-| Splink work assigned | 0 |
-| Identity Decisions | 60 total (38 active / 22 superseded) |
-| Identity Groups | 56 total (34 active / 22 ended) |
-| Identity Memberships | 136 total (84 active / 52 ended) |
-| Identity Exclusions | 33 total (22 active / 11 superseded) |
-| Activation batches | 12 total (11 Applied / 1 Reviewed; 14 Applied / 4 Corrected / 1 Exception items) |
-| Component materialization | 9 Applied / 4 Corrected / 181 Not Final |
-| Splink materialization | 9 Applied / 2 Pending / 10 Reversed / 1 Superseded / 11,155 Not Final |
-| Complete identity corrections | 7 total (5 applied / 2 superseded) |
-| Combined overlap resolutions | 12 total (9 Applied / 1 No Change / 2 Superseded) |
-| Human Review batches | 0 |
-| QC investigations | 0 |
-
-These are checkpoint values, not permanent constants. If migration occurs after
-authorized operations, compare against a fresh signed source manifest instead.
+For a full-site transfer, compare aggregate counts with the fresh frozen source
+manifest; there are intentionally no hard-coded expected totals in this
+runbook. The 2026-09 restoration retired orphaned live state and marked prior
+canary/queue work stale, so older checkpoint counts are historical evidence,
+not migration acceptance values. The source and target must agree exactly on
+the signed manifest, and both must report zero active orphan-integrity issues.
 
 For a feature-only installation, zero source recommendations are expected until
 the target generates its own evaluation/canary.
@@ -1338,6 +1333,7 @@ Before declaring transfer complete, record:
 | Current-host Docker deployment | `deployment/deploy_db_connector.sh` |
 | Idempotent schema/custom-field/Client-Script setup | `identity_resolution_setup.py` |
 | Timestamp-guarded legacy snapshot repair | `identity_snapshot_backfill.py` |
+| Source retirement, orphan repair, and Registration cancellation guard | `api_identity_retirement.py`, `fuzzy_matching/retirement.py`, `CCD Identity Retirement Run`, and `CCD Identity Integrity Audit` |
 | Pending/active overlap expansion and atomic resolution | `api_identity_overlap.py`, `fuzzy_matching/overlap.py`, and `public/js/identity_overlap_resolution.js` |
 | Continuous QC, breaker, and governed recovery | `api_identity_qc.py` and `fuzzy_matching/automation.py` |
 | Default-off bounded unattended Tiered | `api_identity_automation.py` and `api_identity_activation.py` |

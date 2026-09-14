@@ -46,7 +46,9 @@ function load_evidence(frm) {
 				`<td>${frappe.utils.escape_html(String(values.right || ""))}</td></tr>`
 			);
 			const warning = payload.stale
-				? '<div class="alert alert-warning">This pair is stale and cannot be used for calibration.</div>'
+				? `<div class="alert alert-warning">${payload.historical_source_retired
+					? __("Historical source retired. This pair remains as audit history and cannot be used for calibration.")
+					: __("This pair is stale and cannot be used for calibration.")}</div>`
 				: "";
 			frm.fields_dict.evidence_html.$wrapper.html(
 				`${warning}<table class="table table-bordered"><thead><tr>` +

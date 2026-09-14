@@ -35,7 +35,9 @@ function render_candidate_evidence(frm, payload) {
 	const purpose = '<div class="alert alert-secondary"><b>' + __("Model tier: Review") + "</b> — " +
 		__("This pair is prioritized by Splink for human review only. It is not an automatic High match and this screen cannot link or merge records.") + "</div>";
 	const stale = payload.stale
-		? '<div class="alert alert-danger">' + __("A source record changed after the frozen snapshot. Do not review this stale pair.") + "</div>"
+		? '<div class="alert alert-danger">' + (payload.historical_source_retired
+			? __("Historical source retired. The deleted CCD Master is not remapped to a recreated record.")
+			: __("A source record changed after the frozen snapshot. Do not review this stale pair.")) + "</div>"
 		: "";
 	const score = Object.prototype.hasOwnProperty.call(payload, "probabilistic_score")
 		? `<div class="alert alert-light">${__("System Manager audit view")}: ${__("Splink probability")} ${esc(payload.probabilistic_score)}; ` +

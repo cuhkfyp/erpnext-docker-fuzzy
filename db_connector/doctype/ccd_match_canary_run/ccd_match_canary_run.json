@@ -21,7 +21,7 @@
   {"fieldname": "high_validation_run", "fieldtype": "Link", "label": "Approved High Validation", "options": "CCD Match Evaluation Run", "read_only": 1, "reqd": 1},
   {"fieldname": "threshold_evaluation_run", "fieldtype": "Link", "label": "Approved Threshold Evaluation", "options": "CCD Match Evaluation Run", "read_only": 1, "reqd": 1},
   {"fieldname": "splink_review_threshold", "fieldtype": "Float", "label": "Approved Splink Review Threshold", "precision": "12", "read_only": 1},
-  {"default": "Queued", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Queued\nProfiling\nGenerating Candidates\nApplying Safety Gates\nWriting Recommendations\nReady\nActive\nCompleted\nFailed", "read_only": 1},
+  {"default": "Queued", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Queued\nProfiling\nGenerating Candidates\nApplying Safety Gates\nWriting Recommendations\nReady\nActive\nCompleted\nFailed\nStale\nSuperseded", "read_only": 1},
   {"fieldname": "snapshot_at", "fieldtype": "Datetime", "label": "Snapshot At", "read_only": 1, "reqd": 1},
   {"fieldname": "approved_at", "fieldtype": "Datetime", "label": "Recommendations Approved At", "read_only": 1},
   {"fieldname": "approved_by", "fieldtype": "Link", "label": "Recommendations Approved By", "options": "User", "read_only": 1},

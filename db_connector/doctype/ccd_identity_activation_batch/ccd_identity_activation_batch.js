@@ -134,6 +134,9 @@ function activation_pair_table(pair) {
 }
 
 function show_activation_component(payload) {
+	const retired = payload.historical_source_retired
+		? `<div class="alert alert-danger">${__("Historical source retired. Deleted CCD Masters are shown only as frozen aliases and are not linked to recreated records.")}</div>`
+		: "";
 	const privacy = payload.sensitive_values_visible
 		? `<div class="alert alert-warning">${__("Sensitive values and CCD Master links are visible because your role permits them.")}</div>`
 		: `<div class="alert alert-info">${__("Identity values are masked. A Sensitive Reviewer or System Manager can see the full permitted values.")}</div>`;
@@ -150,7 +153,7 @@ function show_activation_component(payload) {
 		`${__("Recommendations")}: ${activation_esc(payload.recommendation_count)} &nbsp; ` +
 		`${__("Item status")}: ${activation_esc(payload.item_status)}<br>` +
 		`${__("The selected record pairs are frozen. Evidence is reloaded from the current CCD records and is marked Stale if a record changed after the canary snapshot.")}</div>`;
-	const html = privacy + demonstration + summary +
+	const html = retired + privacy + demonstration + summary +
 		`<h5>${__("Selected CCD records")}</h5><ul>${records}</ul>` +
 		`<h5>${__("Frozen selected pair(s) and current evidence")}</h5>` +
 		(payload.recommendations || []).map(activation_pair_table).join("");

@@ -25,6 +25,11 @@ class SourceProfile:
     field_map: dict[str, str] = field(default_factory=dict)
     identifier_scope: dict[str, str] = field(default_factory=dict)
     disabled_attributes: frozenset[str] = frozenset()
+    registration_revision: str = ""
+    registration_modified: str = ""
+    registration_mapping_fingerprint: str = ""
+    source_profile_flags_fingerprint: str = ""
+    source_profile_flags: tuple[dict[str, Any], ...] = ()
 
     def field_for(self, attribute: str) -> str | None:
         if attribute in self.disabled_attributes:
@@ -88,6 +93,17 @@ class MatchingPolicy:
                 field_map=dict(raw.get("field_map") or {}),
                 identifier_scope=dict(raw.get("identifier_scope") or {}),
                 disabled_attributes=frozenset(raw.get("disabled_attributes") or ()),
+                registration_revision=str(raw.get("registration_revision") or ""),
+                registration_modified=str(raw.get("registration_modified") or ""),
+                registration_mapping_fingerprint=str(
+                    raw.get("registration_mapping_fingerprint") or ""
+                ),
+                source_profile_flags_fingerprint=str(
+                    raw.get("source_profile_flags_fingerprint") or ""
+                ),
+                source_profile_flags=tuple(
+                    dict(item) for item in raw.get("source_profile_flags") or ()
+                ),
             )
             profiles[profile.source] = profile
         aliases = {

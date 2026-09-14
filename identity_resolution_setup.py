@@ -7,6 +7,7 @@ import frappe
 
 IDENTITY_CLIENT_SCRIPT = "CCD Master Identity Resolution"
 IDENTITY_LIST_CLIENT_SCRIPT = "CCD Master Identity Resolution List"
+REGISTRATION_CANCEL_CLIENT_SCRIPT = "CCD Registration Governed Cancellation"
 SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
 
 
@@ -30,13 +31,18 @@ def _backfill_fail_closed_automation_defaults() -> dict[str, int]:
 
 
 def _upsert_identity_client_script(
-    *, name: str, view: str, public_filename: str, enabled: bool
+    *,
+    name: str,
+    view: str,
+    public_filename: str,
+    enabled: bool,
+    dt: str = "CCD Master",
 ) -> dict[str, object]:
     script = frappe.read_file(
         frappe.get_app_path("db_connector", "public", "js", public_filename)
     )
     values = {
-        "dt": "CCD Master",
+        "dt": dt,
         "view": view,
         "enabled": enabled,
         "script": script,
@@ -83,6 +89,15 @@ def _install_identity_client_scripts() -> dict[str, dict[str, object]]:
             public_filename="ccd_master_identity_resolution_list.js",
             enabled=enabled,
         ),
+        "registration_cancel": _upsert_identity_client_script(
+            name=REGISTRATION_CANCEL_CLIENT_SCRIPT,
+            view="Form",
+            public_filename="ccd_registration_governed_cancel.js",
+            enabled=bool(
+                frappe.db.get_value("DocType", "CCD Registration", "custom")
+            ),
+            dt="CCD Registration",
+        ),
     }
     frappe.clear_cache(doctype="CCD Master")
     return installed
@@ -114,8 +129,66 @@ def _identity_custom_fields() -> dict[str, list[dict[str, object]]]:
                 "insert_after": "ccd_identity_resolution_tab",
                 "read_only": 1,
             },
-        ]
+        ],
+        "CCD Registration": [
+            {
+                "fieldname": "ccd_stable_source_key",
+                "fieldtype": "Data",
+                "label": "Stable CCD Source Key",
+                "insert_after": "ccd_reg_doctype",
+                "read_only": 1,
+                "allow_on_submit": 1,
+                "no_copy": 1,
+            },
+        ],
     }
+
+
+def _backfill_registration_source_keys() -> dict[str, object]:
+    from db_connector.api_identity_retirement import stable_source_key
+
+    if not frappe.get_meta("CCD Registration").has_field("ccd_stable_source_key"):
+        return {"updated": 0, "active_conflicts": {}}
+    updated = 0
+    active_by_source: dict[str, list[str]] = {}
+    registrations = frappe.get_all(
+        "CCD Registration",
+        fields=["name", "ccd_reg_doctype", "ccd_stable_source_key", "docstatus"],
+        limit_page_length=100_000,
+    )
+    for row in registrations:
+        if not row.ccd_reg_doctype:
+            continue
+        source = stable_source_key(row.ccd_reg_doctype)
+        if str(row.ccd_stable_source_key or "") != source:
+            frappe.db.set_value(
+                "CCD Registration",
+                row.name,
+                "ccd_stable_source_key",
+                source,
+                update_modified=False,
+            )
+            updated += 1
+        if int(row.docstatus or 0) == 1:
+            active_by_source.setdefault(source, []).append(str(row.name))
+    conflicts = {
+        source: sorted(names)
+        for source, names in active_by_source.items()
+        if len(names) > 1
+    }
+    return {"updated": updated, "active_conflicts": conflicts}
+
+
+def _disable_legacy_registration_cancel_script() -> dict[str, object]:
+    name = "CCD Registration Before Cancel"
+    if not frappe.db.exists("Server Script", name):
+        return {"name": name, "found": False, "disabled": False}
+    was_disabled = bool(frappe.db.get_value("Server Script", name, "disabled"))
+    if not was_disabled:
+        frappe.db.set_value(
+            "Server Script", name, "disabled", 1, update_modified=False
+        )
+    return {"name": name, "found": True, "disabled": True}
 
 
 def _add_indexes() -> None:
@@ -124,6 +197,13 @@ def _add_indexes() -> None:
         ("CCD Identity Membership", ["identity_group", "status"], "ccd_identity_group_current"),
         ("CCD Identity Exclusion", ["left_record", "right_record", "status"], "ccd_identity_exclusion_pair"),
         ("CCD Identity Event", ["entity_doctype", "entity_name", "event_at"], "ccd_identity_event_entity"),
+        ("CCD Match Recommendation", ["left_record", "rollout_state"], "ccd_recommendation_left_lifecycle"),
+        ("CCD Match Recommendation", ["right_record", "rollout_state"], "ccd_recommendation_right_lifecycle"),
+        ("CCD Match Evaluation Pair", ["left_record", "stale"], "ccd_evaluation_left_lifecycle"),
+        ("CCD Match Evaluation Pair", ["right_record", "stale"], "ccd_evaluation_right_lifecycle"),
+        ("CCD Match Review Candidate", ["left_record", "stale"], "ccd_candidate_left_lifecycle"),
+        ("CCD Match Review Candidate", ["right_record", "stale"], "ccd_candidate_right_lifecycle"),
+        ("CCD Master", ["ccd_reg_source", "ccd_source_key"], "ccd_master_source_lifecycle"),
     )
     for doctype, fields, index_name in indexes:
         if frappe.db.table_exists(doctype):
@@ -192,6 +272,8 @@ def install_identity_resolution() -> dict[str, object]:
     _add_indexes()
     migration = _migrate_recommendation_terms()
     automation_defaults = _backfill_fail_closed_automation_defaults()
+    registration_sources = _backfill_registration_source_keys()
+    legacy_cancel_script = _disable_legacy_registration_cancel_script()
     settings = frappe.get_single(SETTINGS_DOCTYPE)
     activation_item_source_backfill = backfill_activation_item_source_pairs()
     return {
@@ -209,6 +291,8 @@ def install_identity_resolution() -> dict[str, object]:
             settings.automatic_qc_assignment_enabled
         ),
         "automation_defaults": automation_defaults,
+        "registration_sources": registration_sources,
+        "legacy_cancel_script": legacy_cancel_script,
         "recommendation_term_migration": migration,
         "activation_item_source_backfill": activation_item_source_backfill,
     }

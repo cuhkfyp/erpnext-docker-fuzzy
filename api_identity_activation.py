@@ -597,9 +597,14 @@ def get_activation_batch_component(batch_name: str, item_name: str) -> dict[str,
 
     pair_payloads: list[dict[str, Any]] = []
     sensitive_values_visible = False
+    retired_records: set[str] = set()
     for recommendation in recommendations:
         payload = _pair_evidence_payload(recommendation)
         sensitive_values_visible = bool(payload["sensitive_values_visible"])
+        if payload.get("historical_source_retired"):
+            for record_id in (recommendation.left_record, recommendation.right_record):
+                if not frappe.db.exists("CCD Master", record_id):
+                    retired_records.add(str(record_id))
         payload["left"]["alias"] = aliases[str(recommendation.left_record)]
         payload["right"]["alias"] = aliases[str(recommendation.right_record)]
         pair_payloads.append(payload)
@@ -610,7 +615,7 @@ def get_activation_batch_component(batch_name: str, item_name: str) -> dict[str,
             "alias": aliases[record_id],
             "source": record_sources[record_id],
         }
-        if sensitive_values_visible:
+        if sensitive_values_visible and record_id not in retired_records:
             record["record_id"] = record_id
         records.append(record)
 
@@ -626,6 +631,7 @@ def get_activation_batch_component(batch_name: str, item_name: str) -> dict[str,
         "records": records,
         "recommendations": pair_payloads,
         "sensitive_values_visible": sensitive_values_visible,
+        "historical_source_retired": bool(retired_records),
         "is_demonstration": bool(batch.is_demonstration),
     }
 
