@@ -104,8 +104,10 @@ stable policy/source revision provenance. Threshold Evaluation `tuvlt5me82` is
 finalized and awaiting management approval. High Tier Validation `i04u936qii`
 was atomically repaired against the complete 78,104-pair
 deterministic-High-capable universe: 99 finalized decisions were preserved,
-one displaced decision remains as stale immutable history, and replacement
-pair `furm8v3nhg` requires two independent reviews before High finalization.
+one displaced decision remains as stale immutable history, and two distinct
+reviewers confirmed the replacement pair as Same. High finalization records
+100/100 confirmed Same and a 96.30%–100% Wilson 95% precision interval. Both
+evaluation runs now await explicit management decisions.
 The pinned worker runtime is Splink 4.0.16 with DuckDB 1.5.5, including bounded
 requested-pair scoring. An approved complete High run can authorize a new
 High-only canary; the optional Review Queue remains blocked by truncation of the

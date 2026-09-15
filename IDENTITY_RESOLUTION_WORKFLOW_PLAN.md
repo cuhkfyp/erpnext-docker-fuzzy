@@ -1099,10 +1099,9 @@ generations without rewriting historical outcomes.
 9. Do not create Unified-person materialization until the clean replacement
    Canary is reviewed and accepted and another fresh full backup is verified.
 
-The live implementation remains at step 7. Threshold run `tuvlt5me82` is
-finalized and awaiting management approval. High-validation run `i04u936qii`
-is reopened only for two independent reviews of one replacement sample pair,
-followed by finalization and management approval. Steps 8 and 9 remain
+The live implementation remains at step 7. Threshold run `tuvlt5me82` and
+complete High-validation run `i04u936qii` are both finalized and awaiting
+explicit management decisions. Steps 8 and 9 remain
 deliberately gated, not incomplete automation work. Current evidence and exact
 verification results are recorded in
 `IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`.
@@ -1132,3 +1131,9 @@ double-review pair, cleared the obsolete final metrics, and returned the run to
 Reviewing. Materialization, Automatic QC, and Automatic Tiered remained off;
 the orphan audit remained zero-write with no active issue; no canary or queue
 was created.
+
+Two distinct reviewers subsequently confirmed the replacement pair as Same.
+The High run was re-finalized with 100/100 confirmed Same, all 100 double
+reviews complete, 100% reviewer agreement, and a 96.30%–100% Wilson 95%
+precision interval. It now awaits management approval together with the
+threshold run.

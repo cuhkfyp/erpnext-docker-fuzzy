@@ -16,7 +16,7 @@
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
 | 2026-08-31 historical totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
 | 2026-09-13 integrity restoration | Audited orphan retirement run `6v6b99amn6` applied; the post-repair audit reports zero active issues and zero planned writes while retaining marked historical evidence |
-| Current matching gate | Threshold run `tuvlt5me82` is finalized and awaiting management approval. High run `i04u936qii` has a complete 78,104-pair High-capable universe and is reopened for two independent reviews of replacement pair `furm8v3nhg`; no replacement Canary or queue exists |
+| Current matching gate | Threshold run `tuvlt5me82` and complete High run `i04u936qii` are both finalized and awaiting explicit management decisions; no replacement Canary or queue exists |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 | QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
 
@@ -114,7 +114,7 @@ Fresh shadow generation and completed human review produced:
 | Run | Purpose | Current state | Sample |
 | --- | --- | --- | ---: |
 | `tuvlt5me82` | Threshold Evaluation | Awaiting Management Approval / Pending Management Review | 500 finalized pairs: 125 Same and 375 Different; 100 double reviews |
-| `i04u936qii` | High Tier Validation | Reviewing / Pending Management Review | 100 active pairs: 99 preserved finalized Same decisions and replacement `furm8v3nhg` awaiting two reviews; one superseded pair retained as stale history |
+| `i04u936qii` | High Tier Validation | Awaiting Management Approval / Pending Management Review | 100 finalized active Same pairs; all 100 independently double-reviewed; one superseded pair retained as stale history |
 
 The first generation reached the configured 1,000,000-pair safety ceiling and
 recorded truncation rather than exceeding it. The completed reviews therefore
@@ -152,11 +152,12 @@ replacement is implemented but has not run: it supersedes only unfinished old
 work after a replacement generation reaches Ready, while preserving completed
 human outcomes and applied/corrected history in the same transaction.
 
-The next permitted action is human: two different reviewers must review
-replacement pair `furm8v3nhg`. A manager then finalizes `i04u936qii` and records
-explicit management decisions on both evaluation runs. If both are approved,
-`pilot-1.7` may be promoted and a new complete deterministic-High Canary may be
-generated. The optional Review queue remains unavailable until a future
+The replacement pair received two independent Same labels and High finalization
+completed with 100/100 confirmed Same, 100% reviewer agreement, and a 95%
+Wilson precision interval of 96.30%–100%. The next permitted action is human:
+management must record explicit decisions on both evaluation runs. If both are
+approved, `pilot-1.7` may be promoted and a new complete deterministic-High
+Canary may be generated. The optional Review queue remains unavailable until a future
 threshold run completes the general candidate universe without truncation or
 skipped blocks. Unified-person materialization remains a later gate requiring
 an accepted clean Canary and another fresh verified backup.

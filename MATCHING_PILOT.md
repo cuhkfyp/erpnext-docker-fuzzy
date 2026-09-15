@@ -384,12 +384,13 @@ and must not be treated as the current generation.
 The current `pilot-1.7` gate consists of finalized Threshold Evaluation
 `tuvlt5me82` (500 pairs, including 100 double reviews) and High Tier Validation
 `i04u936qii`. The High run's complete 78,104-pair universe displaced one member
-of its already-reviewed sample: 99 finalized decisions remain active, one
-finalized pair remains as stale audit history, and replacement pair
-`furm8v3nhg` requires two independent reviews. No replacement canary or queue
-exists. After the replacement pair, High finalization, and both management
-decisions, an approved policy can generate the High canary. The optional queue
-remains blocked because the current threshold run's general candidate universe
+of its already-reviewed sample. Two distinct reviewers confirmed the
+replacement pair as Same, and High finalization now records 100/100 confirmed Same with a
+96.30%–100% Wilson 95% precision interval. Both runs await management decisions;
+the displaced pair remains as stale immutable history. No replacement canary
+or queue exists. After both management decisions, an approved policy can
+generate the High canary. The optional queue remains blocked because the
+current threshold run's general candidate universe
 was truncated. Materialization and both automatic controls remain disabled.
 
 ## Operations
