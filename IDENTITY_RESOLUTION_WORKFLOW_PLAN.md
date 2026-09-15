@@ -1099,12 +1099,15 @@ generations without rewriting historical outcomes.
 9. Do not create Unified-person materialization until the clean replacement
    Canary is reviewed and accepted and another fresh full backup is verified.
 
-The live implementation remains at step 7. Complete High-validation run
-`i04u936qii` is finalized and awaiting its management decision. Truncated
+The live implementation has completed step 7 and the atomic generation in
+step 8. Complete High-validation run `i04u936qii` and replacement threshold run
+`dh1ml9skc7` are approved. Truncated
 threshold run `tuvlt5me82` remains immutable evidence but cannot authorize the
-optional queue. Complete replacement threshold run `dh1ml9skc7` is finalized
-and awaiting its management decision. Steps 8 and 9 remain deliberately gated, not incomplete
-automation work. Current evidence and exact verification results are recorded in
+optional queue. Policy `pilot-1.7` is Pilot and replacement Canary
+`snakh96bf9` is Ready. Its 2,086 exception components and 100 randomized QC
+recommendations are unreviewed, and no optional Splink queue exists. Step 9
+remains deliberately gated, not incomplete automation work. Current evidence
+and exact verification results are recorded in
 `IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`.
 
 ### 27.1 Complete deterministic-High universe repair — 2026-09-15
@@ -1165,10 +1168,18 @@ validated human-review cutoff is `0.865469813`; held-out precision/recall/F1 at
 that cutoff are 45%/56.25%/50%. No automatic probabilistic High cutoff was
 accepted, as required by the human-only boundary.
 
-Explicit management approval of this threshold run is required next.
-Only after that gate and management approval of the already-complete High run
-`i04u936qii` may one fresh canary be generated. The canary then creates Tiered
-exception components and may seed the optional, always-human Splink Review
-queue. Unified-person materialization remains a later, separately backed-up
-and accepted-canary gate; all materialization and automatic controls remain
-off.
+Management approved this threshold run and complete High run `i04u936qii`,
+after which policy `pilot-1.7` was promoted to Pilot. Replacement Canary
+`snakh96bf9` completed atomically and is Ready: 78,104 complete deterministic-
+High candidates produced 75,971 High recommendations, partitioned into 68,262
+Proposed and 7,709 Exception recommendations. The exceptions map to 2,086
+unreviewed component cases, and 100 Proposed recommendations form the
+unreviewed randomized QC sample. All recommendation keys, pair fingerprints,
+and audit-event links are complete and unique; no activation batch, identity
+decision, identity group, or membership was created.
+
+The optional, always-human Splink Review queue may now be generated against
+this Ready canary and approved cutoff `0.865469813`. Exception-component and QC
+review remain human work. Unified-person materialization remains a later,
+separately backed-up and accepted-canary gate; all materialization and
+automatic controls remain off.

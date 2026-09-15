@@ -16,7 +16,7 @@
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
 | 2026-08-31 historical totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
 | 2026-09-13 integrity restoration | Audited orphan retirement run `6v6b99amn6` applied; the post-repair audit reports zero active issues and zero planned writes while retaining marked historical evidence |
-| Current matching gate | Complete High run `i04u936qii` and complete threshold run `dh1ml9skc7` are finalized and awaiting management approval; truncated threshold run `tuvlt5me82` cannot authorize the optional queue; no replacement Canary or queue exists |
+| Current matching gate | Complete High run `i04u936qii` and complete threshold run `dh1ml9skc7` are approved; policy `pilot-1.7` is Pilot; replacement Canary `snakh96bf9` is Ready with no materialization; the optional Splink queue has not been generated |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 | QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
 
@@ -188,8 +188,8 @@ non-stale known-Same pairs. This leaves 106,021 pairs of headroom under the
 frozen 1,000,000-pair policy ceiling. Focused blocker tests pass 13/13 and the
 complete deployed suite passes 93/93.
 
-Replacement Threshold Evaluation `dh1ml9skc7` is finalized and `Awaiting
-Management Approval`. Its 500 non-stale pairs contain 56 Same and 444 Different
+Replacement Threshold Evaluation `dh1ml9skc7` is finalized, `Completed`, and
+`Approved`. Its 500 non-stale pairs contain 56 Same and 444 Different
 decisions. All 100 randomized double reviews and 46 additional positive
 confirmations are complete across three distinct reviewers; six disagreements
 were adjudicated. Randomized agreement is 97%, with Cohen's kappa
@@ -201,12 +201,21 @@ cutoff the held-out result is 45% precision, 56.25% recall, and F1 `0.5`, so it
 is suitable only for review prioritization, never unattended identity action.
 No probabilistic automatic-High threshold passed; `automatic_high_threshold_disabled`
 is the sole automatic-readiness reason. This does not block the governed
-human-only Review queue. `dh1ml9skc7` is the only threshold run that may
-advance the new general blocker toward that queue after explicit management approval.
-The complete High run `i04u936qii` remains separate validation evidence. No
-Canary or Review queue has been generated; Live Materialization, Automatic QC,
-and Automatic Tiered remain disabled, `would_write_now = false`, and the orphan
-audit remains at zero active issues and zero planned writes.
+human-only Review queue. Complete High run `i04u936qii` is also `Completed`
+and `Approved`, and policy `pilot-1.7` is now `Pilot`.
+
+Replacement Canary `snakh96bf9` completed atomically and is `Ready`. Across
+256,092 governed records it generated 78,104 deterministic-High candidates
+with no truncation or skipped blocks, then retained 75,971 High recommendations:
+68,262 Proposed and 7,709 safely quarantined as Exception. The exceptions map
+exactly to 2,086 unreviewed component cases; a deterministic randomized sample
+of 100 Proposed recommendations is also ready for QC. All 75,971 recommendation
+keys, pair fingerprints, and audit-event links are unique and complete. There
+are zero activation-batch, identity-decision, identity-group, or materialized
+membership links. The optional Splink Review queue has not been generated.
+Live Materialization, Automatic QC, and Automatic Tiered remain disabled,
+`would_write_now = false`, and the orphan audit remains at zero active issues
+and zero planned writes.
 
 ## Implemented controls
 

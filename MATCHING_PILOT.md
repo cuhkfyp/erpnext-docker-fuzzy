@@ -389,9 +389,8 @@ finalized Threshold Evaluation `tuvlt5me82` (500 pairs, including 100 double rev
 `i04u936qii`. The High run's complete 78,104-pair universe displaced one member
 of its already-reviewed sample. Two distinct reviewers confirmed the
 replacement pair as Same, and High finalization now records 100/100 confirmed Same with a
-96.30%–100% Wilson 95% precision interval. Both runs await management decisions;
-the displaced pair remains as stale immutable history. No replacement canary
-or queue exists. The High run may remain the complete High-validation evidence,
+96.30%–100% Wilson 95% precision interval. The displaced pair remains as stale
+immutable history. The High run remains the complete High-validation evidence,
 but the truncated threshold run cannot authorize an optional queue. General
 blocker `pilot-blocking-1.7` now produces a complete 893,979-pair universe with
 zero skipped blocks on 256,092 governed records and recovers all 225 eligible
@@ -399,9 +398,13 @@ known-Same pairs. Fresh threshold run `dh1ml9skc7` is finalized with 56 Same
 and 444 Different decisions, 100 completed randomized double reviews, 46
 additional positive confirmations, and six adjudications. Its validated
 human-review cutoff is `0.865469813`; automatic probabilistic High remains
-disabled. It requires explicit management approval before one replacement
-canary and optional queue are generated. Materialization and both automatic
-controls remain disabled.
+disabled. Management approved both complete runs and policy `pilot-1.7` is
+Pilot. Replacement Canary `snakh96bf9` is Ready with 75,971 High
+recommendations: 68,262 Proposed and 7,709 Exception. The exceptions map to
+2,086 unreviewed components, and 100 Proposed recommendations are selected for
+randomized QC. It created no activation batch or identity links. The optional
+human-only Splink queue has not been generated. Materialization and both
+automatic controls remain disabled.
 
 ## Operations
 
