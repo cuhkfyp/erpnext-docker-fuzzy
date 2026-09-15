@@ -1102,8 +1102,8 @@ generations without rewriting historical outcomes.
 The live implementation remains at step 7. Complete High-validation run
 `i04u936qii` is finalized and awaiting its management decision. Truncated
 threshold run `tuvlt5me82` remains immutable evidence but cannot authorize the
-optional queue. Complete replacement threshold run `dh1ml9skc7` is now in
-human review. Steps 8 and 9 remain deliberately gated, not incomplete
+optional queue. Complete replacement threshold run `dh1ml9skc7` is finalized
+and awaiting its management decision. Steps 8 and 9 remain deliberately gated, not incomplete
 automation work. Current evidence and exact verification results are recorded in
 `IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`.
 
@@ -1156,10 +1156,16 @@ governed records produced 893,979 candidates, no truncation, no skipped blocks,
 and recovered all 225 eligible non-stale known-Same pairs. The policy ceiling
 remains 1,000,000; it was not raised to hide incompleteness.
 
-The fresh threshold evaluation is `dh1ml9skc7`, now `Reviewing`, with 500
-unreviewed non-stale pairs, 100 randomized double reviews, and local Splink
-scores for every sampled pair. Human completion and adjudication of that run,
-followed by finalization and explicit management approval, are required next.
+The fresh threshold evaluation `dh1ml9skc7` is finalized with 500 non-stale
+decisions: 56 Same and 444 Different. Its 100 randomized double reviews and 46
+additional positive confirmations are complete across three reviewers; six
+disagreements were adjudicated. Randomized agreement is 97% and Cohen's kappa
+is `0.852652259`. Splink has enough positive labels in both partitions and its
+validated human-review cutoff is `0.865469813`; held-out precision/recall/F1 at
+that cutoff are 45%/56.25%/50%. No automatic probabilistic High cutoff was
+accepted, as required by the human-only boundary.
+
+Explicit management approval of this threshold run is required next.
 Only after that gate and management approval of the already-complete High run
 `i04u936qii` may one fresh canary be generated. The canary then creates Tiered
 exception components and may seed the optional, always-human Splink Review

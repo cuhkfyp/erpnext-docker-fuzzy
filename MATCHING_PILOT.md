@@ -395,9 +395,11 @@ or queue exists. The High run may remain the complete High-validation evidence,
 but the truncated threshold run cannot authorize an optional queue. General
 blocker `pilot-blocking-1.7` now produces a complete 893,979-pair universe with
 zero skipped blocks on 256,092 governed records and recovers all 225 eligible
-known-Same pairs. Fresh threshold run `dh1ml9skc7` is now `Reviewing` with 500
-unreviewed non-stale pairs and 100 randomized double reviews; it must complete human review,
-adjudication, finalization, and management approval before one replacement
+known-Same pairs. Fresh threshold run `dh1ml9skc7` is finalized with 56 Same
+and 444 Different decisions, 100 completed randomized double reviews, 46
+additional positive confirmations, and six adjudications. Its validated
+human-review cutoff is `0.865469813`; automatic probabilistic High remains
+disabled. It requires explicit management approval before one replacement
 canary and optional queue are generated. Materialization and both automatic
 controls remain disabled.
 
