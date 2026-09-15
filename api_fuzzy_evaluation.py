@@ -19,7 +19,12 @@ from typing import Any
 import frappe
 
 from db_connector.fuzzy_matching import normalization as norm
-from db_connector.fuzzy_matching.blocking import BLOCKING_VERSION, generate_candidate_pairs
+from db_connector.fuzzy_matching.blocking import (
+    BLOCKING_VERSION,
+    HIGH_BLOCKING_VERSION,
+    generate_candidate_pairs,
+    generate_deterministic_high_candidate_pairs,
+)
 from db_connector.fuzzy_matching.clusters import inconsistent_pairs
 from db_connector.fuzzy_matching.metrics import (
     binary_metrics,
@@ -1050,7 +1055,13 @@ def run_evaluation(run_name: str) -> None:
         run.db_set("profile_json", _json(profile_attributes(raw_rows, policy)), update_modified=False)
 
         run.db_set("status", "Generating Candidates")
-        blocked = generate_candidate_pairs(records, policy)
+        run_purpose = run.run_purpose or THRESHOLD_EVALUATION
+        if run_purpose == HIGH_TIER_VALIDATION:
+            blocked = generate_deterministic_high_candidate_pairs(records, policy)
+            blocking_version = HIGH_BLOCKING_VERSION
+        else:
+            blocked = generate_candidate_pairs(records, policy)
+            blocking_version = BLOCKING_VERSION
         run.db_set("candidate_count", len(blocked.pairs), update_modified=False)
         run.db_set("candidate_truncated", int(blocked.truncated), update_modified=False)
         run.db_set("skipped_blocks_json", _json(blocked.skipped_blocks), update_modified=False)
@@ -1278,7 +1289,7 @@ def run_evaluation(run_name: str) -> None:
                         source: hashlib.sha256(formula.encode()).hexdigest()
                         for source, formula in sorted(formulas.items())
                     },
-                    "blocking": BLOCKING_VERSION,
+                    "blocking": blocking_version,
                     "tiered": policy.version,
                     "splink": dependency_versions(),
                     "splink_adapter": SPLINK_ADAPTER_VERSION,
@@ -1680,6 +1691,296 @@ def install_review_reason_repair(run_name: str) -> dict[str, int | str]:
         "assigned_pairs": len(sampled_keys),
         "restored_pairs": restored,
     }
+
+
+def install_complete_high_sample_repair(run_name: str) -> dict[str, Any]:
+    """Replace only the displaced member of a truncated High validation sample.
+
+    This bench-only, one-time lifecycle repair preserves every human label and
+    final decision as immutable audit history. It regenerates the frozen run's
+    deterministic bottom-k sample from the logically complete High candidate
+    universe, marks the one superseded pair stale, inserts the one newly
+    selected pair, and reopens the run for its two required independent reviews.
+    """
+    run = frappe.get_doc("CCD Match Evaluation Run", run_name)
+    if (run.run_purpose or THRESHOLD_EVALUATION) != HIGH_TIER_VALIDATION:
+        frappe.throw("Complete High sample repair requires a High Tier Validation run")
+    if run.status != "Awaiting Management Approval":
+        frappe.throw("Complete High sample repair requires a finalized, unapproved run")
+    if run.approval_status != "Pending Management Review":
+        frappe.throw("An approved or rejected evaluation cannot be repaired in place")
+    if not run.candidate_truncated:
+        frappe.throw("This repair applies only to a candidate-truncated High run")
+
+    try:
+        policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
+        sources = policy.sources()
+        placeholders = ", ".join(["%s"] * len(sources))
+        raw_rows = frappe.db.sql(
+            f"""SELECT * FROM `tabCCD Master`
+                WHERE modified <= %s AND ccd_reg_source IN ({placeholders})""",
+            (run.snapshot_at, *sources),
+            as_dict=True,
+        )
+        records = [_canonical_record(dict(row), policy) for row in raw_rows]
+        raw_by_id = {str(row.name): dict(row) for row in raw_rows}
+        record_by_id = {
+            row["record_id"]: row for row in records if row.get("record_id")
+        }
+        blocked = generate_deterministic_high_candidate_pairs(records, policy)
+        if blocked.truncated or blocked.skipped_blocks:
+            frappe.throw(
+                "Complete High sample repair found truncation or oversized blocks"
+            )
+
+        historical_pair_keys = _historical_evaluation_pair_keys(run.name)
+        eligible_source_pair_counts, historical_candidate_exclusions = (
+            _eligible_source_pair_counts(list(blocked.pairs), historical_pair_keys)
+        )
+
+        def eligible_results() -> Iterable[EvaluationResult]:
+            for pair in blocked.pairs:
+                if _ordered_pair_key(pair.left_id, pair.right_id) in historical_pair_keys:
+                    continue
+                yield compare_all_models(
+                    pair,
+                    record_by_id[pair.left_id],
+                    record_by_id[pair.right_id],
+                    policy,
+                )
+
+        sampled, population = _select_high_tier_validation_results(
+            eligible_results(),
+            int(run.sample_size),
+            seed=run.name,
+        )
+        if len(sampled) != int(run.sample_size):
+            frappe.throw("The complete High universe cannot satisfy the frozen sample size")
+        sampled_by_key = {
+            _ordered_pair_key(result.pair.left_id, result.pair.right_id): result
+            for result in sampled
+        }
+
+        existing = frappe.get_all(
+            "CCD Match Evaluation Pair",
+            filters={"evaluation_run": run.name, "stale": 0},
+            fields=[
+                "name",
+                "left_record",
+                "right_record",
+                "left_modified_at",
+                "right_modified_at",
+                "final_label",
+                "review_status",
+            ],
+            limit_page_length=10_000,
+        )
+        existing_by_key = {
+            _ordered_pair_key(pair.left_record, pair.right_record): pair
+            for pair in existing
+        }
+        if len(existing_by_key) != int(run.sample_size):
+            frappe.throw("The active historical High sample is not the frozen sample size")
+        if any(
+            pair.final_label not in {"Same", "Different"}
+            or pair.review_status not in {"Agreed", "Adjudicated"}
+            for pair in existing
+        ):
+            frappe.throw("Every existing High sample pair must be finalized before repair")
+        if any(_pair_is_stale(pair) for pair in existing):
+            frappe.throw("An existing High sample record changed after the frozen snapshot")
+
+        existing_keys = set(existing_by_key)
+        sampled_keys = set(sampled_by_key)
+        preserved_keys = existing_keys & sampled_keys
+        superseded_keys = existing_keys - sampled_keys
+        added_keys = sampled_keys - existing_keys
+        if len(preserved_keys) != int(run.sample_size) - 1 or len(superseded_keys) != 1 or len(added_keys) != 1:
+            frappe.throw(
+                "The complete High sample differs from the diagnosed one-pair repair"
+            )
+
+        revision_by_source = {
+            source: policy.profile(source).registration_revision for source in sources
+        }
+        revision_names = [
+            revision for revision in revision_by_source.values() if revision
+        ]
+        formula_by_revision = {
+            str(item.name): str(item.fuzzymachingscript or "")
+            for item in frappe.get_all(
+                "CCD Registration",
+                filters={"name": ["in", revision_names]},
+                fields=["name", "fuzzymachingscript"],
+                limit_page_length=max(len(revision_names), 1),
+            )
+        }
+        formulas = {
+            source: formula_by_revision.get(revision, "")
+            for source, revision in revision_by_source.items()
+        }
+
+        added_key = next(iter(added_keys))
+        added_result = sampled_by_key[added_key]
+        required_ids = set(added_key)
+        probabilities, probability_warning, splink_training_count = _probability_map(
+            records,
+            policy,
+            required_ids,
+            {added_key},
+        )
+        probability = probabilities.get(added_key)
+        added_result = _formula_baseline(
+            compare_all_models(
+                added_result.pair,
+                record_by_id[added_result.pair.left_id],
+                record_by_id[added_result.pair.right_id],
+                policy,
+                probability=probability,
+            ),
+            raw_by_id[added_result.pair.left_id],
+            raw_by_id[added_result.pair.right_id],
+            formulas.get(record_by_id[added_result.pair.left_id]["source"], ""),
+            formulas.get(record_by_id[added_result.pair.right_id]["source"], ""),
+        )
+        if added_result.tiered_gated.tier != MatchTier.HIGH:
+            frappe.throw("The replacement sample pair is no longer deterministic High")
+
+        cluster_conflicts = inconsistent_pairs(sampled)
+        for key in superseded_keys:
+            frappe.db.set_value(
+                "CCD Match Evaluation Pair",
+                existing_by_key[key].name,
+                {
+                    "stale": 1,
+                    "needs_double_review": 0,
+                    "double_review_reason": "superseded_complete_high_sample",
+                },
+                update_modified=False,
+            )
+        for key in preserved_keys:
+            result = sampled_by_key[key]
+            frappe.db.set_value(
+                "CCD Match Evaluation Pair",
+                existing_by_key[key].name,
+                {
+                    "blocking_routes": ", ".join(result.pair.blocking_routes),
+                    "cluster_conflict": int(key in cluster_conflicts),
+                },
+                update_modified=False,
+            )
+
+        pair = added_result.pair
+        left = record_by_id[pair.left_id]
+        right = record_by_id[pair.right_id]
+        frappe.get_doc(
+            {
+                "doctype": "CCD Match Evaluation Pair",
+                "evaluation_run": run.name,
+                "left_record": pair.left_id,
+                "right_record": pair.right_id,
+                "left_source": left["source"],
+                "right_source": right["source"],
+                "left_modified_at": left["source_modified"],
+                "right_modified_at": right["source_modified"],
+                "source_pair": pair.source_pair,
+                "blocking_routes": ", ".join(pair.blocking_routes),
+                "baseline_score": added_result.baseline.score,
+                "baseline_tier": added_result.baseline.tier.value,
+                "tiered_score": added_result.tiered_gated.score,
+                "tiered_tier": added_result.tiered_gated.tier.value,
+                "recoverable_tier": added_result.tiered_recoverable.tier.value,
+                "probabilistic_score": probability if probability is not None else 0,
+                "probabilistic_available": int(probability is not None),
+                "hybrid_tier": (
+                    "pending_calibration"
+                    if added_result.probabilistic
+                    else added_result.tiered_gated.tier.value
+                ),
+                "reason_codes_json": _json(
+                    {
+                        "baseline": added_result.baseline.reasons,
+                        "tiered_gated": added_result.tiered_gated.reasons,
+                        "tiered_recoverable": added_result.tiered_recoverable.reasons,
+                        "hybrid": (
+                            added_result.hybrid.reasons if added_result.hybrid else ()
+                        ),
+                        "selection": {"origin": "unseen_tiered_gated_high"},
+                    }
+                ),
+                "needs_double_review": 1,
+                "double_review_reason": "sampled",
+                "review_status": "Unreviewed",
+                "cluster_conflict": int(added_key in cluster_conflicts),
+            }
+        ).insert(ignore_permissions=True)
+
+        previous_metrics = str(run.metrics_json or "")
+        versions = json.loads(run.model_versions_json or "{}")
+        versions.update(
+            {
+                "blocking": HIGH_BLOCKING_VERSION,
+                "high_tier_validation_population": population,
+                "historical_evaluation_pair_keys": len(historical_pair_keys),
+                "historical_candidate_pairs_excluded": historical_candidate_exclusions,
+                "eligible_candidate_pairs": sum(eligible_source_pair_counts.values()),
+                "splink": dependency_versions(),
+                "splink_adapter": SPLINK_ADAPTER_VERSION,
+                "splink_random_match_prior": RANDOM_MATCH_PRIOR,
+                "splink_training_record_count": splink_training_count,
+                "splink_training_record_limit": MAX_SPLINK_TRAINING_RECORDS,
+                "splink_direct_scoring_pair_limit": MAX_DIRECT_SCORING_PAIRS,
+                "splink_status": "local" if not probability_warning else "unavailable",
+                "splink_warning": probability_warning,
+                "splink_scored_sample_pairs": sum(
+                    int(pair.probabilistic_available)
+                    for pair in frappe.get_all(
+                        "CCD Match Evaluation Pair",
+                        filters={"evaluation_run": run.name, "stale": 0},
+                        fields=["probabilistic_available"],
+                        limit_page_length=10_000,
+                    )
+                ),
+                "complete_high_sample_repair": {
+                    "repaired_at": frappe.utils.now_datetime(),
+                    "previous_blocking": versions.get("blocking"),
+                    "previous_candidate_count": int(run.candidate_count or 0),
+                    "previous_candidate_truncated": bool(run.candidate_truncated),
+                    "previous_status": run.status,
+                    "previous_approval_status": run.approval_status,
+                    "previous_metrics_sha256": hashlib.sha256(
+                        previous_metrics.encode()
+                    ).hexdigest(),
+                    "preserved_human_review_pairs": len(preserved_keys),
+                    "superseded_historical_pairs": len(superseded_keys),
+                    "new_pairs_requiring_review": len(added_keys),
+                    "sampling_method": population["sampling_method"],
+                },
+            }
+        )
+        run.db_set("record_count", len(records), update_modified=False)
+        run.db_set("candidate_count", len(blocked.pairs), update_modified=False)
+        run.db_set("candidate_truncated", 0, update_modified=False)
+        run.db_set("skipped_blocks_json", "[]", update_modified=False)
+        run.db_set("sampled_pair_count", len(sampled), update_modified=False)
+        run.db_set("model_versions_json", _json(versions), update_modified=False)
+        run.db_set("metrics_json", "", update_modified=False)
+        run.db_set("error_summary", "", update_modified=False)
+        run.db_set("approval_status", "Pending Management Review", update_modified=False)
+        run.db_set("status", "Reviewing", update_modified=False)
+        frappe.db.commit()
+        return {
+            "run": run.name,
+            "status": "Reviewing",
+            "candidate_count": len(blocked.pairs),
+            "eligible_high_candidates": population["eligible_high_candidates"],
+            "preserved_pairs": len(preserved_keys),
+            "superseded_pairs": len(superseded_keys),
+            "new_pairs_requiring_two_reviews": len(added_keys),
+        }
+    except Exception:
+        frappe.db.rollback()
+        raise
 
 
 def _metrics_dict(value: Any) -> dict[str, Any] | None:

@@ -25,7 +25,10 @@ from db_connector.api_fuzzy_evaluation import (
     _policy_snapshot,
 )
 from db_connector.fuzzy_matching import normalization as norm
-from db_connector.fuzzy_matching.blocking import BLOCKING_VERSION, generate_candidate_pairs
+from db_connector.fuzzy_matching.blocking import (
+    HIGH_BLOCKING_VERSION,
+    generate_deterministic_high_candidate_pairs,
+)
 from db_connector.fuzzy_matching.canary import (
     CanaryEdge,
     analyze_canary_edges,
@@ -113,7 +116,14 @@ def _approved_run(
             "status": "Completed",
             "approval_status": "Approved",
         },
-        fields=["name", "policy_snapshot_json", "metrics_json", "modified"],
+        fields=[
+            "name",
+            "policy_snapshot_json",
+            "metrics_json",
+            "candidate_truncated",
+            "skipped_blocks_json",
+            "modified",
+        ],
         order_by="modified desc",
         limit=20,
     )
@@ -133,6 +143,11 @@ def _canary_prerequisites(policy_name: str) -> dict[str, Any]:
     snapshot_sha256 = _snapshot_hash(snapshot)
     high_run = _approved_run(policy_name, HIGH_TIER_VALIDATION, snapshot_sha256)
     threshold_run = _approved_run(policy_name, THRESHOLD_EVALUATION, snapshot_sha256)
+
+    if high_run.candidate_truncated or json.loads(high_run.skipped_blocks_json or "[]"):
+        frappe.throw(
+            "The approved High validation did not use complete High candidate generation"
+        )
 
     high_metrics = high_run.metrics.get("high_tier_validation") or {}
     lower = list(high_metrics.get("precision_wilson_95") or [0])[0]
@@ -486,7 +501,7 @@ def run_canary(run_name: str) -> None:
         run.db_set("record_count", len(records), update_modified=False)
 
         _set_run_status(run, "Generating Candidates")
-        blocked = generate_candidate_pairs(records, policy)
+        blocked = generate_deterministic_high_candidate_pairs(records, policy)
         run.db_set("candidate_count", len(blocked.pairs), update_modified=False)
         run.db_set("candidate_truncated", int(blocked.truncated), update_modified=False)
         run.db_set("skipped_blocks_json", _json(blocked.skipped_blocks), update_modified=False)
@@ -618,7 +633,7 @@ def run_canary(run_name: str) -> None:
         review_workflow = _initialize_review_workflow(run.name)
         summary = {
             "policy_snapshot_sha256": run.policy_snapshot_sha256,
-            "blocking_version": BLOCKING_VERSION,
+            "blocking_version": HIGH_BLOCKING_VERSION,
             "approved_high_rule": APPROVED_HIGH_REASON,
             "approved_high_validation_run": run.high_validation_run,
             "approved_threshold_evaluation_run": run.threshold_evaluation_run,

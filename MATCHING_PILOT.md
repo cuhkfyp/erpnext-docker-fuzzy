@@ -152,6 +152,16 @@ eight-digit Hong Kong subscriber numbers with an allocated initial digit;
 obvious full ascending or descending sequences are treated as missing
 placeholders rather than identity evidence.
 
+High validation and the Tiered recommendation canary use a separate, logically
+complete deterministic-High candidate path (`pilot-high-blocking-1.7`). Every
+possible High must be discovered by at least one of five exact routes: trusted
+global identifier, phone, email, birthday plus exact Chinese full name, or
+birthday plus exact English full name. Scoring still applies trusted-identifier
+conflict gates after discovery. The broader routes above remain necessary for
+threshold evaluation and the optional Review queue; truncation of that general
+universe blocks the queue but does not make the complete High-only path
+truncated.
+
 ## Sampling and labels
 
 The initial recommendation is 500 stratified pairs, including 100 pairs assigned
@@ -294,10 +304,10 @@ five dedicated DocTypes:
 - `CCD Match Component Review Submission` preserves independent component
   decisions and adjudication history.
 
-The full governed candidate population is regenerated for each preview. Any
-candidate truncation or skipped block fails the run. The canary then evaluates
-only deterministic Tiered High edges and applies these gates before a
-recommendation can be proposed:
+The complete deterministic-High-capable population is regenerated for each
+preview. Any truncation or skipped block in that universe fails the run. The
+canary then evaluates only deterministic Tiered High edges and applies these
+gates before a recommendation can be proposed:
 
 1. the evidence reason must be the validated exact-full-name plus independent
    phone, birthday, or email rule;
@@ -340,11 +350,13 @@ The approved evaluation's endpoint records must be unchanged, and its bounded
 5,000-record training cohort is reproduced. The same trained model scores the
 exact eligible pair set in bounded batches; an opaque pair sequence prevents a
 Cartesian join. Every eligible pair must produce exactly one score before
-cutoff filtering. The regenerated record and candidate counts must also equal
-the frozen canary, with no record that existed at the snapshot subsequently
-changed. An unreproducible snapshot, truncated/skipped block, stale training
-endpoint, adapter version mismatch, or missing/duplicate score fails closed and
-publishes no partial candidate list.
+cutoff filtering. The regenerated record population must equal the frozen
+canary population; the general Review candidate count is deliberately distinct
+from the canary's High-capable candidate count. No record that existed at the
+snapshot may have subsequently changed. An unreproducible snapshot,
+truncated/skipped general block, a truncated/skipped approved threshold
+evaluation, stale training endpoint, adapter version mismatch, or
+missing/duplicate score fails closed and publishes no partial candidate list.
 
 Only scores at or above the approved maximum-calibration-F1 cutoff are stored
 and ranked. This operating point prioritizes optional human work; it is not an
@@ -369,11 +381,16 @@ during generation. The 11,177 rows are an optional ranked pool, not a mandatory
 backlog. It was marked stale during the 2026-09 identity-integrity restoration
 and must not be treated as the current generation.
 
-The current `pilot-1.7` gate consists of Threshold Evaluation `tuvlt5me82`
-(500 pairs, 100 double reviews) and High Tier Validation `i04u936qii` (100
-pairs, all double-reviewed). Both are `Reviewing` with zero submitted labels.
-No replacement canary or queue may be generated until the reviews and approval
-gates complete; materialization and both automatic controls remain disabled.
+The current `pilot-1.7` gate consists of finalized Threshold Evaluation
+`tuvlt5me82` (500 pairs, including 100 double reviews) and High Tier Validation
+`i04u936qii`. The High run's complete 78,104-pair universe displaced one member
+of its already-reviewed sample: 99 finalized decisions remain active, one
+finalized pair remains as stale audit history, and replacement pair
+`furm8v3nhg` requires two independent reviews. No replacement canary or queue
+exists. After the replacement pair, High finalization, and both management
+decisions, an approved policy can generate the High canary. The optional queue
+remains blocked because the current threshold run's general candidate universe
+was truncated. Materialization and both automatic controls remain disabled.
 
 ## Operations
 

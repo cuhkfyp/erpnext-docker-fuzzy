@@ -97,16 +97,20 @@ automatic High threshold. The equivalent 20,000-record run exceeded the
 worker's memory limit, so it produced no comparable accuracy result and is not
 a candidate model. That experiment did not approve a new model or threshold.
 
-The current 2026-09-14 checkpoint is deliberately earlier in the release
-gate. Orphaned identity history was repaired, the old canary and queue were
+The current 2026-09-15 checkpoint remains before policy promotion. Orphaned
+identity history was repaired, the old canary and queue were
 marked stale, and matching was regenerated under policy `pilot-1.7` with
-stable policy/source revision provenance. Threshold Evaluation `tuvlt5me82`
-(500 pairs, 100 double reviews) and High Tier Validation `i04u936qii` (100
-pairs, all double-reviewed) are both `Reviewing` with zero submitted labels.
+stable policy/source revision provenance. Threshold Evaluation `tuvlt5me82` is
+finalized and awaiting management approval. High Tier Validation `i04u936qii`
+was atomically repaired against the complete 78,104-pair
+deterministic-High-capable universe: 99 finalized decisions were preserved,
+one displaced decision remains as stale immutable history, and replacement
+pair `furm8v3nhg` requires two independent reviews before High finalization.
 The pinned worker runtime is Splink 4.0.16 with DuckDB 1.5.5, including bounded
-requested-pair scoring. No replacement canary or Review Queue may be generated
-until both evaluations complete their independent human-review and approval
-gates. Materialization, Automatic QC, and Automatic Tiered remain disabled.
+requested-pair scoring. An approved complete High run can authorize a new
+High-only canary; the optional Review Queue remains blocked by truncation of the
+current threshold run's broader general candidate universe. Materialization,
+Automatic QC, and Automatic Tiered remain disabled.
 
 ## Install the pilot
 
@@ -238,7 +242,8 @@ bench --site <site> execute db_connector.api_fuzzy_canary.install_canary_run \
   --kwargs '{"policy_name":"pilot-1.7"}'
 ```
 
-The preview fails closed if candidate generation is truncated or skips any
+The preview uses the logically complete deterministic-High candidate routes
+and fails closed if that High-capable generation is truncated or skips any
 oversized block. Only the validated exact-full-name-plus-independent-evidence
 High rule may become `Proposed`; HKID-only High, unvalidated source pairs,
 stale records, one-to-many components, and transitive contradictions become
@@ -310,8 +315,9 @@ evaluation's `pilot-splink-1.1` model/cutoff. Eligible pairs are complete
 governed candidates after excluding every Tiered High recommendation and every
 pair already used by human evaluation or an earlier queue. Each eligible pair
 must receive exactly one score; a changed/unreproducible frozen canary,
-truncated/skipped candidate generation, stale calibration records, or
-incomplete scoring fails the run without publishing a partial queue.
+truncated/skipped general candidate generation, a truncated/skipped approved
+threshold evaluation, stale calibration records, or incomplete scoring fails
+the run without publishing a partial queue.
 
 Only pairs at or above the selected maximum-calibration-F1 cutoff are stored,
 ordered from highest probability downward. A lower score means lower priority,

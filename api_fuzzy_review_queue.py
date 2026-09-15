@@ -117,6 +117,10 @@ def _queue_prerequisites(canary_name: str) -> dict[str, Any]:
     )
     if evaluation.status != "Completed" or evaluation.approval_status != "Approved":
         frappe.throw("The Splink threshold evaluation is no longer approved")
+    if evaluation.candidate_truncated or json.loads(evaluation.skipped_blocks_json or "[]"):
+        frappe.throw(
+            "The approved threshold evaluation did not use complete general candidate generation"
+        )
     threshold = _review_threshold_from_run(evaluation)
     if abs(threshold - float(canary.splink_review_threshold or 0)) > 1e-12:
         frappe.throw("The canary and approved evaluation use different Review cutoffs")
@@ -387,11 +391,6 @@ def run_review_queue(run_name: str) -> None:
             frappe.throw(
                 "Splink Review queue requires complete candidate generation"
             )
-        if len(blocked.pairs) != int(canary.candidate_count or 0):
-            frappe.throw(
-                "The regenerated candidates differ from the frozen canary"
-            )
-
         tiered_high = {
             _ordered_pair(row.left_record, row.right_record)
             for row in frappe.get_all(

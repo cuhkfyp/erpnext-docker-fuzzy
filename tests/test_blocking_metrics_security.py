@@ -1,9 +1,14 @@
 import unittest
 
-from fuzzy_matching.blocking import generate_candidate_pairs
+from fuzzy_matching.blocking import (
+    generate_candidate_pairs,
+    generate_deterministic_high_candidate_pairs,
+)
 from fuzzy_matching.metrics import cohens_kappa, select_thresholds, wilson_interval
+from fuzzy_matching.models import compare_all_models
 from fuzzy_matching.policy import MatchingPolicy, SourceProfile
 from fuzzy_matching.security import mask_identifier, redact, safe_html
+from fuzzy_matching.types import CandidatePair, MatchTier
 
 
 class BlockingTests(unittest.TestCase):
@@ -121,6 +126,137 @@ class BlockingTests(unittest.TestCase):
         result = generate_candidate_pairs(records, policy)
         self.assertTrue(result.skipped_blocks)
         self.assertNotIn("61234567", " ".join(result.skipped_blocks))
+
+    def test_high_candidate_routes_are_complete_for_every_deterministic_high(self):
+        records = [
+            {"record_id": "G1", "source": "A", "hksr_num": "GLOBAL-001"},
+            {"record_id": "G2", "source": "B", "hksr_num": "GLOBAL-001"},
+            {
+                "record_id": "P1",
+                "source": "A",
+                "eng_surname": "Phone",
+                "eng_firstname": "Person",
+                "phone_num": "61234567",
+            },
+            {
+                "record_id": "P2",
+                "source": "B",
+                "eng_surname": "Phone",
+                "eng_firstname": "Person",
+                "phone_num": "+852 6123 4567",
+            },
+            {
+                "record_id": "E1",
+                "source": "A",
+                "chi_surname": "陳",
+                "chi_firstname": "電郵",
+                "email": "person@example.test",
+            },
+            {
+                "record_id": "E2",
+                "source": "C",
+                "chi_surname": "陳",
+                "chi_firstname": "電郵",
+                "email": "PERSON@example.test",
+            },
+            {
+                "record_id": "C1",
+                "source": "A",
+                "chi_surname": "黃",
+                "chi_firstname": "大明",
+                "birthday": "1980-01-02",
+            },
+            {
+                "record_id": "C2",
+                "source": "B",
+                "chi_surname": "黃",
+                "chi_firstname": "大明",
+                "birthday": "02/01/1980",
+            },
+            {
+                "record_id": "N1",
+                "source": "A",
+                "eng_surname": "O' Neil",
+                "eng_firstname": "John Paul",
+                "birthday": "1990/03/04",
+            },
+            {
+                "record_id": "N2",
+                "source": "C",
+                "eng_surname": "ONEIL",
+                "eng_firstname": "JohnPaul",
+                "birthday": "1990-03-04",
+            },
+            {
+                "record_id": "D1",
+                "source": "B",
+                "eng_surname": "Unrelated",
+                "eng_firstname": "Record",
+                "birthday": "2001-01-01",
+            },
+        ]
+        profiles = {
+            source: SourceProfile(
+                source,
+                {"hksr_num": "hksr_num"},
+                {"hksr_num": "global"},
+            )
+            for source in ("A", "B", "C")
+        }
+        policy = MatchingPolicy(
+            source_profiles=profiles,
+            trusted_global_identifiers=frozenset({"hksr_num"}),
+        )
+        generated = generate_deterministic_high_candidate_pairs(records, policy)
+        generated_keys = {
+            (pair.left_id, pair.right_id) for pair in generated.pairs
+        }
+        by_id = {record["record_id"]: record for record in records}
+        high_keys = set()
+        for left_index, left in enumerate(records):
+            for right in records[left_index + 1 :]:
+                if left["source"] == right["source"]:
+                    continue
+                left_id, right_id = sorted((left["record_id"], right["record_id"]))
+                pair = CandidatePair(
+                    left_id,
+                    right_id,
+                    "::".join(sorted((left["source"], right["source"]))),
+                    (),
+                )
+                result = compare_all_models(
+                    pair,
+                    by_id[left_id],
+                    by_id[right_id],
+                    policy,
+                )
+                if result.tiered_gated.tier == MatchTier.HIGH:
+                    high_keys.add((left_id, right_id))
+        self.assertTrue(high_keys)
+        self.assertTrue(high_keys.issubset(generated_keys))
+        self.assertFalse(generated.truncated)
+        self.assertFalse(generated.skipped_blocks)
+
+    def test_high_candidate_generation_reports_cap_and_oversized_blocks(self):
+        records = [
+            {"record_id": "A", "source": "A", "phone_num": "61234567"},
+            {"record_id": "B", "source": "B", "phone_num": "61234567"},
+            {"record_id": "C", "source": "C", "phone_num": "61234567"},
+        ]
+        capped = generate_deterministic_high_candidate_pairs(
+            records,
+            MatchingPolicy(max_candidate_pairs=1),
+        )
+        self.assertEqual(len(capped.pairs), 1)
+        self.assertTrue(capped.truncated)
+
+        skipped = generate_deterministic_high_candidate_pairs(
+            records,
+            MatchingPolicy(max_block_size=2),
+        )
+        self.assertFalse(skipped.pairs)
+        self.assertTrue(skipped.skipped_blocks)
+        self.assertNotIn("61234567", " ".join(skipped.skipped_blocks))
 
 
 class MetricsTests(unittest.TestCase):

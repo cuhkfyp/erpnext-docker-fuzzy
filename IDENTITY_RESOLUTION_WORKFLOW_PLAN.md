@@ -10,7 +10,7 @@
 | Management decision | Limited follow-up workflow approved on 2026-08-19 |
 | Approved workflow scope | Tiered Evidence for reversible safety-gated recommendations; Splink above the selected cutoff for optional human-review ordering |
 | Explicitly not authorized | Destructive record merging, automatic `Is Matched?`, legacy Matching Score writes, or probabilistic automatic High |
-| Integrity-restoration update | Implemented 2026-09-13/14 through the mandatory `pilot-1.7` human-review gate; materialization and automatic controls remain disabled |
+| Integrity-restoration update | Implemented through the 2026-09-15 complete-High sample repair and mandatory `pilot-1.7` human/management gates; materialization and automatic controls remain disabled |
 
 This plan consolidates the decisions made after the POC and remains the design
 contract for the implementation. The schema, services, controls, and user
@@ -1099,8 +1099,36 @@ generations without rewriting historical outcomes.
 9. Do not create Unified-person materialization until the clean replacement
    Canary is reviewed and accepted and another fresh full backup is verified.
 
-The live implementation reached step 7 with threshold run `tuvlt5me82` and
-High-validation run `i04u936qii` in Reviewing state. Steps 8 and 9 remain
+The live implementation remains at step 7. Threshold run `tuvlt5me82` is
+finalized and awaiting management approval. High-validation run `i04u936qii`
+is reopened only for two independent reviews of one replacement sample pair,
+followed by finalization and management approval. Steps 8 and 9 remain
 deliberately gated, not incomplete automation work. Current evidence and exact
 verification results are recorded in
 `IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`.
+
+### 27.1 Complete deterministic-High universe repair — 2026-09-15
+
+Both original evaluation generations correctly reported
+`candidate_truncated = 1` at the 1,000,000-pair ceiling. Management approval was
+therefore held. A read-only census established a logically complete, bounded
+candidate path for the current deterministic-High rule: trusted global ID,
+exact phone, exact email, birthday plus exact Chinese full name, and birthday
+plus exact English full name. The general Review universe remains separate.
+
+After fresh verified full backup `20260915_091050-frontend-*`, the dedicated
+`pilot-high-blocking-1.7` path was deployed for future High validations and
+Tiered canaries. Canary prerequisites now reject an approved High run with
+truncation or skipped blocks. Optional Review-queue prerequisites separately
+reject a truncated/skipped threshold run, so the current threshold evidence
+cannot authorize a queue even if management accepts it for the limited canary
+gate.
+
+The atomic repair of `i04u936qii` regenerated its frozen deterministic bottom-k
+sample from 78,104 complete High-capable candidates and 75,867 eligible High
+predictions. It preserved 99 completed review decisions, retained the one
+displaced pair and both labels as stale audit history, created exactly one new
+double-review pair, cleared the obsolete final metrics, and returned the run to
+Reviewing. Materialization, Automatic QC, and Automatic Tiered remained off;
+the orphan audit remained zero-write with no active issue; no canary or queue
+was created.

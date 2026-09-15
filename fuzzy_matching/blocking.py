@@ -29,6 +29,7 @@ BLOCK_ROUTE_PRIORITY = {
 }
 
 BLOCKING_VERSION = "pilot-blocking-1.6"
+HIGH_BLOCKING_VERSION = "pilot-high-blocking-1.7"
 BROAD_NAME_ROUTES = frozenset({"chi_name_prefix", "eng_name"})
 
 
@@ -192,6 +193,117 @@ def blocking_keys(record: dict[str, Any], policy: MatchingPolicy) -> set[str]:
     if dob and surname_key:
         keys.add(f"dob_surname:{dob}:{surname_key}")
     return keys
+
+
+def deterministic_high_blocking_keys(
+    record: dict[str, Any],
+    policy: MatchingPolicy,
+) -> set[str]:
+    """Return every exact route that can contribute to deterministic High.
+
+    ``tiered_result`` can produce High only from an exact trusted global
+    identifier, or from an exact Chinese/English full name plus an exact
+    birthday, phone, or email. Phone and email blocks already discover the
+    latter two cases. The two birthday/full-name intersections discover the
+    remaining case without enumerating the much larger general Review
+    universe. Candidates are still scored afterward, so conflicting trusted
+    identifiers continue to gate a discovered pair out of High.
+    """
+    keys: set[str] = set()
+    source = record_source(record)
+
+    for attribute in policy.trusted_global_identifiers:
+        if not policy.globally_comparable(source, attribute):
+            continue
+        raw_value = policy.value(record, attribute)
+        if attribute == "hkid" and not norm.valid_hkid(raw_value):
+            continue
+        value = norm.identifier(raw_value)
+        if value:
+            keys.add(f"global_id:{attribute}:{value}")
+
+    phone = norm.phone(policy.value(record, "phone"))
+    if phone:
+        keys.add(f"phone:{phone}")
+    email = norm.email(policy.value(record, "email"))
+    if email:
+        keys.add(f"email:{email}")
+
+    birthday = norm.birthday(policy.value(record, "birthday"))
+    if not birthday:
+        return keys
+
+    chi_surname = norm.chinese_compact(policy.value(record, "chi_surname"))
+    chi_firstname = norm.chinese_compact(policy.value(record, "chi_firstname"))
+    if chi_surname and chi_firstname:
+        keys.add(f"dob_chi_full:{birthday}:{chi_surname}:{chi_firstname}")
+
+    eng_surname = norm.english_compact(policy.value(record, "eng_surname"))
+    eng_firstname = norm.english_compact(policy.value(record, "eng_firstname"))
+    if eng_surname and eng_firstname:
+        keys.add(f"dob_eng_full:{birthday}:{eng_surname}:{eng_firstname}")
+    return keys
+
+
+def generate_deterministic_high_candidate_pairs(
+    records: Iterable[dict[str, Any]],
+    policy: MatchingPolicy,
+) -> BlockingResult:
+    """Generate the complete bounded candidate universe for deterministic High.
+
+    The route set is logically sufficient for the current deterministic High
+    rule (see ``deterministic_high_blocking_keys``). A result is safe to use
+    only when neither ``truncated`` nor ``skipped_blocks`` is set.
+    """
+    rows = list(records)
+    by_id = {record_id(row): row for row in rows if record_id(row)}
+    index: dict[str, list[str]] = defaultdict(list)
+    for row_id, row in by_id.items():
+        for key in deterministic_high_blocking_keys(row, policy):
+            index[key].append(row_id)
+
+    routes_by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
+    skipped: list[str] = []
+    blocks: list[tuple[str, tuple[str, ...]]] = []
+    for key, raw_ids in index.items():
+        ids = tuple(sorted(set(raw_ids)))
+        route = key.split(":", 1)[0]
+        if len(ids) > policy.max_block_size:
+            digest = hashlib.sha256(key.encode()).hexdigest()[:12]
+            skipped.append(f"{route}:{digest} ({len(ids)} records)")
+            continue
+        blocks.append((key, ids))
+
+    blocks.sort(
+        key=lambda item: (
+            BLOCK_ROUTE_PRIORITY.get(item[0].split(":", 1)[0], 2),
+            len(item[1]),
+            hashlib.sha256(item[0].encode()).digest(),
+        )
+    )
+    truncated = False
+    for key, ids in blocks:
+        route = key.split(":", 1)[0]
+        for left_id, right_id in combinations(ids, 2):
+            left_source = record_source(by_id[left_id])
+            right_source = record_source(by_id[right_id])
+            if not left_source or not right_source or left_source == right_source:
+                continue
+            pair_key = (left_id, right_id)
+            if pair_key not in routes_by_pair and len(routes_by_pair) >= policy.max_candidate_pairs:
+                truncated = True
+                break
+            routes_by_pair[pair_key].add(route)
+        if truncated:
+            break
+
+    pairs = []
+    for (left_id, right_id), routes in sorted(routes_by_pair.items()):
+        source_pair = "::".join(
+            sorted((record_source(by_id[left_id]), record_source(by_id[right_id])))
+        )
+        pairs.append(CandidatePair(left_id, right_id, source_pair, tuple(sorted(routes))))
+    return BlockingResult(tuple(pairs), tuple(sorted(skipped)), truncated)
 
 
 def generate_candidate_pairs(

@@ -4,8 +4,8 @@
 
 | Item | Verified state |
 | --- | --- |
-| Date | 2026-09-14 UTC |
-| Status updated | 2026-09-14 UTC |
+| Date | 2026-09-15 UTC |
+| Status updated | 2026-09-15 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
@@ -16,7 +16,7 @@
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
 | 2026-08-31 historical totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
 | 2026-09-13 integrity restoration | Audited orphan retirement run `6v6b99amn6` applied; the post-repair audit reports zero active issues and zero planned writes while retaining marked historical evidence |
-| Current matching gate | `pilot-1.7` provenance valid; threshold run `tuvlt5me82` and High validation `i04u936qii` are in Review with no management approval; no replacement Canary or queue may be created yet |
+| Current matching gate | Threshold run `tuvlt5me82` is finalized and awaiting management approval. High run `i04u936qii` has a complete 78,104-pair High-capable universe and is reopened for two independent reviews of replacement pair `furm8v3nhg`; no replacement Canary or queue exists |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 | QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
 
@@ -109,34 +109,57 @@ provenance audit is valid with no issues. Three one-record sources without a
 submitted Registration remain unchanged and deliberately excluded rather than
 silently governed.
 
-Fresh shadow generation produced:
+Fresh shadow generation and completed human review produced:
 
 | Run | Purpose | Current state | Sample |
 | --- | --- | --- | ---: |
-| `tuvlt5me82` | Threshold Evaluation | Reviewing / Pending Management Review | 500 pairs; 100 double-review assignments |
-| `i04u936qii` | High Tier Validation | Reviewing / Pending Management Review | 100 unseen deterministic-High pairs; all 100 double-reviewed |
+| `tuvlt5me82` | Threshold Evaluation | Awaiting Management Approval / Pending Management Review | 500 finalized pairs: 125 Same and 375 Different; 100 double reviews |
+| `i04u936qii` | High Tier Validation | Reviewing / Pending Management Review | 100 active pairs: 99 preserved finalized Same decisions and replacement `furm8v3nhg` awaiting two reviews; one superseded pair retained as stale history |
 
-The samples have zero labels, zero stale pairs, and no pair overlap. The High
-population contained 74,489 eligible candidates. Candidate generation reached
-the configured 1,000,000-pair safety ceiling and recorded truncation rather
-than exceeding it. An earlier High attempt `u02eo99bma` was killed by host OOM
-before committing a sample and remains immutably recorded as Failed. Evaluation
-scoring was then changed to train once and batch-score only the selected review
-pairs, eliminating the million-row probability frame; the replacement run
-completed successfully with Splink 4.0.16 and DuckDB 1.5.5.
+The first generation reached the configured 1,000,000-pair safety ceiling and
+recorded truncation rather than exceeding it. The completed reviews therefore
+were not approved. A read-only census proved that deterministic High needs only
+five logically sufficient exact routes: trusted global identifier, phone,
+email, birthday plus exact Chinese full name, and birthday plus exact English
+full name. That complete High-capable universe contains 78,104 pairs and yields
+75,867 eligible deterministic-High predictions after historical exclusions,
+1,378 more than the truncated run reported.
 
-The deployed suite passes 89 unit tests plus Python/JavaScript syntax checks and
+Before implementing or applying that repair, a new full ERPNext backup was
+created as `20260915_091050-frontend-*`. Site configuration JSON, database gzip,
+public-files tar gzip, and private-files tar gzip all passed format checks. Their
+SHA-256 values are respectively `c0ff4032f726d8c73f30edc5d6219298b357df51d9b42883c957337bb852be89`,
+`ef77698052cee1c3fd211ea2db5f93d7fe34af21cd48c17e73602b21c6a35146`,
+`8eabb8a770309db429ab308e1bb2867585714f729974498d3c7c3140f913bf5f`, and
+`bfe58f6d39ddb52e34f53623fb51227d8bb53a2ac7cc64a68d6beb9e50a838d0`.
+
+`pilot-high-blocking-1.7` now drives High validation and the Tiered canary.
+The general blocking path remains separate for threshold evaluation and the
+optional Splink Review queue. Its current truncation explicitly blocks queue
+generation. The one-time atomic repair of `i04u936qii` preserved 99 reviewed
+pairs, marked only displaced pair `mc02k3hign` stale while retaining its two
+labels and final Same decision, inserted replacement pair `furm8v3nhg`, cleared
+the now-obsolete metrics, and reopened the run. No Canary was created.
+
+An earlier High attempt `u02eo99bma` was killed by host OOM before committing a
+sample and remains immutably recorded as Failed. Evaluation scoring trains once
+and batch-scores only selected review pairs, eliminating the million-row
+probability frame; the repaired run uses Splink 4.0.16 and DuckDB 1.5.5.
+
+The deployed suite passes 91 unit tests plus Python/JavaScript syntax checks and
 a local synthetic Splink training/inference smoke test. Atomic generation
 replacement is implemented but has not run: it supersedes only unfinished old
 work after a replacement generation reaches Ready, while preserving completed
 human outcomes and applied/corrected history in the same transaction.
 
-The next permitted actions are independent human review, required
-adjudication, finalization, and explicit management approval of both fresh
-runs. Only then may `pilot-1.7` be promoted and a new full-population Canary and
-optional Review queue be generated. Unified-person materialization remains a
-later gate requiring an accepted clean Canary and another fresh verified
-backup.
+The next permitted action is human: two different reviewers must review
+replacement pair `furm8v3nhg`. A manager then finalizes `i04u936qii` and records
+explicit management decisions on both evaluation runs. If both are approved,
+`pilot-1.7` may be promoted and a new complete deterministic-High Canary may be
+generated. The optional Review queue remains unavailable until a future
+threshold run completes the general candidate universe without truncation or
+skipped blocks. Unified-person materialization remains a later gate requiring
+an accepted clean Canary and another fresh verified backup.
 
 ## Implemented controls
 
