@@ -102,6 +102,74 @@ class BlockingTests(unittest.TestCase):
         self.assertIn("chi_pinyin_full", by_pair[("A", "B")])
         self.assertIn("chi_given_sorted", by_pair[("A", "C")])
 
+    def test_dob_surname_nominates_nearest_full_name_per_other_source(self):
+        records = [
+            {
+                "record_id": "A1",
+                "source": "A",
+                "eng_surname": "Example",
+                "eng_firstname": "Alpha",
+                "birthday": "1980-01-02",
+            },
+            {
+                "record_id": "A2",
+                "source": "A",
+                "eng_surname": "Example",
+                "eng_firstname": "Zulu",
+                "birthday": "1980-01-02",
+            },
+            {
+                "record_id": "B1",
+                "source": "B",
+                "eng_surname": "Example",
+                "eng_firstname": "Alphi",
+                "birthday": "1980-01-02",
+            },
+            {
+                "record_id": "B2",
+                "source": "B",
+                "eng_surname": "Example",
+                "eng_firstname": "Zulu",
+                "birthday": "1980-01-02",
+            },
+        ]
+        first = generate_candidate_pairs(records, MatchingPolicy())
+        second = generate_candidate_pairs(list(reversed(records)), MatchingPolicy())
+        self.assertEqual(first.pairs, second.pairs)
+        by_pair = {
+            (item.left_id, item.right_id): item.blocking_routes
+            for item in first.pairs
+        }
+        self.assertIn("dob_surname", by_pair[("A1", "B1")])
+        self.assertIn("dob_surname", by_pair[("A2", "B2")])
+        self.assertNotIn("dob_surname", by_pair.get(("A1", "B2"), ()))
+        self.assertNotIn("dob_surname", by_pair.get(("A2", "B1"), ()))
+
+    def test_dob_surname_nomination_retains_stronger_route_provenance(self):
+        records = [
+            {
+                "record_id": "A",
+                "source": "A",
+                "eng_surname": "Example",
+                "eng_firstname": "Alpha",
+                "birthday": "1980-01-02",
+                "phone_num": "61234567",
+            },
+            {
+                "record_id": "B",
+                "source": "B",
+                "eng_surname": "Example",
+                "eng_firstname": "Alpha",
+                "birthday": "1980-01-02",
+                "phone_num": "+852 6123 4567",
+            },
+        ]
+        result = generate_candidate_pairs(records, MatchingPolicy())
+        self.assertFalse(result.truncated)
+        self.assertEqual(len(result.pairs), 1)
+        self.assertIn("phone", result.pairs[0].blocking_routes)
+        self.assertIn("dob_surname", result.pairs[0].blocking_routes)
+
     def test_broad_name_cap_prioritizes_best_match_for_sparse_endpoint(self):
         records = [
             {"record_id": "A1", "source": "A", "chi_surname": "陳", "chi_firstname": "大文強"},

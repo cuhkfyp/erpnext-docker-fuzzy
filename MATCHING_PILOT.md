@@ -141,13 +141,16 @@ of several blocking routes:
 Large blocks and the total candidate set have policy limits. Oversized block
 metadata stores only its route, a one-way digest, and count—not the underlying
 name, phone, email, or identifier. Candidate truncation is recorded on the run
-and must be treated as a recall warning. Exact identifiers, contacts, dates,
-and bounded exact-name variants are retained first. For broad Chinese and
-English prefix blocks, each record nominates its closest name per other source;
-the remaining budget round-robins across routes with sparse endpoints first.
-This prevents high-volume integrations and common-name blocks from starving
-records that have only a few possible cross-source counterparts. Pilot 1.6 uses
-a 1,000,000-pair safety ceiling. Phone evidence is limited to normalized
+and must be treated as a recall warning. Exact identifiers, contacts, and
+bounded exact-name variants are retained first. Under general blocker
+`pilot-blocking-1.7`, birthday+surname blocks nominate the closest normalized
+full-name counterpart per endpoint and other source instead of enumerating
+every cross-product. The broad Chinese and English prefix routes use the same
+bounded endpoint/source nomination principle; their remaining budget
+round-robins across routes with sparse endpoints first. This prevents
+high-volume integrations and common surname/date or prefix blocks from
+starving records that have only a few possible cross-source counterparts.
+Pilot 1.7 uses a 1,000,000-pair safety ceiling. Phone evidence is limited to normalized
 eight-digit Hong Kong subscriber numbers with an allocated initial digit;
 obvious full ascending or descending sequences are treated as missing
 placeholders rather than identity evidence.
@@ -381,17 +384,22 @@ during generation. The 11,177 rows are an optional ranked pool, not a mandatory
 backlog. It was marked stale during the 2026-09 identity-integrity restoration
 and must not be treated as the current generation.
 
-The current `pilot-1.7` gate consists of finalized Threshold Evaluation
-`tuvlt5me82` (500 pairs, including 100 double reviews) and High Tier Validation
+The previous threshold evidence for the current `pilot-1.7` gate consists of
+finalized Threshold Evaluation `tuvlt5me82` (500 pairs, including 100 double reviews) and High Tier Validation
 `i04u936qii`. The High run's complete 78,104-pair universe displaced one member
 of its already-reviewed sample. Two distinct reviewers confirmed the
 replacement pair as Same, and High finalization now records 100/100 confirmed Same with a
 96.30%–100% Wilson 95% precision interval. Both runs await management decisions;
 the displaced pair remains as stale immutable history. No replacement canary
-or queue exists. After both management decisions, an approved policy can
-generate the High canary. The optional queue remains blocked because the
-current threshold run's general candidate universe
-was truncated. Materialization and both automatic controls remain disabled.
+or queue exists. The High run may remain the complete High-validation evidence,
+but the truncated threshold run cannot authorize an optional queue. General
+blocker `pilot-blocking-1.7` now produces a complete 893,979-pair universe with
+zero skipped blocks on 256,092 governed records and recovers all 225 eligible
+known-Same pairs. Fresh threshold run `dh1ml9skc7` is now `Reviewing` with 500
+unreviewed non-stale pairs and 100 randomized double reviews; it must complete human review,
+adjudication, finalization, and management approval before one replacement
+canary and optional queue are generated. Materialization and both automatic
+controls remain disabled.
 
 ## Operations
 

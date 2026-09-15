@@ -1099,11 +1099,12 @@ generations without rewriting historical outcomes.
 9. Do not create Unified-person materialization until the clean replacement
    Canary is reviewed and accepted and another fresh full backup is verified.
 
-The live implementation remains at step 7. Threshold run `tuvlt5me82` and
-complete High-validation run `i04u936qii` are both finalized and awaiting
-explicit management decisions. Steps 8 and 9 remain
-deliberately gated, not incomplete automation work. Current evidence and exact
-verification results are recorded in
+The live implementation remains at step 7. Complete High-validation run
+`i04u936qii` is finalized and awaiting its management decision. Truncated
+threshold run `tuvlt5me82` remains immutable evidence but cannot authorize the
+optional queue. Complete replacement threshold run `dh1ml9skc7` is now in
+human review. Steps 8 and 9 remain deliberately gated, not incomplete
+automation work. Current evidence and exact verification results are recorded in
 `IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`.
 
 ### 27.1 Complete deterministic-High universe repair — 2026-09-15
@@ -1135,5 +1136,33 @@ was created.
 Two distinct reviewers subsequently confirmed the replacement pair as Same.
 The High run was re-finalized with 100/100 confirmed Same, all 100 double
 reviews complete, 100% reviewer agreement, and a 96.30%–100% Wilson 95%
-precision interval. It now awaits management approval together with the
-threshold run.
+precision interval. It now awaits management approval; the truncated threshold
+run remains historical evidence only for the optional-queue gate.
+
+### 27.2 Complete general candidate universe repair — 2026-09-15
+
+The finalized labels in threshold run `tuvlt5me82` remain immutable evidence,
+but its 1,000,000-pair truncation prevents it from authorizing the optional
+Splink Review queue. Before any general-blocker code change, full backup
+`20260915_101435-frontend-*` was created and all four artifacts passed format
+and SHA-256 verification.
+
+Read-only census identified exact DOB+surname cross-products as the dominant
+route. General blocker `pilot-blocking-1.7` replaces that cross-product with a
+deterministic closest-full-name nomination for each endpoint and other source,
+while preserving stronger exact-route provenance and the existing sparse
+Chinese/English prefix nominations. Full deployed validation on 256,092
+governed records produced 893,979 candidates, no truncation, no skipped blocks,
+and recovered all 225 eligible non-stale known-Same pairs. The policy ceiling
+remains 1,000,000; it was not raised to hide incompleteness.
+
+The fresh threshold evaluation is `dh1ml9skc7`, now `Reviewing`, with 500
+unreviewed non-stale pairs, 100 randomized double reviews, and local Splink
+scores for every sampled pair. Human completion and adjudication of that run,
+followed by finalization and explicit management approval, are required next.
+Only after that gate and management approval of the already-complete High run
+`i04u936qii` may one fresh canary be generated. The canary then creates Tiered
+exception components and may seed the optional, always-human Splink Review
+queue. Unified-person materialization remains a later, separately backed-up
+and accepted-canary gate; all materialization and automatic controls remain
+off.

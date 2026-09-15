@@ -28,9 +28,10 @@ BLOCK_ROUTE_PRIORITY = {
     "chi_name_prefix": 7,
 }
 
-BLOCKING_VERSION = "pilot-blocking-1.6"
+BLOCKING_VERSION = "pilot-blocking-1.7"
 HIGH_BLOCKING_VERSION = "pilot-high-blocking-1.7"
 BROAD_NAME_ROUTES = frozenset({"chi_name_prefix", "eng_name"})
+SPARSE_NOMINATION_ROUTES = BROAD_NAME_ROUTES | {"dob_surname"}
 
 
 @dataclass(frozen=True)
@@ -70,19 +71,38 @@ def _broad_name_values(
     route: str,
     by_id: dict[str, dict[str, Any]],
     policy: MatchingPolicy,
-) -> tuple[dict[str, str], dict[str, str]]:
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    if route == "dob_surname":
+        primary = {
+            item: norm.chinese_compact(
+                f"{policy.value(record, 'chi_surname') or ''}"
+                f"{policy.value(record, 'chi_firstname') or ''}"
+            )
+            for item, record in by_id.items()
+        }
+        secondary = {
+            item: norm.chinese_pinyin(value) for item, value in primary.items()
+        }
+        tertiary = {
+            item: norm.english_words(
+                f"{policy.value(record, 'eng_surname') or ''} "
+                f"{policy.value(record, 'eng_firstname') or ''}"
+            )
+            for item, record in by_id.items()
+        }
+        return primary, secondary, tertiary
     if route == "chi_name_prefix":
         primary = {
             item: norm.chinese_compact(policy.value(record, "chi_firstname"))
             for item, record in by_id.items()
         }
         secondary = {item: norm.chinese_pinyin(value) for item, value in primary.items()}
-        return primary, secondary
+        return primary, secondary, {}
     primary = {
         item: norm.english_words(policy.value(record, "eng_firstname"))
         for item, record in by_id.items()
     }
-    return primary, {}
+    return primary, {}, {}
 
 
 def _ranked_broad_candidates(
@@ -99,7 +119,7 @@ def _ranked_broad_candidates(
     prevents large integrations from starving records that have only one or a
     few possible cross-source counterparts.
     """
-    primary, secondary = _broad_name_values(route, by_id, policy)
+    primary, secondary, tertiary = _broad_name_values(route, by_id, policy)
     selector_counts: Counter[tuple[str, str]] = Counter()
     best: dict[tuple[str, str], tuple[float, bytes, tuple[str, str]]] = {}
     for ids in blocks:
@@ -116,9 +136,13 @@ def _ranked_broad_candidates(
                 continue
             selectors = ((left_id, right_source), (right_id, left_source))
             selector_counts.update(selectors)
-            score = _ratio(primary[left_id], primary[right_id])
-            if secondary:
+            score = 0.0
+            if primary[left_id] and primary[right_id]:
+                score = _ratio(primary[left_id], primary[right_id])
+            if secondary and secondary[left_id] and secondary[right_id]:
                 score = max(score, _token_ratio(secondary[left_id], secondary[right_id]))
+            if tertiary and tertiary[left_id] and tertiary[right_id]:
+                score = max(score, _token_ratio(tertiary[left_id], tertiary[right_id]))
             digest = hashlib.sha256(f"{route}:{left_id}:{right_id}".encode()).digest()
             for selector in selectors:
                 current = best.get(selector)
@@ -320,7 +344,7 @@ def generate_candidate_pairs(
     routes_by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
     skipped: list[str] = []
     strong_blocks: list[tuple[str, tuple[str, ...]]] = []
-    broad_blocks: dict[str, list[tuple[str, ...]]] = defaultdict(list)
+    nomination_blocks: dict[str, list[tuple[str, ...]]] = defaultdict(list)
     for key, raw_ids in index.items():
         ids = tuple(sorted(set(raw_ids)))
         if len(ids) > policy.max_block_size:
@@ -329,8 +353,8 @@ def generate_candidate_pairs(
             skipped.append(f"{route}:{digest} ({len(ids)} records)")
             continue
         route = key.split(":", 1)[0]
-        if route in BROAD_NAME_ROUTES:
-            broad_blocks[route].append(ids)
+        if route in SPARSE_NOMINATION_ROUTES:
+            nomination_blocks[route].append(ids)
         else:
             strong_blocks.append((key, ids))
 
@@ -357,10 +381,35 @@ def generate_candidate_pairs(
         if truncated:
             break
 
-    # Broad prefix blocks can contain millions of cross-products. Instead of
-    # exhausting them in block order, each endpoint nominates its closest name
-    # per other source. Routes then round-robin those nominations, prioritizing
-    # sparse endpoints, until the shared policy budget is full.
+    # DOB+surname and broad prefix blocks can contain millions of
+    # cross-products. DOB+surname first contributes one closest full-name
+    # nomination per endpoint and other source. Selecting independently of the
+    # stronger exact routes keeps this candidate definition stable and lets an
+    # already-discovered pair retain DOB route provenance.
+    if not truncated and nomination_blocks.get("dob_surname"):
+        ranked_dob = _ranked_broad_candidates(
+            "dob_surname",
+            nomination_blocks["dob_surname"],
+            by_id,
+            policy,
+            set(),
+        )
+        for pair_key in ranked_dob:
+            was_present = pair_key in routes_by_pair
+            routes_by_pair[pair_key].add("dob_surname")
+            if not was_present and len(routes_by_pair) >= policy.max_candidate_pairs:
+                truncated = True
+                break
+
+    # The two broad name routes nominate independently against the same frozen
+    # stronger-route universe, then round-robin their ranked nominations. This
+    # preserves sparse-endpoint coverage without allowing either route to
+    # starve the other if the shared policy budget is reached.
+    broad_blocks = {
+        route: blocks
+        for route, blocks in nomination_blocks.items()
+        if route in BROAD_NAME_ROUTES
+    }
     if not truncated and broad_blocks:
         existing_pairs = set(routes_by_pair)
         ranked_by_route = {

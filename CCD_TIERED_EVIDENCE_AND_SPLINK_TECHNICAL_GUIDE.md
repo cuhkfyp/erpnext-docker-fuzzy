@@ -1,7 +1,7 @@
 # CCD Tiered Evidence and Splink Technical Guide
 
 **Status:** Management-approved post-POC operating baseline (2026-08-19)
-**Policy version:** `pilot-1.6`
+**Current revalidation policy:** `pilot-1.7` (the 2026-08-19 approval evidence remains historical `pilot-1.6`)
 **Splink adapter:** `pilot-splink-1.1`
 **Snapshot-specific Review cutoff:** `0.938995074`
 
@@ -473,7 +473,7 @@ Phone, email, and birthday values are normalized before becoming evidence. A val
 
 ## 11. Blocking Routes
 
-Candidate pairs are generated through **blocking**: records sharing a common blocking key are candidates for comparison. Without blocking, comparing all 251,520 × 251,520 records would produce billions of comparisons.
+Candidate pairs are generated through **blocking**: records sharing a common blocking key are candidates for comparison. Without blocking, comparing the current 256,092-record governed population to itself would produce billions of comparisons.
 
 ### 11.1 Route priority order
 
@@ -492,7 +492,7 @@ BLOCK_ROUTE_PRIORITY = {
 }
 ```
 
-Routes with lower numbers are added to the candidate pool first. The candidate pool is capped at `max_candidate_pairs = 500,000` per policy document.
+Routes with lower numbers are added to the candidate pool first. The candidate pool is policy-bounded; `pilot-1.7` uses `max_candidate_pairs = 1,000,000`.
 
 ### 11.2 Route descriptions
 
@@ -513,9 +513,11 @@ Routes with lower numbers are added to the candidate pool first. The candidate p
 
 Any blocking key that would produce a block larger than `max_block_size = 10,000` records is skipped. Skipped blocks are recorded by route and an anonymized hash of the key. The Splink Review queue requires **zero skipped blocks** and fails closed if any appear.
 
-### 11.4 Broad-route pair selection
+### 11.4 Sparse endpoint/source nomination
 
-For `chi_name_prefix` and `eng_name` routes, the blocking step does not generate all combinations within a block. Instead, each record nominates its **closest-name counterpart per other source**, and nominations are ranked from the sparsest endpoints first. This prevents large integrated sources from consuming the entire candidate budget before sparse sources receive any candidates.
+For `dob_surname`, `chi_name_prefix`, and `eng_name`, the blocking step does not generate all combinations within a block. Instead, each record nominates its **closest normalized-name counterpart per other source**, and nominations are ranked from the sparsest endpoints first. DOB+surname compares complete normalized Chinese and English names; the two prefix routes compare their governed given-name representation. Stronger exact-route provenance is retained when the same pair is also nominated. This prevents large integrated sources and common surname/date or name-prefix blocks from consuming the candidate budget before sparse sources receive any candidates.
+
+The deployed `pilot-blocking-1.7` full-population validation on 2026-09-15 produced 893,979 unique cross-source candidates from 256,092 governed records, with `candidate_truncated = 0`, zero skipped blocks, and recovery of all 225 eligible non-stale known-Same evaluation pairs. Fresh threshold run `dh1ml9skc7` reproduced those counts and is `Reviewing` with 500 unreviewed non-stale pairs, 100 randomized double reviews, and a local Splink score for every sampled pair. Its complete human review, adjudication, finalization, and explicit management approval are still required before its cutoff can authorize a new optional Review queue.
 
 ---
 

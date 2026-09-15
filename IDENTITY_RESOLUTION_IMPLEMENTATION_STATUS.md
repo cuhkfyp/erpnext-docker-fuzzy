@@ -16,7 +16,7 @@
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
 | 2026-08-31 historical totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
 | 2026-09-13 integrity restoration | Audited orphan retirement run `6v6b99amn6` applied; the post-repair audit reports zero active issues and zero planned writes while retaining marked historical evidence |
-| Current matching gate | Threshold run `tuvlt5me82` and complete High run `i04u936qii` are both finalized and awaiting explicit management decisions; no replacement Canary or queue exists |
+| Current matching gate | Complete High run `i04u936qii` is finalized and awaiting management approval; truncated threshold run `tuvlt5me82` cannot authorize the optional queue; replacement threshold run `dh1ml9skc7` was created under complete general blocker `pilot-blocking-1.7`; no replacement Canary or queue exists |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 | QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
 
@@ -135,8 +135,7 @@ SHA-256 values are respectively `c0ff4032f726d8c73f30edc5d6219298b357df51d9b4288
 
 `pilot-high-blocking-1.7` now drives High validation and the Tiered canary.
 The general blocking path remains separate for threshold evaluation and the
-optional Splink Review queue. Its current truncation explicitly blocks queue
-generation. The one-time atomic repair of `i04u936qii` preserved 99 reviewed
+optional Splink Review queue. The one-time atomic repair of `i04u936qii` preserved 99 reviewed
 pairs, marked only displaced pair `mc02k3hign` stale while retaining its two
 labels and final Same decision, inserted replacement pair `furm8v3nhg`, cleared
 the now-obsolete metrics, and reopened the run. No Canary was created.
@@ -146,7 +145,7 @@ sample and remains immutably recorded as Failed. Evaluation scoring trains once
 and batch-scores only selected review pairs, eliminating the million-row
 probability frame; the repaired run uses Splink 4.0.16 and DuckDB 1.5.5.
 
-The deployed suite passes 91 unit tests plus Python/JavaScript syntax checks and
+The deployed suite passes 93 unit tests plus Python/JavaScript syntax checks and
 a local synthetic Splink training/inference smoke test. Atomic generation
 replacement is implemented but has not run: it supersedes only unfinished old
 work after a replacement generation reaches Ready, while preserving completed
@@ -154,13 +153,50 @@ human outcomes and applied/corrected history in the same transaction.
 
 The replacement pair received two independent Same labels and High finalization
 completed with 100/100 confirmed Same, 100% reviewer agreement, and a 95%
-Wilson precision interval of 96.30%–100%. The next permitted action is human:
-management must record explicit decisions on both evaluation runs. If both are
-approved, `pilot-1.7` may be promoted and a new complete deterministic-High
-Canary may be generated. The optional Review queue remains unavailable until a future
-threshold run completes the general candidate universe without truncation or
-skipped blocks. Unified-person materialization remains a later gate requiring
-an accepted clean Canary and another fresh verified backup.
+Wilson precision interval of 96.30%–100%. High run `i04u936qii` now awaits its
+explicit management decision. The old truncated threshold run remains
+immutable evidence but cannot authorize a Splink Review queue. The fresh
+complete threshold run and its human gate are recorded below. Unified-person
+materialization remains a later gate requiring an accepted clean Canary and
+another fresh verified backup.
+
+### Complete general candidate generation — 2026-09-15
+
+Before changing the general blocker, a fresh full ERPNext backup was created
+as `20260915_101435-frontend-*`. The site configuration JSON, database gzip,
+public-files tar gzip, and private-files tar gzip passed format checks. Their
+SHA-256 values are respectively
+`c0ff4032f726d8c73f30edc5d6219298b357df51d9b42883c957337bb852be89`,
+`c8f5956adf01ab5ae89e99d5cf12305ee426ffcdb677a54bdfac6016fd2582fd`,
+`8eabb8a770309db429ab308e1bb2867585714f729974498d3c7c3140f913bf5f`, and
+`bfe58f6d39ddb52e34f53623fb51227d8bb53a2ac7cc64a68d6beb9e50a838d0`.
+No backup was removed during this engineering step.
+
+A read-only route census showed that the previous exact DOB+surname
+cross-product contributed 3,027,059 theoretical pairs and caused the global
+ceiling to be reached before later routes. General blocker
+`pilot-blocking-1.7` now retains all exact identifier, contact, and bounded
+exact-name routes, while each DOB+surname endpoint nominates its closest
+normalized full-name counterpart in every other represented source. Chinese
+and English broad-prefix routes retain their existing sparse endpoint/source
+nomination and round-robin behavior.
+
+The deployed production generator was exercised read-only across all 256,092
+governed records. It returned 893,979 unique cross-source candidates,
+`candidate_truncated = 0`, zero skipped blocks, and 225/225 recovery of eligible
+non-stale known-Same pairs. This leaves 106,021 pairs of headroom under the
+frozen 1,000,000-pair policy ceiling. Focused blocker tests pass 13/13 and the
+complete deployed suite passes 93/93.
+
+Replacement Threshold Evaluation `dh1ml9skc7` is `Reviewing` with 500
+unreviewed, non-stale pairs, 100 randomized double reviews, and local Splink
+scores for all 500 pairs. It is the only threshold run that may
+advance the new general blocker toward a Splink Review queue after complete
+human review, adjudication, finalization, and explicit management approval.
+The complete High run `i04u936qii` remains separate validation evidence. No
+Canary or Review queue has been generated; Live Materialization, Automatic QC,
+and Automatic Tiered remain disabled, `would_write_now = false`, and the orphan
+audit remains at zero active issues and zero planned writes.
 
 ## Implemented controls
 
