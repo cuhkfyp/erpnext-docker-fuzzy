@@ -1,0 +1,52 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "decision_key", "decision_version", "decision_type", "origin", "origin_doctype", "origin_document",
+  "matching_policy", "policy_version", "policy_snapshot_sha256", "policy_snapshot_json",
+  "participant_records_json", "participant_fingerprints_json", "final_groups_json", "exclusions_json",
+  "reason_codes_json", "review_context_json", "safety_outcome", "status", "decided_at", "decided_by",
+  "supersedes", "superseded_by"
+ ],
+ "fields": [
+  {"fieldname": "decision_key", "fieldtype": "Data", "hidden": 1, "label": "Decision Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"default": "1", "fieldname": "decision_version", "fieldtype": "Int", "label": "Decision Version", "read_only": 1, "reqd": 1},
+  {"fieldname": "decision_type", "fieldtype": "Select", "in_list_view": 1, "label": "Decision Type", "options": "Same\nDifferent\nPartition", "read_only": 1, "reqd": 1},
+  {"fieldname": "origin", "fieldtype": "Select", "in_list_view": 1, "label": "Origin", "options": "Tiered Evidence\nSplink Human Review\nComponent Review\nGovernance Override", "read_only": 1, "reqd": 1},
+  {"fieldname": "origin_doctype", "fieldtype": "Link", "label": "Origin DocType", "options": "DocType", "read_only": 1, "reqd": 1},
+  {"fieldname": "origin_document", "fieldtype": "Dynamic Link", "in_list_view": 1, "label": "Origin Document", "options": "origin_doctype", "read_only": 1, "reqd": 1},
+  {"fieldname": "matching_policy", "fieldtype": "Link", "label": "Matching Policy", "options": "CCD Matching Policy", "read_only": 1},
+  {"fieldname": "policy_version", "fieldtype": "Data", "label": "Policy or Model Version", "read_only": 1, "reqd": 1},
+  {"fieldname": "policy_snapshot_sha256", "fieldtype": "Data", "label": "Policy Snapshot SHA-256", "read_only": 1},
+  {"fieldname": "policy_snapshot_json", "fieldtype": "Code", "hidden": 1, "label": "Policy Snapshot", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"fieldname": "participant_records_json", "fieldtype": "Code", "label": "Participating CCD Records", "options": "JSON", "permlevel": 1, "read_only": 1, "reqd": 1},
+  {"fieldname": "participant_fingerprints_json", "fieldtype": "Code", "hidden": 1, "label": "Identity Fingerprints", "options": "JSON", "permlevel": 2, "read_only": 1, "reqd": 1},
+  {"fieldname": "final_groups_json", "fieldtype": "Code", "label": "Final Identity Partition", "options": "JSON", "permlevel": 1, "read_only": 1, "reqd": 1},
+  {"fieldname": "exclusions_json", "fieldtype": "Code", "label": "Final Different Pairs", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "reason_codes_json", "fieldtype": "Code", "label": "Reason and Safety Codes", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"fieldname": "review_context_json", "fieldtype": "Code", "label": "Review and Confirmation Context", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"default": "Passed", "fieldname": "safety_outcome", "fieldtype": "Select", "label": "Safety Outcome", "options": "Passed\nGovernance Override", "read_only": 1, "reqd": 1},
+  {"default": "Active", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Active\nSuperseded\nWithdrawn", "read_only": 1, "reqd": 1},
+  {"fieldname": "decided_at", "fieldtype": "Datetime", "label": "Decided At", "read_only": 1, "reqd": 1},
+  {"fieldname": "decided_by", "fieldtype": "Link", "label": "Decided By", "options": "User", "read_only": 1, "reqd": 1},
+  {"fieldname": "supersedes", "fieldtype": "Link", "label": "Supersedes", "options": "CCD Identity Decision", "read_only": 1},
+  {"fieldname": "superseded_by", "fieldtype": "Link", "label": "Superseded By", "options": "CCD Identity Decision", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Identity Decision",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "report": 1, "role": "CCD Match Reviewer"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "decided_at",
+ "sort_order": "DESC",
+ "track_changes": 0
+}

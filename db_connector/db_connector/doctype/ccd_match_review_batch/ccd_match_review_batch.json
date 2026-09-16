@@ -1,0 +1,40 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["queue_run", "selection_method", "selection_fingerprint", "status", "batch_size", "priority_from", "priority_to", "filters_json", "default_assignee", "due_at", "assigned_count", "complete_count", "same_count", "different_count", "needs_adjudication_count", "items"],
+ "fields": [
+  {"fieldname": "queue_run", "fieldtype": "Link", "in_list_view": 1, "label": "Review Queue Run", "options": "CCD Match Review Queue Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "selection_method", "fieldtype": "Select", "label": "Selection Method", "options": "Highest Priority\nSource Balanced\nRisk Targeted\nManual", "read_only": 1, "reqd": 1},
+  {"fieldname": "selection_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Selection Fingerprint", "read_only": 1, "reqd": 1, "unique": 1},
+  {"default": "Open", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Open\nCompleted\nStale\nCancelled", "read_only": 1, "reqd": 1},
+  {"fieldname": "batch_size", "fieldtype": "Int", "in_list_view": 1, "label": "Assigned Candidates", "read_only": 1, "reqd": 1},
+  {"fieldname": "priority_from", "fieldtype": "Int", "label": "Priority From", "read_only": 1},
+  {"fieldname": "priority_to", "fieldtype": "Int", "label": "Priority To", "read_only": 1},
+  {"fieldname": "filters_json", "fieldtype": "Code", "label": "Frozen Selection Filters", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"fieldname": "default_assignee", "fieldtype": "Link", "label": "Default Assignee", "options": "User", "read_only": 1},
+  {"fieldname": "due_at", "fieldtype": "Datetime", "label": "Due At", "read_only": 1},
+  {"fieldname": "assigned_count", "fieldtype": "Int", "label": "Assigned", "read_only": 1},
+  {"fieldname": "complete_count", "fieldtype": "Int", "label": "Completed", "read_only": 1},
+  {"fieldname": "same_count", "fieldtype": "Int", "label": "Human Confirmed Same", "read_only": 1},
+  {"fieldname": "different_count", "fieldtype": "Int", "label": "Human Confirmed Different", "read_only": 1},
+  {"fieldname": "needs_adjudication_count", "fieldtype": "Int", "label": "Needs Adjudication", "read_only": 1},
+  {"fieldname": "items", "fieldtype": "Table", "label": "Assigned Review Candidates", "options": "CCD Match Review Batch Item", "permlevel": 1, "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Match Review Batch",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "report": 1, "role": "CCD Match Reviewer"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

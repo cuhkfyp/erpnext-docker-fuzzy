@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# This repository is commonly reached through the backend SSHFS mount.  The
+# final backend restart/remount invalidates scripts that are still being read
+# from that mount, so execute a staged copy before doing any deployment work.
+if [[ "${DB_CONNECTOR_DEPLOY_STAGED:-0}" != "1" ]]; then
+	deploy_stage="$(mktemp /tmp/db-connector-deploy.XXXXXX)"
+	cp -- "$0" "$deploy_stage"
+	chmod 0755 "$deploy_stage"
+	DB_CONNECTOR_DEPLOY_STAGED=1 \
+		DB_CONNECTOR_DEPLOY_STAGE_PATH="$deploy_stage" \
+		exec "$deploy_stage" "$@"
+elif [[ -n "${DB_CONNECTOR_DEPLOY_STAGE_PATH:-}" ]]; then
+	# The staged shell already holds this file open, so unlinking it now avoids
+	# leaving temporary copies behind on success or on an early exit.
+	rm -f -- "$DB_CONNECTOR_DEPLOY_STAGE_PATH"
+	unset DB_CONNECTOR_DEPLOY_STAGE_PATH
+fi
+
+ROOT_DIR="${ERPNEXT_VOLUME_ROOT:-/root/erpnext_docker_volume}"
+LIVE_APP="$ROOT_DIR/backend/apps/db_connector"
+PERSISTENT_APP="$ROOT_DIR/persistent_apps/db_connector"
+APP_IN_CONTAINER="/home/frappe/frappe-bench/apps/db_connector"
+SITE="${FRAPPE_SITE:-frontend}"
+CAPTURE=1
+CAPTURE_ONLY=0
+CODE_ONLY=0
+
+for option in "$@"; do
+	case "$option" in
+		--no-capture) CAPTURE=0 ;;
+		--capture-only) CAPTURE_ONLY=1 ;;
+		--code-only) CODE_ONLY=1 ;;
+		*) echo "Unknown option: $option" >&2; exit 2 ;;
+	esac
+done
+
+valid_app() {
+	[[ -f "$1/pyproject.toml" && -f "$1/db_connector/hooks.py" ]]
+}
+
+if (( CAPTURE )); then
+	if valid_app "$LIVE_APP"; then
+		mkdir -p "$PERSISTENT_APP"
+		rsync -a --delete \
+			--exclude='.git/' --exclude='db_connector/.git/' \
+			--exclude='**/__pycache__/' --exclude='*.py[co]' \
+			--exclude='.pytest_cache/' --exclude='.ruff_cache/' \
+			"$LIVE_APP/" "$PERSISTENT_APP/"
+		echo "Captured db_connector into $PERSISTENT_APP"
+	elif ! valid_app "$PERSISTENT_APP"; then
+		echo "Neither live nor persistent db_connector source is valid." >&2
+		exit 1
+	else
+		echo "Live SSHFS source unavailable; retaining the persistent copy."
+	fi
+fi
+
+(( CAPTURE_ONLY )) && exit 0
+valid_app "$PERSISTENT_APP" || {
+	echo "Persistent db_connector source is missing or invalid: $PERSISTENT_APP" >&2
+	exit 1
+}
+
+containers=(
+	frappe_docker-backend-1
+	frappe_docker-scheduler-1
+	frappe_docker-queue-long-1
+	frappe_docker-queue-short-1
+)
+
+for container in "${containers[@]}"; do
+	docker inspect "$container" >/dev/null
+	docker start "$container" >/dev/null
+	docker exec -u root "$container" mkdir -p "$APP_IN_CONTAINER"
+	if docker exec "$container" test -f "$APP_IN_CONTAINER/pyproject.toml"; then
+		# Existing containers already contain the full private app. Overlay only
+		# the versioned fuzzy component and its Frappe module controllers.
+		for relative in \
+			db_connector/api_ccd.py \
+			db_connector/api_ccd_matching.py \
+			db_connector/api_ccd_fuzzy.py \
+			db_connector/api_fuzzy_evaluation.py \
+			db_connector/api_fuzzy_canary.py \
+			db_connector/api_fuzzy_review_queue.py \
+			db_connector/api_fuzzy_splink_experiment.py \
+			db_connector/api_identity_activation.py \
+			db_connector/api_identity_automation.py \
+			db_connector/api_identity_correction.py \
+			db_connector/api_identity_human.py \
+			db_connector/api_identity_notifications.py \
+			db_connector/api_identity_overlap.py \
+			db_connector/api_identity_qc.py \
+			db_connector/api_identity_retirement.py \
+			db_connector/api_identity_resolution.py \
+			db_connector/api_identity_review_batch.py \
+			db_connector/identity_resolution_setup.py \
+			db_connector/identity_snapshot_backfill.py \
+			db_connector/notification_utils.py \
+			db_connector/synthetic_overlap_fixture.py \
+			db_connector/synthetic_qc_automation_fixture.py \
+			db_connector/hooks.py \
+			db_connector/api_ccd_fuzzy.md \
+			db_connector/MATCHING_PILOT.md \
+			db_connector/requirements.txt \
+			db_connector/fuzzy_matching \
+			db_connector/db_connector \
+			db_connector/public \
+			db_connector/tests \
+			db_connector/deployment; do
+			docker cp "$PERSISTENT_APP/$relative" "$container:$APP_IN_CONTAINER/$(dirname "$relative")/"
+		done
+	else
+		docker cp "$PERSISTENT_APP/." "$container:$APP_IN_CONTAINER/"
+	fi
+	docker exec -u root "$container" chown -R frappe:frappe "$APP_IN_CONTAINER"
+done
+
+# The private hksr app is installed on the site but is not part of the stock
+# ERPNext image.  Backend is its existing source of truth; workers must have
+# the same Python package before a restart or Frappe cannot build its module
+# map and enters a crash loop with ModuleNotFoundError.
+HKSR_IN_CONTAINER="/home/frappe/frappe-bench/apps/hksr"
+if docker exec frappe_docker-backend-1 test -f "$HKSR_IN_CONTAINER/pyproject.toml"; then
+	runtime_app_stage="$(mktemp -d "$ROOT_DIR/.db-connector-runtime.XXXXXX")"
+	trap 'rm -rf -- "$runtime_app_stage"' EXIT
+	mkdir -p "$runtime_app_stage/hksr"
+	docker cp "frappe_docker-backend-1:$HKSR_IN_CONTAINER/." "$runtime_app_stage/hksr/"
+	printf '%s\n' "$HKSR_IN_CONTAINER" > "$runtime_app_stage/hksr.pth"
+	for container in \
+		frappe_docker-scheduler-1 \
+		frappe_docker-queue-long-1 \
+		frappe_docker-queue-short-1; do
+		docker exec -u root "$container" mkdir -p "$HKSR_IN_CONTAINER"
+		docker cp "$runtime_app_stage/hksr/." "$container:$HKSR_IN_CONTAINER/"
+		docker cp "$runtime_app_stage/hksr.pth" \
+			"$container:/home/frappe/frappe-bench/env/lib/python3.11/site-packages/hksr.pth"
+		docker exec -u root "$container" chown -R frappe:frappe "$HKSR_IN_CONTAINER"
+	done
+	rm -rf -- "$runtime_app_stage"
+	trap - EXIT
+fi
+
+if (( ! CODE_ONLY )); then
+	docker exec frappe_docker-backend-1 \
+		bash "$APP_IN_CONTAINER/db_connector/deployment/install_fuzzy_dependencies.sh"
+	docker exec frappe_docker-backend-1 bench --site "$SITE" migrate
+	docker exec frappe_docker-backend-1 bench --site "$SITE" execute \
+		db_connector.api_fuzzy_evaluation.install_matching_roles
+	docker exec frappe_docker-backend-1 bench --site "$SITE" execute \
+		db_connector.api_fuzzy_evaluation.install_default_pilot_policy
+	docker exec frappe_docker-backend-1 bench --site "$SITE" execute \
+		db_connector.api_fuzzy_canary.install_existing_canary_review_workflows
+	docker exec frappe_docker-backend-1 bench --site "$SITE" build --app db_connector
+fi
+docker exec frappe_docker-backend-1 bench --site "$SITE" clear-cache
+
+# The frontend image has its own app filesystem.  Its assets/db_connector entry
+# is a symlink into that filesystem, so copying the backend's symlink (or trying
+# to copy through it) does not deploy the files that nginx serves.  Populate the
+# symlink target directly.  Raw public assets such as DocType form scripts do
+# not require a build, so keep this step active for --code-only deployments too.
+FRONTEND_CONTAINER="frappe_docker-frontend-1"
+FRONTEND_PUBLIC="$APP_IN_CONTAINER/db_connector/public"
+FRONTEND_ASSETS="/home/frappe/frappe-bench/sites/assets/db_connector"
+
+docker inspect "$FRONTEND_CONTAINER" >/dev/null
+docker start "$FRONTEND_CONTAINER" >/dev/null
+docker exec -u root "$FRONTEND_CONTAINER" mkdir -p "$FRONTEND_PUBLIC"
+docker cp "$PERSISTENT_APP/db_connector/public/." \
+	"$FRONTEND_CONTAINER:$FRONTEND_PUBLIC/"
+docker exec -u root "$FRONTEND_CONTAINER" \
+	chown -R frappe:frappe "$FRONTEND_PUBLIC"
+if ! docker exec "$FRONTEND_CONTAINER" test -e "$FRONTEND_ASSETS"; then
+	docker exec -u root "$FRONTEND_CONTAINER" \
+		ln -s "$FRONTEND_PUBLIC" "$FRONTEND_ASSETS"
+fi
+docker exec "$FRONTEND_CONTAINER" test -f \
+	"$FRONTEND_PUBLIC/js/ccd_master_identity_resolution.js"
+
+docker restart \
+	frappe_docker-backend-1 \
+	frappe_docker-scheduler-1 \
+	frappe_docker-queue-long-1 \
+	frappe_docker-queue-short-1 >/dev/null
+
+if [[ -x "$ROOT_DIR/sshmount_docker_backend.sh" ]]; then
+	(cd /tmp && "$ROOT_DIR/sshmount_docker_backend.sh") || \
+		echo "Warning: db_connector deployed, but the optional backend SSHFS remount failed." >&2
+fi
+
+if (( CODE_ONLY )); then
+	echo "db_connector code deployed and restarted from persistent host source."
+else
+	echo "db_connector deployed, migrated, and restarted from persistent host source."
+fi

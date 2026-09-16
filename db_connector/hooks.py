@@ -5,6 +5,44 @@ app_description = "Database connector for other datasource"
 app_email = "kit.ho@rehabsociety.org.hk"
 app_license = "mit"
 
+after_migrate = ["db_connector.identity_resolution_setup.after_migrate"]
+
+doctype_js = {
+    "CCD Master": "public/js/ccd_master_identity_resolution.js",
+}
+
+doctype_list_js = {
+    "CCD Master": "public/js/ccd_master_identity_resolution_list.js",
+    "CCD Match Component Review": "public/js/ccd_match_component_review_list.js",
+    "CCD Match Review Candidate": "public/js/ccd_match_review_candidate_list.js",
+}
+
+app_include_js = [
+    "/assets/db_connector/js/identity_component_correction.js",
+    "/assets/db_connector/js/identity_overlap_resolution.js",
+]
+
+doc_events = {
+    "CCD Master": {
+        "after_insert": "db_connector.api_unified_person.ensure_unified_person_after_insert",
+        "on_update": "db_connector.api_identity_resolution.handle_ccd_master_update",
+    },
+    "CCD Registration": {
+        "validate": "db_connector.api_identity_retirement.validate_registration_source_key",
+        "before_submit": "db_connector.api_identity_retirement.before_submit_registration",
+        "before_cancel": "db_connector.api_identity_retirement.before_cancel_registration",
+        "on_cancel": "db_connector.api_identity_retirement.on_cancel_registration",
+    },
+}
+
+scheduler_events = {
+    "daily": [
+        "db_connector.api_identity_qc.run_qc_monitor",
+        "db_connector.api_identity_retirement.run_scheduled_orphan_integrity_audit",
+        "db_connector.api_unified_person.run_scheduled_unified_person_integrity",
+    ],
+}
+
 # Apps
 # ------------------
 

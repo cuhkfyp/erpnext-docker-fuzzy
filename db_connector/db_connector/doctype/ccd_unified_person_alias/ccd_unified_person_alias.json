@@ -1,0 +1,33 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "alias_key", "alias_person", "canonical_person", "status", "reason",
+  "origin_doctype", "origin_document", "valid_from", "valid_to", "ended_reason"
+ ],
+ "fields": [
+  {"fieldname": "alias_key", "fieldtype": "Data", "hidden": 1, "label": "Alias Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "alias_person", "fieldtype": "Link", "in_list_view": 1, "label": "Alias Number", "options": "CCD Unified Person", "read_only": 1, "reqd": 1},
+  {"fieldname": "canonical_person", "fieldtype": "Link", "in_list_view": 1, "label": "Canonical Number", "options": "CCD Unified Person", "read_only": 1, "reqd": 1},
+  {"default": "Active", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Active\nEnded", "read_only": 1, "reqd": 1},
+  {"fieldname": "reason", "fieldtype": "Small Text", "label": "Alias Reason", "read_only": 1, "reqd": 1},
+  {"fieldname": "origin_doctype", "fieldtype": "Link", "label": "Origin DocType", "options": "DocType", "read_only": 1},
+  {"description": "Immutable origin snapshot; it remains readable if the source document is later retired.", "fieldname": "origin_document", "fieldtype": "Data", "label": "Origin Document", "read_only": 1},
+  {"fieldname": "valid_from", "fieldtype": "Datetime", "label": "Valid From", "read_only": 1, "reqd": 1},
+  {"fieldname": "valid_to", "fieldtype": "Datetime", "label": "Valid To", "read_only": 1},
+  {"fieldname": "ended_reason", "fieldtype": "Small Text", "label": "Ended Reason", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Unified Person Alias",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "sort_field": "valid_from",
+ "sort_order": "DESC",
+ "track_changes": 0
+}

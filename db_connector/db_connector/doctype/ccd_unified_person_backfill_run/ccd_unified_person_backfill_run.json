@@ -1,0 +1,48 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "backfill_key", "status", "scope_fingerprint", "batch_size", "initial_ccd_master_count",
+  "expected_person_count", "processed_record_count", "issued_person_count", "created_membership_count",
+  "remaining_record_count", "batch_count", "initial_modified_sha256", "final_modified_sha256",
+  "ccd_master_modified_unchanged", "started_at", "started_by", "last_batch_at", "completed_at",
+  "completed_by", "preview_json", "result_json", "error_summary"
+ ],
+ "fields": [
+  {"fieldname": "backfill_key", "fieldtype": "Data", "hidden": 1, "label": "Backfill Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"default": "Running", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Running\nCompleted\nFailed", "read_only": 1, "reqd": 1},
+  {"fieldname": "scope_fingerprint", "fieldtype": "Data", "label": "Frozen Scope Fingerprint", "read_only": 1, "reqd": 1},
+  {"fieldname": "batch_size", "fieldtype": "Int", "label": "Batch Size", "read_only": 1, "reqd": 1},
+  {"fieldname": "initial_ccd_master_count", "fieldtype": "Int", "label": "Initial CCD Masters", "read_only": 1},
+  {"fieldname": "expected_person_count", "fieldtype": "Int", "label": "Expected Unified People", "read_only": 1},
+  {"fieldname": "processed_record_count", "fieldtype": "Int", "label": "Processed CCD Masters", "read_only": 1},
+  {"fieldname": "issued_person_count", "fieldtype": "Int", "label": "Issued Unified People", "read_only": 1},
+  {"fieldname": "created_membership_count", "fieldtype": "Int", "label": "Created Memberships", "read_only": 1},
+  {"fieldname": "remaining_record_count", "fieldtype": "Int", "in_list_view": 1, "label": "Remaining CCD Masters", "read_only": 1},
+  {"fieldname": "batch_count", "fieldtype": "Int", "label": "Committed Batches", "read_only": 1},
+  {"fieldname": "initial_modified_sha256", "fieldtype": "Data", "label": "Initial CCD Master Modified SHA-256", "read_only": 1},
+  {"fieldname": "final_modified_sha256", "fieldtype": "Data", "label": "Final CCD Master Modified SHA-256", "read_only": 1},
+  {"default": "0", "fieldname": "ccd_master_modified_unchanged", "fieldtype": "Check", "label": "CCD Master.modified Unchanged", "read_only": 1},
+  {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At", "read_only": 1, "reqd": 1},
+  {"fieldname": "started_by", "fieldtype": "Link", "label": "Started By", "options": "User", "read_only": 1, "reqd": 1},
+  {"fieldname": "last_batch_at", "fieldtype": "Datetime", "label": "Last Batch At", "read_only": 1},
+  {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At", "read_only": 1},
+  {"fieldname": "completed_by", "fieldtype": "Link", "label": "Completed By", "options": "User", "read_only": 1},
+  {"fieldname": "preview_json", "fieldtype": "Code", "label": "Frozen Preview", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "result_json", "fieldtype": "Code", "label": "Final Result", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "error_summary", "fieldtype": "Small Text", "label": "Error", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Unified Person Backfill Run",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "started_at",
+ "sort_order": "DESC",
+ "track_changes": 0
+}

@@ -1,0 +1,743 @@
+# CCD Identity Resolution Implementation Status
+
+## Safe takeover checkpoint
+
+| Item | Verified state |
+| --- | --- |
+| Date | 2026-09-16 UTC |
+| Status updated | 2026-09-16 UTC |
+| Site | `frontend` |
+| Takeover basis | Recovered local predecessor session and its committed specification |
+| Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
+| Deployment | Schema, services, controllers, managed CCD Master Form/List Client Scripts, and frontend assets deployed |
+| Materialization | Currently disabled (`materialization_enabled = 0`); this remains the final write gate |
+| Automation circuit breaker | Not tripped (`automation_paused = 0`) |
+| Automatic QC / Tiered | Both governed controls are disabled (`automatic_qc_assignment_enabled = 0`, `automatic_tiered_enabled = 0`); Live Materialization is also disabled and control revision is 22 |
+| Automation email | Enabled for the configured operational recipient; daily monitor, manual automatic-cycle, and newly assigned QC notifications are active |
+| 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
+| 2026-08-31 historical totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
+| 2026-09-13 integrity restoration | Audited orphan retirement run `6v6b99amn6` applied; the post-repair audit reports zero active issues and zero planned writes while retaining marked historical evidence |
+| Current matching gate | Complete High run `i04u936qii` and threshold run `dh1ml9skc7` are approved; policy `pilot-1.7` is Pilot; Canary `snakh96bf9` is Active; human-only Splink queue `i3uek3cjjd` is Ready and untruncated |
+| Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
+| QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
+| Permanent Unified Person numbers | Phase 7 completed: backfill `8srqf32s7o` issued 256,046 numbers for all 256,095 current CCD Masters with zero integrity issues and no CCD Master timestamp change |
+
+The predecessor session completed the workflow specification and pushed it at
+commit `cfef788`. This fresh session recovered that durable artifact, audited
+the application and live data, implemented the specification, deployed it in a
+default-off state, and verified the result. It did not depend on reconstructing
+the predecessor's compacted conversational reasoning.
+
+On 2026-08-24, explicitly bounded Tiered, human-component, and Splink
+development decisions were applied after verified backup checkpoints.
+Materialization was turned off again immediately afterward. The waves created
+reversible identity objects only; they did not merge or modify the participating
+CCD Master source documents.
+
+On 2026-08-25, the unified overlap resolver was deployed and tested with
+Materialization still off. Its live tests used transaction rollback; they did
+not add an Overlap Resolution, Decision, Group, Membership, Exclusion, or Event.
+
+On 2026-08-28, continuous QC governance and bounded Automatic Tiered were
+deployed with Materialization, Automatic QC, and Automatic Tiered all off. The
+migration added schema and controls only; the identity-object totals remained
+exactly unchanged and `surfshark-wireguard` remained healthy throughout. After
+a full backup, the development-only QC/automation fixture was created as Canary
+`o2c67pgdv9`: six isolated Proposed/Available Tiered components, three initially
+selected but unassigned for QC and three eligible for cadence replenishment.
+Fixture creation left the identity-object totals unchanged.
+
+On 2026-08-31, the fixture completed its controlled browser and scheduler
+acceptance. Two bounded Automatic Tiered cycles applied four isolated complete
+components; the QC workflow then exercised masked independent review, a
+deliberate Different result and governed investigation recovery, deterministic
+pool replenishment, the seven-day cadence gate, an overdue-SLA pause, source
+staleness, Membership/Group revalidation, governed Resume, and exact-repeat
+idempotency. The acceptance checkpoint ended with 64 Decisions, 60 Groups, 144
+Memberships, 33 Exclusions, 416 Events, 14 Activation Batches (13 Applied / 1
+Reviewed), and one resolved QC Investigation. Later manual development
+demonstrations at 16:18 and 16:26 created two additional Same Decisions,
+Groups, and four Memberships;
+the larger current totals in the table above therefore are not attributed to
+the QC scheduler.
+
+## Identity integrity restoration — 2026-09-13/14
+
+The approved **Restore Identity Integrity and Regenerate Matching** operation
+was implemented and deployed through its explicit human-review gate. It did not
+authorize a new identity-materialization wave.
+
+Before any code change, a full ERPNext backup was created as
+`20260913_185936-frontend-*`. The site configuration, database, public files,
+and private files passed format/integrity checks and were re-hashed after the
+deployment. The three specifically approved September 8 backup prefixes
+(`095918`, `095932`, and `145947`) were already absent when the exact-target
+cleanup ran; no unrelated backup was removed. The volume remained 96% used
+with approximately 11 GB free at the final checkpoint.
+
+The first live write was orphan lifecycle repair `6v6b99amn6`. It closed or
+staled unfinished work that referenced missing CCD Masters, ended 102 current
+Memberships and 43 Groups, withdrew 47 active Decisions, superseded 22 active
+Exclusions, and preserved completed reviews and identity history with explicit
+retirement markers. The final zero-write audit reports:
+
+- `active_issue_count = 0`;
+- `planned_write_count = 0`;
+- Live Materialization, Automatic QC, and Automatic Tiered all disabled; and
+- historical references retained rather than rebound to recreated records.
+
+Future source removal now uses one System-Manager-only lifecycle service. It
+requires a zero-write preview, exact 64-character scope fingerprint, mandatory
+reason, disabled materialization/automation controls, locked population
+recheck, lifecycle updates before source deletion, 1,000-row chunks, immutable
+`CCD Identity Retirement Run` audit, and idempotent replay. The same service is
+wired into governed CCD Registration cancellation; ordinary cancellation fails
+closed. A rollback-only live probe verified wrong-fingerprint rejection,
+exact-scope deletion, idempotent replay, and zero persisted probe rows/audits.
+A connection-local 100,000-key scale probe deleted 100 chunks in 1.469 seconds
+and left zero rows; it never inserted an ERPNext document.
+
+Reviewer access was corrected for the named reviewer account: `ccd-user` and
+`System Manager` were removed, existing sessions were terminated, and live
+permission checks denied CCD Master read/create/write/delete/report/export/
+print plus the legacy whitelisted mutation API. The account retains masked
+`CCD Match Reviewer` access. The legacy `CCD Registration Before Cancel`
+Server Script is disabled in favor of the governed hook.
+
+Matching policy `pilot-1.7` freezes the latest submitted CCD Registration
+revision, stable source key, exact field mapping fingerprint, registration
+modified time, and source-profile flags for each of ten governed sources. Its
+provenance audit is valid with no issues. Three one-record sources without a
+submitted Registration remain unchanged and deliberately excluded rather than
+silently governed.
+
+Fresh shadow generation and completed human review produced:
+
+| Run | Purpose | Current state | Sample |
+| --- | --- | --- | ---: |
+| `tuvlt5me82` | Threshold Evaluation | Awaiting Management Approval / Pending Management Review | 500 finalized pairs: 125 Same and 375 Different; 100 double reviews |
+| `i04u936qii` | High Tier Validation | Awaiting Management Approval / Pending Management Review | 100 finalized active Same pairs; all 100 independently double-reviewed; one superseded pair retained as stale history |
+
+The first generation reached the configured 1,000,000-pair safety ceiling and
+recorded truncation rather than exceeding it. The completed reviews therefore
+were not approved. A read-only census proved that deterministic High needs only
+five logically sufficient exact routes: trusted global identifier, phone,
+email, birthday plus exact Chinese full name, and birthday plus exact English
+full name. That complete High-capable universe contains 78,104 pairs and yields
+75,867 eligible deterministic-High predictions after historical exclusions,
+1,378 more than the truncated run reported.
+
+Before implementing or applying that repair, a new full ERPNext backup was
+created as `20260915_091050-frontend-*`. Site configuration JSON, database gzip,
+public-files tar gzip, and private-files tar gzip all passed format checks. Their
+SHA-256 values are respectively `c0ff4032f726d8c73f30edc5d6219298b357df51d9b42883c957337bb852be89`,
+`ef77698052cee1c3fd211ea2db5f93d7fe34af21cd48c17e73602b21c6a35146`,
+`8eabb8a770309db429ab308e1bb2867585714f729974498d3c7c3140f913bf5f`, and
+`bfe58f6d39ddb52e34f53623fb51227d8bb53a2ac7cc64a68d6beb9e50a838d0`.
+
+`pilot-high-blocking-1.7` now drives High validation and the Tiered canary.
+The general blocking path remains separate for threshold evaluation and the
+optional Splink Review queue. The one-time atomic repair of `i04u936qii` preserved 99 reviewed
+pairs, marked only displaced pair `mc02k3hign` stale while retaining its two
+labels and final Same decision, inserted replacement pair `furm8v3nhg`, cleared
+the now-obsolete metrics, and reopened the run. No Canary was created.
+
+An earlier High attempt `u02eo99bma` was killed by host OOM before committing a
+sample and remains immutably recorded as Failed. Evaluation scoring trains once
+and batch-scores only selected review pairs, eliminating the million-row
+probability frame; the repaired run uses Splink 4.0.16 and DuckDB 1.5.5.
+
+The deployed suite passes 93 unit tests plus Python/JavaScript syntax checks and
+a local synthetic Splink training/inference smoke test. Atomic generation
+replacement is implemented but has not run: it supersedes only unfinished old
+work after a replacement generation reaches Ready, while preserving completed
+human outcomes and applied/corrected history in the same transaction.
+
+The replacement pair received two independent Same labels and High finalization
+completed with 100/100 confirmed Same, 100% reviewer agreement, and a 95%
+Wilson precision interval of 96.30%–100%. High run `i04u936qii` now awaits its
+explicit management decision. The old truncated threshold run remains
+immutable evidence but cannot authorize a Splink Review queue. The fresh
+complete threshold run and its human gate are recorded below. Unified-person
+materialization remains a later gate requiring an accepted clean Canary and
+another fresh verified backup.
+
+### Complete general candidate generation — 2026-09-15
+
+Before changing the general blocker, a fresh full ERPNext backup was created
+as `20260915_101435-frontend-*`. The site configuration JSON, database gzip,
+public-files tar gzip, and private-files tar gzip passed format checks. Their
+SHA-256 values are respectively
+`c0ff4032f726d8c73f30edc5d6219298b357df51d9b42883c957337bb852be89`,
+`c8f5956adf01ab5ae89e99d5cf12305ee426ffcdb677a54bdfac6016fd2582fd`,
+`8eabb8a770309db429ab308e1bb2867585714f729974498d3c7c3140f913bf5f`, and
+`bfe58f6d39ddb52e34f53623fb51227d8bb53a2ac7cc64a68d6beb9e50a838d0`.
+No backup was removed during this engineering step.
+
+A read-only route census showed that the previous exact DOB+surname
+cross-product contributed 3,027,059 theoretical pairs and caused the global
+ceiling to be reached before later routes. General blocker
+`pilot-blocking-1.7` now retains all exact identifier, contact, and bounded
+exact-name routes, while each DOB+surname endpoint nominates its closest
+normalized full-name counterpart in every other represented source. Chinese
+and English broad-prefix routes retain their existing sparse endpoint/source
+nomination and round-robin behavior.
+
+The deployed production generator was exercised read-only across all 256,092
+governed records. It returned 893,979 unique cross-source candidates,
+`candidate_truncated = 0`, zero skipped blocks, and 225/225 recovery of eligible
+non-stale known-Same pairs. This leaves 106,021 pairs of headroom under the
+frozen 1,000,000-pair policy ceiling. Focused blocker tests pass 13/13 and the
+complete deployed suite passes 93/93.
+
+Replacement Threshold Evaluation `dh1ml9skc7` is finalized, `Completed`, and
+`Approved`. Its 500 non-stale pairs contain 56 Same and 444 Different
+decisions. All 100 randomized double reviews and 46 additional positive
+confirmations are complete across three distinct reviewers; six disagreements
+were adjudicated. Randomized agreement is 97%, with Cohen's kappa
+`0.852652259`.
+
+Splink calibration has sufficient positives in both partitions (40 calibration
+and 16 held out) and produced a human-review cutoff of `0.865469813`. At that
+cutoff the held-out result is 45% precision, 56.25% recall, and F1 `0.5`, so it
+is suitable only for review prioritization, never unattended identity action.
+No probabilistic automatic-High threshold passed; `automatic_high_threshold_disabled`
+is the sole automatic-readiness reason. This does not block the governed
+human-only Review queue. Complete High run `i04u936qii` is also `Completed`
+and `Approved`, and policy `pilot-1.7` is now `Pilot`.
+
+Replacement Canary `snakh96bf9` completed atomically and was initially `Ready`. Across
+256,092 governed records it generated 78,104 deterministic-High candidates
+with no truncation or skipped blocks, then retained 75,971 High recommendations:
+68,262 Proposed and 7,709 safely quarantined as Exception. The exceptions map
+exactly to 2,086 unreviewed component cases; a deterministic randomized sample
+of 100 Proposed recommendations is also ready for QC. All 75,971 recommendation
+keys, pair fingerprints, and audit-event links are unique and complete. At the
+initial generation checkpoint there were zero activation-batch,
+identity-decision, identity-group, or materialized-membership links. Subsequent
+explicit pilot and bounded automatic actions advanced the Canary to `Active`.
+The current Canary rollup records 41 active recommendations, 68,220 Proposed,
+7,709 Exceptions, 43 materialized Groups, and 88 materialized Memberships.
+Its 100-case QC sample has two cases assigned, none finalized or overdue, and
+the next cadence is due 2026-09-23. Live Materialization is currently off;
+Automatic QC and Automatic Tiered are enabled at control revision 18 with a
+two-component limit, so the automatic preview correctly reports
+`master_materialization_disabled` and `would_write_now = false`.
+
+Human-only Splink Review queue `i3uek3cjjd` is `Ready`. It reproduced all
+893,979 untruncated candidates with zero skipped blocks, excluded 75,955 Tiered
+High pairs and 807 prior-review pairs, scored all 817,217 eligible pairs, and
+queued 12,144 at or above cutoff `0.865469813`. Five human reviews are complete
+and all five are Same; none needs adjudication. Splink remains incapable of
+unattended materialization.
+
+## Automation email notifications — 2026-09-16
+
+Before notification code changed, full backup `20260916_143138-frontend-*` was
+created and verified. Database gzip, public/private file tar gzip archives, and
+site configuration JSON all passed format and archive checks. Their SHA-256
+digests are, respectively,
+`7ed7a607ca615bc5083c8c0daa0a97340afcd356e91326ba70b814b479160c0d`,
+`8eabb8a770309db429ab308e1bb2867585714f729974498d3c7c3140f913bf5f`,
+`4981869048a3fd1d1a29c2846ee62a7ce292921bbf3e949a9c9aff06fb22d219`,
+and `c0ff4032f726d8c73f30edc5d6219298b357df51d9b42883c957337bb852be89`.
+
+`CCD Identity Resolution Settings` now provides a default-off notification
+switch and a validated, delimiter-tolerant recipient list. The live site has
+notifications enabled for its configured operational recipient. This setting
+is deliberately outside the governed matching fields: enabling it did not
+change materialization, either automatic authorization, Canary/Policy, the
+component limit, circuit-breaker state, or control revision. Identity-object
+counts were asserted unchanged in the configuration transaction.
+
+Notification behavior is:
+
+- the existing Daily scheduler runs QC cadence when due, refreshes every active
+  QC monitor, commits that work, runs the bounded Automatic Tiered cycle, then
+  queues one consolidated result email;
+- **Run One Automatic Cycle Now** runs and reports only that bounded Tiered
+  cycle. It does not invoke the daily QC monitor or assignment cadence;
+- a manager's manual QC assignment sends a separate email only when at least
+  one new case is released. Automatically assigned cases are included in the
+  Daily email instead of producing a duplicate message; and
+- summaries link directly to Settings, Canary, assigned recommendations,
+  activation batch, finished component recommendations/Decisions/Groups,
+  skipped unsafe component reviews, and new QC investigations where those
+  records exist. Detail lists are bounded to 100 records per section.
+
+All mail rendering and queueing is best-effort and occurs only after governed
+QC/identity transactions commit. An email failure is logged and returned as a
+notification failure but cannot roll back, interrupt, or change the completed
+identity action. The System Manager form includes **Send Test Notification**.
+Two isolated test messages were queued through the existing default outgoing
+account and reached `Sent` with no SMTP error; generated Desk links use the
+configured HTTPS host. The deployed container suite passes 95/95 tests, and a
+full site migration/build/restart completed successfully.
+
+## Permanent Unified Person registry — 2026-09-16
+
+Phase 7 was implemented only after a new full ERPNext backup was created and
+verified. The backup prefix is `20260916_154024-frontend-*` under
+`/home/frappe/frappe-bench/sites/frontend/private/backups/`. JSON parsing,
+database gzip integrity, and both file tar-gzip listings passed. The exact
+artifacts are:
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Site configuration | 738 | `c0ff4032f726d8c73f30edc5d6219298b357df51d9b42883c957337bb852be89` |
+| Database | 166,077,758 | `4fa66a36b168a9cabba87afe77dc015873d5ee3a43153f432b8c585b0e5041c7` |
+| Public files | 1,682,701,097 | `e2c72816f21d22c73976cc7d030652c2bbbac2b0c138a710739b08137c9b4cdb` |
+| Private files | 29,523,708 | `4981869048a3fd1d1a29c2846ee62a7ce292921bbf3e949a9c9aff06fb22d219` |
+
+Materialization, Automatic Tiered, and Automatic QC were all rechecked as off
+before schema installation and again before the first backfill transaction.
+Restartable backfill `8srqf32s7o` used 52 committed batches of at most 5,000
+seed records. It completed with:
+
+- 256,095 active Unified Person Memberships covering 256,095 distinct current
+  CCD Masters;
+- 256,046 permanent `HKSR-U#########C` numbers with unique, non-recycled
+  sequences 1 through 256,046 and a Luhn check digit;
+- 47 multi-record people corresponding to the 47 current governed Identity
+  Groups, while every other current record received a singleton person;
+- zero active aliases at initial issuance; aliases are created only by a later
+  governed merge; and
+- zero issues in all nine live integrity checks, including missing/duplicate
+  assignments, noncanonical assignments, group splits, count/alias mismatch,
+  duplicate stable source lineage, and invalid number/check-digit pairs.
+
+The before/after CCD Master snapshot was identical: 256,095 rows and SHA-256
+`a1169187c20e81edfa0e7ba018e2b4b5c72fe12fa2edf46d2b8b44312c056440`.
+The number is held only in the separate registry; no field was added to CCD
+Master and no CCD Master `modified` value changed.
+
+Delete-and-recreate behavior is lineage-safe. Governed retirement ends the old
+assignment but preserves its source lineage. A newly inserted CCD Master with
+the same stable `ccd_reg_source` plus `ccd_source_key` recovers the same current
+canonical number only when all history resolves unambiguously to one person
+and no other current CCD Master still owns that lineage. Duplicate or
+ambiguous lineage is logged and receives a separate singleton rather than a
+guessed identity. Three current special records have no `ccd_source_key`; they
+have valid numbers but cannot use automatic recreation recovery until their
+stable source key is corrected.
+
+Governed merges keep the oldest issued sequence canonical and retain every
+other number as a resolvable alias. Corrections/splits reactivate an original
+lineage number when unambiguous; otherwise the deterministic survivor remains
+and a new non-recycled number is issued. Assignment, end, merge-alias,
+split-reactivation, retirement, and reconciliation history is immutable.
+
+Operators can view the number on **CCD Master → Identity Resolution**, use the
+**CCD Unified Person Register** report, resolve registry/alias records in the
+**CCD Unified Person** list, and run backfill status or zero-write integrity
+audit actions from **CCD Identity Resolution Settings → Identity Integrity**.
+The existing masked Identity Resolution Register shows only stable masked
+person aliases to ordinary reviewers. Superset uses the Unified Person only as
+an internal anchor and projects a SHA-256 pseudonym, never the raw permanent
+number.
+
+The Superset metadata was backed up to
+`/root/erpnext_docker_volume/private_security/superset-backups/20260916T082803Z/superset.db.gz`
+before installation. The installed metadata retained Dashboard 5 unchanged,
+passed its integrity and role-permission checks, and all 26 dashboard charts
+executed successfully through the live Superset query engine. The governed
+population reconciled exactly to 256,092 source rows and 256,043 logical
+people; the three source-key-less special CCD records are intentionally
+outside that governed-source total.
+
+The six Phase-7 DocTypes and reports synchronized successfully. The later
+site-wide migrate pass stopped during an unrelated pre-existing Insights
+fixture import because its installed `ibis/sqlglot` combination lacks
+`UNIQUEIDENTIFIER`; db_connector's idempotent setup and indexes were therefore
+completed explicitly. This external Insights dependency issue did not affect
+the Phase-7 schema, backfill, controls, reports, or integrity results.
+
+## Implemented controls
+
+- Immutable `CCD Identity Decision` records with policy, model, human-review,
+  fingerprint, safety, and provenance fields.
+- Reversible `CCD Identity Group` and `CCD Identity Membership` records; CCD
+  Master source documents remain unchanged.
+- Fingerprint-scoped `CCD Identity Exclusion` records for final Different
+  outcomes, plus append-only identity events.
+- One idempotent, lock-protected materialization service shared by Tiered
+  Evidence, Splink human review, and exception-component decisions.
+- Fresh fingerprint, complete-HKID conflict, stale-input, exclusion, and
+  component-partition gates before writes.
+- Complete frozen-snapshot enforcement: every governed materialization now
+  requires both the frozen identity fingerprint and frozen `modified` value for
+  every participant, and rechecks both after acquiring record locks.
+- A timestamp-guarded legacy repair backfilled all 15,138 August-13 snapshot
+  rows (3,961 Tiered recommendations and 11,177 Splink candidates) using their
+  verified frozen `pilot-1.6` policy. No stale, corrupt, or inconsistent row was
+  accepted, and the repair is idempotent.
+- Component-atomic activation batches with zero-write preview, explicit
+  review/approval/application, deliberate hold, and release.
+- A protected **Review Pair(s)** action on every frozen Activation Batch item,
+  showing source pair(s), permitted CCD Master/Recommendation links, current
+  evidence, and stale status without duplicating raw identity values into the
+  batch document.
+- Optional non-zero Splink Review Batches. Creating no batch correctly leaves
+  assigned work at zero.
+- Continuous QC release, SLA/cadence, deterministic replenishment, finalization-
+  ordered rolling Wilson precision, overdue checks, immutable investigations,
+  current-shared-Group revalidation, and a global Tiered circuit breaker.
+- Separate default-off, manager-only and audited controls for Automatic QC and
+  bounded Automatic Tiered. Each automatic batch freezes its authorization
+  revision/Event, skips unsafe complete components, and rechecks every control
+  under lock; ordinary batch Apply cannot apply an automatic batch.
+- Permission-masked identity fields and an Identity Resolution tab on CCD
+  Master. Legacy fuzzy fields are retained but are not written by this system.
+- Dynamic ungrouped-state wording: a fingerprint-current Different decision is
+  shown as **Resolved Separately**, a record with neither membership nor a
+  current Different decision is **Not Grouped**, and an active Membership takes
+  display precedence if a later approved link is created. No state implies a
+  physical CCD Master merge.
+- A System Manager bulk action on the Component Review list: select the exact
+  Pending/Exception rows, run a zero-write safety preview, and atomically
+  materialize 1–25 complete components in one operation.
+- The equivalent bounded action on the Splink Review Candidate list: select
+  exactly 1–25 finalized Pending/Exception decisions, preview every planned
+  object, reject overlapping participants, and apply the complete set
+  atomically.
+- A deliberately narrow false-Same correction on an applied two-record Splink
+  candidate. It is System-Manager-only in both the form and server APIs,
+  requires Materialization off, a zero-write preview, mandatory reason, and
+  exact candidate-ID confirmation, then atomically ends the two Memberships and
+  Group, creates a fingerprint-scoped Different decision/exclusion, supersedes
+  the old Same Decision, and preserves the original reviews and audit history.
+- A general System-Manager-only **Complete Identity Component Correction** for
+  applied Tiered Evidence, Component Review, Splink, and earlier Governance
+  Override decisions. It expands through every affected live group, freezes a
+  2–25-record scope, accepts an exact replacement partition, produces a
+  zero-write preview, requires Materialization off/reason/exact-ID confirmation,
+  and atomically ends or supersedes all affected relationship objects before
+  creating the versioned replacement. Each application creates an immutable
+  `CCD Identity Correction`; no CCD Master record is edited or merged.
+- A unified System-Manager-only **Combined Identity Component** workflow for a
+  finalized pending Splink decision, Exception Component Review, or reviewed/
+  approved Tiered Activation Item that overlaps existing identity state. Its
+  zero-write preview recursively includes complete active Groups, applicable active
+  Different exclusions, and all connected finalized pending sources across the
+  three routes. Unreviewed work remains adjacent evidence only. The operator
+  chooses All Same, All Different, or one complete Partial partition; Apply is
+  one lock-protected transaction with a frozen scope fingerprint and immutable
+  `CCD Identity Overlap Resolution` audit. A true already-represented result
+  records No Change without creating identity objects. Changed results require
+  Materialization enabled, while a tripped QC circuit breaker fails closed.
+- Tiered structural overlaps are reachable without weakening ordinary batch
+  safety: Preview Approve All links each unsafe component to a Recommendation;
+  a manager may freeze exactly one structurally overlapping component into an
+  **Overlap Resolution** batch and use the Exception item's **Preview / Resolve
+  Overlap** action while the batch is still Reviewed. The preview explicitly
+  identifies the pending records, existing Identity Group, shared bridge
+  record, current members/Decision, active Different exclusions, and displays
+  every complete-scope record side by side near the top. Compact governed
+  values and the original Recommendation ID are also embedded in the overlap
+  rows, so linked documents are optional audit navigation. Reviewed batches are preview-only;
+  Apply remains server-blocked until explicit approval. Stale or non-structural
+  unsafe components remain rejected, and ordinary batch Apply refuses
+  unresolved Exception items.
+- Corrected Component Review evidence now separates the immutable reviewer
+  outcome from the live identity state. The original decision is labelled
+  **Original reviewed grouping (historical)**, while the latest decision in its
+  supersession chain is shown as **Current effective identity result**, with
+  distinct links to the original Decision, correction audit, and active
+  replacement Decision. Out-of-component identities are counted without
+  exposing their record IDs to reviewers who lack sensitive access.
+- An idempotently managed **CCD Master Identity Resolution** Form Client Script
+  for the current custom CCD Master DocType. Frappe skips `doctype_js` hooks for
+  custom DocTypes, so checking the form metadata is a mandatory deployment
+  acceptance test.
+- A read-only **CCD Identity Resolution Register** Script Report and an
+  idempotently managed **CCD Master Identity Resolution List** Client Script.
+  The CCD Master List button opens server-backed filters for current identity
+  state, CCD/source/group, Group status and member count, and current Different
+  relationships. The register recomputes fingerprint-scoped current state from
+  the governed identity objects; it deliberately stores no derived fields on
+  CCD Master, so using it cannot modify source records or stale frozen matching
+  snapshots.
+- Recommendation lifecycle vocabulary migrated to
+  Proposed/Approved/Exception/Withdrawn/Superseded without changing the live
+  recommendation population.
+
+## Verification evidence
+
+### Automated checks
+
+- All new and modified DocType JSON files parse successfully.
+- Python compilation succeeds.
+- The changed automation/identity/overlap/correction suite passes 24/24 in both
+  the workspace and deployed Frappe container. In broad container discovery,
+  62 tests passed; two older import-only test classes could not initialize
+  because the unrelated private-app `__init__.py` now imports `api_ai` while
+  those legacy tests replace Frappe with a minimal stub. Product imports,
+  migration, and runtime startup succeeded; the legacy test harness remains a
+  separate cleanup item rather than being hidden as a passing full suite.
+- Frappe migration, role/policy setup, workflow installation, asset build,
+  cache clear, and service restart completed.
+- The frontend-local public renderer is served with HTTP 200, and live CCD
+  Master FormMeta contains `load_identity_resolution` through the managed
+  Client Script.
+- All backend, scheduler, and queue containers are running; two workers are
+  online.
+- Re-running setup is designed to be idempotent.
+- The 2026-08-28 zero-write Automatic Tiered preview returned both automatic
+  controls off, Materialization off, no authorized Canary/Policy, zero selected
+  components, zero planned identity objects, and `would_write_now = false`.
+  Decision/Group/Membership/Exclusion/Event counts remained
+  `60/56/136/33/381` afterward.
+- The deployed combined preview was exercised against finalized Splink
+  candidate `d41a94b39e` inside an isolated rollback-only transaction. It
+  expanded the complete active two-record Group, included the one authoritative
+  pending source, displayed seven adjacent unreviewed sources without absorbing
+  them, recognized the final state as Already Represented, and left all live
+  object counts unchanged. The candidate returned to `Applied` afterward.
+- A real non-manager Reviewer received `System Manager role is required` from
+  the combined-preview API. The changed-partition Apply path was rejected while
+  Materialization was off. With commit suppressed, the Already Represented path
+  transiently created exactly one `No Change` overlap audit and one Event, no
+  identity objects, then a full rollback restored every count and source status.
+- Tiered recommendation `roocvcovtr` exercised the dedicated entry route with
+  commit suppressed. It transiently produced one Reviewed **Overlap
+  Resolution** batch and one Exception item carrying
+  `partial_existing_identity_group`; normal approval exposed a safe zero-write
+  three-record combined preview, ordinary batch Apply was refused, and rollback
+  restored both batch/item counts. No batch or identity object from the probe
+  remains.
+- Live API checks prove all three identity-view branches: a partial-match
+  singleton returns `Resolved Separately` with three current exclusions, its
+  linked pair member returns `Linked` despite also participating in exclusions,
+  and an untouched record returns `Not Grouped`.
+- The Component Review and Splink Review Candidate list hooks and frontend
+  assets are deployed. Their bulk APIs reject ineligible rows without writing
+  and report the global switch state.
+- On 2026-08-27 the deployed **CCD Identity Resolution Register** returned 99
+  current resolved CCD Masters: 84 `Linked`, zero `Needs Revalidation`, and 15
+  fingerprint-current `Resolved Separately`. Live checks also exercised the
+  Linked/minimum-group-size and Separate/active-Different filters, confirmed
+  the standard Report and enabled custom-DocType List Client Script, and found
+  both Materialization and the automation circuit breaker at `0`. The report
+  returned the same governed result for an existing CCD Match Reviewer while
+  rejecting Guest with `CCD Match Reviewer role is required`. The deployment
+  did not update any CCD Master document.
+- The two-record Splink false-Same correction schema and form are deployed.
+  Candidate `8ac22119c8` passed the zero-write eligibility preview with exactly
+  one active Group and two active Memberships while Materialization was off.
+  A real non-manager Reviewer received `System Manager role is required` from
+  the preview API; that same reviewer's evidence payload reported
+  `can_reverse_materialization = false` and omitted the manager-only correction
+  Decision field. A later authorized development exercise successfully reversed
+  one candidate; its old Group/two Memberships and Same Decision remain as
+  ended/superseded history and its replacement Different exclusion is active.
+- The complete-component correction schema, manager UI, and three server APIs
+  are deployed. Zero-write live previews succeeded for Tiered decision
+  `0t7kj3mkhn` (`Same → Different`, two records) and Component Review decision
+  `vknlnno1mu` (`All Same → Partial`, three records). A same-source replacement
+  raised the explicit governance-warning confirmation, and a real non-manager
+  reviewer received `System Manager role is required`. These previews created
+  zero `CCD Identity Correction` records and changed no identity relationships.
+- The full Apply lifecycle was then exercised for both those Tiered and
+  Component Review replacements with commit temporarily disabled inside an
+  isolated development transaction. Tiered produced the expected Different
+  result (1 Group / 2 Memberships ended; 1 exclusion planned); Component Review
+  produced the expected Partial result (1 Group / 3 Memberships ended; 1 new
+  Group / 2 Memberships / 2 exclusions planned). Each transaction was explicitly
+  rolled back; temporary correction/decision names do not exist, both original
+  Decisions and Groups remain Active, and the Event count remains 96.
+- Corrected Component Review `l30evokvod` was used to verify the historical
+  versus current renderer. Its immutable reviewed result remains Partial
+  (`R1 = R3; R2 separate`), while its active Governance Override correctly
+  displays All Same (`R1 = R2 = R3`) and links to both the correction audit and
+  current Decision.
+- Splink candidate `ed9e2a25c4` is now `Applied`. This bulk-workflow deployment
+  performed no identity writes. The remaining finalized candidate `8ac22119c8`
+  passes the new zero-write bulk preview with two frozen fingerprints, two
+  matching timestamps, zero conflicts, one planned Group, and two planned
+  Memberships while Materialization is off.
+- Current **Preview Approve All** covers 3,511 remaining complete Tiered
+  components / 3,519 recommendations. It reports 3,510 safe, one unsafe, zero
+  stale, and 7,024 planned Memberships; the one conflict is
+  `partial_existing_identity_group` from the already identified Splink/Tiered
+  overlap and is not eligible for a batch.
+
+### Historical pre-overlap read-only state (2026-08-25 snapshot)
+
+This table is the immutable pre-overlap acceptance baseline, not a current
+inventory. Later controlled development tests intentionally added overlap and
+correction audits; their exact evidence is recorded in the following matrix.
+
+| Measure | Result |
+| --- | ---: |
+| Frozen Tiered recommendations | 3,961 |
+| Proposed | 3,517 |
+| Exception | 433 |
+| Approved | 10 |
+| Superseded recommendations | 1 |
+| Splink candidates available | 11,177 |
+| Splink candidates assigned | 0 |
+| Component reviews | 191 |
+| Identity decisions | 33 total (27 active / 6 superseded) |
+| Identity groups | 30 total (25 active / 5 ended) |
+| Identity memberships | 68 total (58 active / 10 ended) |
+| Identity exclusions/events | 9 active exclusions / 163 events |
+| Complete identity corrections | 4 total (3 applied / 1 superseded) |
+| Combined overlap resolutions | 0 |
+| Activation batches | 5 (4 Applied / 1 Reviewed; 10 Applied, 1 Corrected, and 1 Exception items) |
+| Finalized Component Reviews | 9 (7 Applied / 2 Corrected) |
+| Applied Splink candidates | 5 |
+| Reversed Splink candidates | 2 |
+| Review batches | 0 |
+| QC investigations | 0 |
+
+### Completed overlap acceptance matrix — development
+
+The following browser tests were completed on 2026-08-26 and 2026-08-27 using
+the deployed workflows. Each successful write has an immutable **CCD Identity
+Overlap Resolution** audit. IDs in the tables are retained so another operator
+can reproduce the audit trail without relying on this conversation. The three
+synthetic route pairs use the isolated records documented in
+`SYNTHETIC_OVERLAP_TEST_GUIDE.md`; they are development evidence, not production
+identity assertions.
+
+#### Route-combination coverage
+
+| Route combination | Applied source sequence | Overlap Resolution | Observed result | Acceptance |
+| --- | --- | --- | --- | --- |
+| Tiered Evidence ↔ Splink | Splink candidate `9209ece5f3`, then Tiered recommendation `rsuqpl6o3l` / Activation Item `sg3e2q8s90` | `66qehmis6i` | The complete three-record scope replaced the touched two-member Splink Group atomically | Pass |
+| Tiered Evidence ↔ Exception Component | Canary `c9ar8irjoh`, then Component Review `c9pgvrnb5i` | `cd9u47trjp` | The synthetic three-record combined scope was applied as one Group | Pass |
+| Tiered Evidence ↔ Tiered Evidence | Canary `c9rmhiqd5t`, then recommendation `c9r0h2l7eg` | `6jf2eq47pg` | The later synthetic Tiered edge expanded and replaced the earlier two-record Group atomically | Pass |
+| Splink ↔ Splink | Candidate `0c9c266414`, then candidate `f8a4546e22` | `618ri00drh` | The shared-record bridge produced the expected complete three-member Group | Pass |
+| Splink ↔ Exception Component | Candidate `4f4117525a`, then Component Review `l2s0d4o677` | `h3d9b677fb` | The complete four-record scope replaced the touched Splink Group atomically | Pass |
+| Exception Component ↔ Exception Component | Component Review `c9sa51sbfi`, then Component Review `c9s1cprvlp` | `gq809ba7gn` | The synthetic shared-record bridge produced the expected complete three-member Group | Pass |
+
+This covers the complete unordered route cross-product: each route against
+itself and each of the three pairwise cross-route combinations.
+
+#### Result-mode and safety coverage
+
+| Behaviour | Test source / immutable audit | Observed result | Acceptance |
+| --- | --- | --- | --- |
+| Already Represented / No Change | Candidate `8acbcca1ee`; Overlap Resolution `fpeumc18r9` | Status `No Change`; no Decision, Group, Membership, or Exclusion was created or ended | Pass |
+| Partial Match | Existing candidate `007bb1c300`, then candidate `609cd5fe5e`; Overlap Resolution `4gk9d6et1i` | One two-record Group remained active, the third record remained separate, and two cross-partition Different exclusions were created | Pass |
+| All Different | Existing candidate `00115bf214`, then candidate `a548d9e68c`; Overlap Resolution `opumkjd37b` | The old Group and two Memberships ended; all three records became singletons with three pairwise Different exclusions | Pass |
+| Bridge two active Groups | Groups `0t7rirlenu` and `vknjkjc60g` through false bridge candidate `cc8e335528`; Overlap Resolution `m2tq57q3pn` | Both complete Groups were absorbed into one five-member result; no partial Group was left behind | Pass |
+| Override active Different | Candidate `ca5fc0b764`; Overlap Resolution `ohgcu05pg2` | Six active cross-group exclusions were explicitly superseded before one five-member Same Group was created | Pass |
+| Stale after preview | Candidate `fe4cfb9294` | Apply failed closed with both `source_modified_after_snapshot` and `identity_fingerprint_changed`; no Overlap Resolution or identity write was created | Pass |
+| Correct an applied overlap — split bridge back | Correction `1o8s384r8t` against the decision from `m2tq57q3pn` | The temporary five-member bridge Group ended and the original two complete Groups were recreated with cross-group exclusions | Pass |
+| Correct an applied overlap — restore Different partition | Correction `pitqlh34sk` against the decision from `ohgcu05pg2` | The temporary five-member Group ended and the prior two-group partition plus six exclusions was recreated | Pass |
+
+The `Superseded` status now shown on overlap audits `m2tq57q3pn` and
+`ohgcu05pg2` is the expected result of the two successful correction tests, not
+a failed overlap application. Together these tests accept All Same, Partial
+Match, All Different, and Already Represented/No Change; complete-group
+bridging; explicit Different override; stale-snapshot/fingerprint rejection;
+and correction of an applied overlap. This completes functional overlap
+acceptance on the development site. It does not authorize production
+materialization, establish production identity truth for synthetic records, or
+replace backup, migration-rehearsal, QC/automation, and management-approval
+gates.
+
+### Completed QC and bounded-automation acceptance matrix — development
+
+The browser and scheduler acceptance described in
+`SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md` was completed on 2026-08-31 against the
+isolated six-component fixture Canary `o2c67pgdv9` and policy `pilot-1.6`. A
+fresh pre-write backup was taken at
+`sites/frontend/private/backups/20260831_102011-frontend-*`. All fixture
+identities are synthetic development evidence; none is a production identity
+assertion or production authorization.
+
+The tested governed configuration was:
+
+| Control | Accepted value |
+| --- | --- |
+| Maximum complete components per Automatic Tiered execution | 2 |
+| Automatic Tiered scheduler hook | Daily |
+| QC cases per cadence | 2 |
+| QC assignment interval | 7 days |
+| QC SLA | 14 days |
+| Rolling QC window | 100 comparable finalized cases |
+| Materialization during bounded write exercises | Explicitly enabled, then disabled |
+| Automatic controls after acceptance | Automatic QC off; Automatic Tiered off |
+
+| Behaviour | Test source / immutable audit | Observed result | Acceptance |
+| --- | --- | --- | --- |
+| Independent QC and masking | First two assigned fixture Recommendations; one System Manager and one ordinary `CCD Match Reviewer` | Two different reviewers produced the required final result. The ordinary reviewer saw masked evidence and no CCD Master links; the manager saw only role-permitted full evidence | Pass |
+| Zero-write automatic preview | Settings preview for Canary `o2c67pgdv9` | Selected two complete components / two Recommendations and planned two Groups / four Memberships. With controls off it reported the exact operational blockers and wrote no record | Pass |
+| Bounded Automatic Tiered | Automatic batches `2qds16kh0f` and `74rnvcp089` | Each independently applied exactly two complete components and created two Groups / four Memberships. The second cycle advanced to different Proposed components rather than duplicating the first | Pass |
+| QC Different circuit breaker | Recommendation `o2d9m3ndmj`; affected Group `2qh35g8jdb`; Investigation `ftkk4gd01f` | A deliberate finalized Different paused the global Tiered circuit breaker, opened one Investigation, and changed only the current shared Group and its Memberships to Needs Revalidation. A blocked cycle created no identity object | Pass |
+| Governed QC-review-error recovery | Investigation `ftkk4gd01f`; Resolve event `ksdeed5aiq`; Group revalidation event `ksdogi5vda`; Resume event `km0gunvljd` | `QC Review Error` preserved the immutable Different history, reactivated the affected Group/Memberships, and excluded that adjudged reviewer mistake from rolling precision. Governed Resume cleared the breaker without re-enabling Automatic Tiered | Pass |
+| Source staleness and identity revalidation | Recommendation `o2ftcsdsre`; CCD Master `HKSR0762581`; Membership `74s5tu1hvk`; Group `74s9mntmlj`; Events `al9tahdk0s` and `pfcc5e4792` | Editing one governed source value made the unfinished QC snapshot Stale and changed the live Membership/Group to Needs Revalidation. Restoring the source and using governed revalidation returned both to Active; the QC Recommendation correctly remained Stale | Pass |
+| Scheduled cadence and deterministic replenishment | Automatic QC Assign event `3qnhng8pse`; Recommendations `o2foiqsla2` and `o2f11mfeca` | A synthetically due cadence assigned exactly two cases, advanced the next cadence by seven days, increased sample count 4→6, assignment cycles 2→3, and replenished count 1→3 | Pass |
+| Cadence idempotency | Immediate repeat of `run_qc_monitor` | Assigned zero additional cases, created no second cadence Event, and left every identity-object and batch count unchanged | Pass |
+| Overdue SLA breaker | Recommendation `o2foiqsla2`; Pause event `vc32rlr1ob` | Moving the open case due date into the past produced one overdue case, changed the Canary to Paused, and set `pause_reason = qc_sla_overdue:1`. A repeat monitor created no duplicate Pause event or identity write | Pass |
+| Overdue recovery | Recommendation `o2foiqsla2`; Resume event `6isgd4k54a` | Independent Same finalization cleared the overdue count. Governed Resume returned the Canary to Monitoring while leaving Automatic Tiered off | Pass |
+| Remaining-QC closure | Recommendation `o2f11mfeca` | Independent Same finalization left zero open assigned non-stale QC cases, so no fixture SLA remains capable of becoming overdue | Pass |
+| Live scheduler registration | Scheduled Job Type `api_identity_qc.run_qc_monitor` | Frappe scheduler enabled; job frequency Daily; `stopped = 0`; two workers online; recorded scheduled execution at `2026-08-31 00:00:51` UTC. The persistent process is `bench schedule`; generic workers execute the short-lived Python method | Pass |
+
+At the final fixture checkpoint, Canary `o2c67pgdv9` is Active and Monitoring
+with six selected QC cases: five finalized, four comparable Same, zero
+comparable Different, one adjudged review error excluded from precision, and
+one Stale unfinished snapshot. Rolling precision is `1.0`; its Wilson 95% lower
+bound is `0.510099980`, as expected for only four comparable successes. The
+100-case rolling window is not complete, so the precision circuit breaker is
+not yet eligible to decide policy reliability. Overdue count is zero,
+assignment cycles are three, and three cases were added through continuous
+replenishment.
+
+The acceptance ended fail-closed: Live Materialization, Automatic QC, and
+Automatic Tiered are all off; the circuit breaker is clear; and the authorized
+synthetic Canary, policy, and bounded test values remain recorded but inert.
+The daily monitor remains registered so already-existing QC safety state would
+still be checked, but with no open assigned non-stale fixture case and both
+automatic controls off it cannot create a QC assignment or identity object.
+
+### Zero-write activation preview
+
+For canary `p1mucmhogd`, **Preview Approve All** returned:
+
+| Measure | Result |
+| --- | ---: |
+| Selected complete components | 3,509 |
+| Selected recommendations | 3,517 |
+| Safe components | 3,507 |
+| Unsafe components | 2 (`partial_existing_identity_group`) |
+| Stale components | 0 |
+| Planned identity groups | 3,507 |
+| Planned memberships | 7,018 |
+| Conflict counts | 2 |
+
+The preview made zero writes. Three separately approved development batches
+have applied nine Tiered components in total; they created the live counts
+recorded above but did not change the zero-write meaning of Preview.
+
+The 3,509 selected components are 3,505 two-record components containing one
+recommendation each and four three-record components containing three
+recommendations each. Thus the eight-count difference between recommendations
+and components is an edge-count difference. The two unsafe components are
+excluded from planned writes, leaving 7,018 planned member records.
+
+## Next controlled decision
+
+Functional overlap and QC/automation acceptance are complete on the development
+site. The next controlled phase is production migration/readiness assessment,
+not another automatic development wave. It must include a clean-target
+migration rehearsal, a fresh post-acceptance backup checkpoint, verification of
+scheduled backups and restore, named reviewer/manager ownership, production
+capacity and monitoring checks, and an explicit management decision covering
+the exact production Canary, Policy, QC cadence, SLA, rolling window, automatic
+component limit, and rollback authority.
+
+Materialization, Automatic QC, and Automatic Tiered are currently off, and the
+circuit breaker is clear. The retained synthetic Canary and policy settings are
+inert acceptance evidence and do not authorize production use. No production
+rollout, wider development wave, or unattended write is implicit in this
+status. Manual demonstrations must keep Automatic Tiered off; enable Live
+Materialization only for the deliberate creation step, and disable it again for
+any correction or rollback exercise.
+
+Server transfer, clean-target installation, backup/restore, cutover, rollback,
+and new-centre onboarding are covered in
+`ERPNext_SERVER_MIGRATION_RUNBOOK.md`. Identity activation remains a separate
+operation after a successful transfer.

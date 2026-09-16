@@ -1,0 +1,21 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["last_sequence", "backfill_completed", "backfill_run", "backfill_completed_at"],
+ "fields": [
+  {"default": "0", "fieldname": "last_sequence", "fieldtype": "Int", "label": "Last Non-recycled Sequence", "read_only": 1},
+  {"default": "0", "fieldname": "backfill_completed", "fieldtype": "Check", "label": "Initial Backfill Completed", "read_only": 1},
+  {"fieldname": "backfill_run", "fieldtype": "Link", "label": "Completed Backfill Run", "options": "CCD Unified Person Backfill Run", "read_only": 1},
+  {"fieldname": "backfill_completed_at", "fieldtype": "Datetime", "label": "Backfill Completed At", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Unified Person Settings",
+ "permissions": [
+  {"read": 1, "role": "System Manager"}
+ ],
+ "track_changes": 0
+}

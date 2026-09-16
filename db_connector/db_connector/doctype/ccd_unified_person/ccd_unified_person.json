@@ -1,0 +1,39 @@
+{
+ "actions": [],
+ "autoname": "field:unified_person_number",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "unified_person_number", "sequence_number", "status", "canonical_person",
+  "active_member_count", "current_identity_group", "issued_at", "issued_by",
+  "origin_type", "origin_doctype", "origin_document", "last_reconciled_at",
+  "retired_at", "retired_reason"
+ ],
+ "fields": [
+  {"fieldname": "unified_person_number", "fieldtype": "Data", "in_list_view": 1, "label": "Unified Person Number", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "sequence_number", "fieldtype": "Int", "label": "Non-recycled Sequence", "read_only": 1, "reqd": 1, "unique": 1},
+  {"default": "Active", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Active\nAlias\nRetired", "read_only": 1, "reqd": 1},
+  {"fieldname": "canonical_person", "fieldtype": "Link", "in_list_view": 1, "label": "Resolves To", "options": "CCD Unified Person", "read_only": 1},
+  {"default": "0", "fieldname": "active_member_count", "fieldtype": "Int", "in_list_view": 1, "label": "Active CCD Members", "read_only": 1},
+  {"fieldname": "current_identity_group", "fieldtype": "Link", "label": "Current Identity Group", "options": "CCD Identity Group", "read_only": 1},
+  {"fieldname": "issued_at", "fieldtype": "Datetime", "in_list_view": 1, "label": "Issued At", "read_only": 1, "reqd": 1},
+  {"fieldname": "issued_by", "fieldtype": "Link", "label": "Issued By", "options": "User", "read_only": 1, "reqd": 1},
+  {"fieldname": "origin_type", "fieldtype": "Select", "label": "Issuance Origin", "options": "Backfill\nNew CCD Master\nIdentity Resolution\nSplit\nReconciliation", "read_only": 1, "reqd": 1},
+  {"fieldname": "origin_doctype", "fieldtype": "Link", "label": "Origin DocType", "options": "DocType", "read_only": 1},
+  {"description": "Immutable origin snapshot; it remains readable if the source document is later retired.", "fieldname": "origin_document", "fieldtype": "Data", "label": "Origin Document", "read_only": 1},
+  {"fieldname": "last_reconciled_at", "fieldtype": "Datetime", "label": "Last Reconciled At", "read_only": 1},
+  {"fieldname": "retired_at", "fieldtype": "Datetime", "label": "Retired At", "read_only": 1},
+  {"fieldname": "retired_reason", "fieldtype": "Small Text", "label": "Retirement Reason", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Unified Person",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"}
+ ],
+ "sort_field": "sequence_number",
+ "sort_order": "ASC",
+ "track_changes": 0
+}

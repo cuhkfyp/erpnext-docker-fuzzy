@@ -1,0 +1,502 @@
+# Cross-Centre Identity Matching Proof of Concept
+
+## Executive decision
+
+**POC status:** Completed. Before 2026-08-19, the ERPNext evaluation approvals
+and Pilot promotion were recorded by the project operator; they were not
+management approvals. On 2026-08-19, management reviewed the POC results and
+live follow-up demonstration and approved this follow-up workflow:
+
+1. Tiered Evidence may create reversible, safety-gated High recommendations.
+2. Splink scores at or above the selected Review cutoff may prioritize optional
+   human review only.
+
+This is workflow-level management approval. It is not approval for record
+merging, automatic `Is Matched?`, a probabilistic automatic High tier, or any
+other production mutation. The current recommendation canary remains `Ready`
+with no formal ERPNext approval/activation recorded.
+
+The `pilot-1.6` policy document itself remained in `Draft` when its evidence was
+evaluated. Approval of an evaluation run did not promote the policy. It was
+subsequently and separately promoted to `Pilot` for a recommendation-only
+canary preview; it has not been promoted to `Approved`.
+
+The existing fuzzy-score baseline was not accepted as sufficient proof that two
+records represent the same person. This POC therefore compared five approaches
+in a recommendation-only shadow workflow, locked the evaluated data snapshots,
+and used blinded human labels as ground truth.
+
+The validated result is deliberately narrow:
+
+> An exact full Chinese or English name plus exact independent evidence
+> (phone, birthday, or email), with no trusted-identifier conflict, may be
+> emitted as a reversible High same-person recommendation.
+
+The targeted validation found 100 confirmed Same pairs among 100 uniformly
+sampled unseen High predictions. Estimated precision is 100%, with a Wilson
+95% confidence interval of 96.30% to 100%. This exceeds the policy target of
+95% at the lower confidence bound.
+
+Management's 2026-08-19 workflow approval does **not** authorize record
+merging, automatic `Is Matched?` updates, or a general probability threshold.
+Formal approval/activation of the current 3,528 `Proposed` recommendation
+records has not been recorded in ERPNext.
+
+The latest `pilot-1.6` representative recalibration was finalized on
+2026-08-13. It improved Splink's usefulness for prioritizing human review but
+still did not produce a validated probabilistic High threshold. Its proposed
+review-priority cutoff was initially selected and recorded by the project
+operator. Management approved its role in the optional human-review workflow
+on 2026-08-19 only; it is not a Same/Different boundary.
+
+## Business problem
+
+`CCD Master` consolidates client records from multiple centres and systems.
+The current baseline produces a fuzzy percentage from names and other fields,
+but that number has three important limitations:
+
+1. It is a similarity score, not a calibrated probability of identity.
+2. Missing evidence can lower a true pair while common names can raise a false
+   pair.
+3. One threshold cannot express identifier conflicts, independent evidence,
+   source scope, or the difference between missing and disagreeing values.
+
+Reviewing every record or every generated candidate pair is also infeasible.
+The POC therefore asks a more useful question: can a narrow, measurable High
+tier be automated while humans handle only exceptions and quality-control
+samples?
+
+## Scope and non-goals
+
+### Included
+
+- Explicitly governed CCD source mappings.
+- Cross-source candidate discovery and bounded blocking.
+- Five shadow approaches evaluated on identical locked pairs.
+- `Same`, `Different`, and `Unsure` human labels.
+- Independent double review, positive confirmation, and adjudication.
+- Calibration/held-out evaluation and confidence intervals.
+- Masking, role separation, stale-record detection, and audit history.
+- A reversible High-recommendation rollout design.
+
+### Not included
+
+- Automatic merging or deletion of CCD records.
+- Automatic setting of production `Is Matched?` fields.
+- Claims that every Review candidate must be processed.
+- A validated general Splink High threshold.
+- A recall estimate from the High-only validation cohort.
+- Empirical validation of an HKID-only High path; no such path was represented
+  in the targeted 100-pair sample.
+
+## POC architecture
+
+```mermaid
+flowchart TD
+    A[Governed CCD registrations] --> B[Canonical identity projection]
+    B --> C[Normalize and validate evidence]
+    C --> D[Bounded cross-source candidate generation]
+    D --> E[Five shadow model outputs]
+    E --> F[Locked representative sample]
+    E --> G[Locked High-only validation sample]
+    F --> H[Blinded human review]
+    G --> H
+    H --> I[Double review and adjudication]
+    I --> J[Held-out metrics and confidence intervals]
+    J --> K[Management decision]
+    K --> L[Reversible recommendation-only canary]
+```
+
+The shadow evaluator never changes the production matching table or
+`Is Matched?`. Raw CCD data remains inside ERPNext; GitHub contains code,
+synthetic tests, documentation, and non-identifying aggregate results only.
+
+## Terminology and human decisions
+
+| Term | Meaning |
+| --- | --- |
+| Model High | A pair met a versioned automatic evidence rule. It remains a reversible pair-level recommendation. |
+| Model Review | The evidence is potentially useful but insufficient for automatic identity acceptance. |
+| Human Confirmed Same | Independent reviewers/adjudication confirmed identity. This does not rewrite the historical model tier. |
+| Human Confirmed Different | Reviewers confirmed that the records should not link. |
+| Exception | A High candidate blocked from automatic recommendation by conflicts, clusters, stale data, source scope, or an unvalidated subgroup. |
+
+A reviewer may confirm a model-Review pair as `Same`. Operationally it can
+then be handled as a high-confidence **human decision**, but it must remain
+distinguishable from a model-generated High prediction for audit and future
+measurement.
+
+## The five evaluated approaches
+
+| Method | Purpose | POC conclusion | Automatic use |
+| --- | --- | --- | --- |
+| Existing baseline formula | Reproduce each registration's current fuzzy logic as the control | Current flagged pairs had low precision; the score is not a probability | No new automatic decisions; retain temporarily as the control/current path |
+| Tiered Evidence (gated) | Apply deterministic evidence meaning and block trusted-ID conflicts | Its narrow exact-name-plus-independent-evidence High population passed targeted validation | Follow-up reversible recommendation workflow management-approved on 2026-08-19; formal canary activation pending |
+| Recoverable-Conflict Tier | Test whether strong secondary evidence can recover a trusted-ID conflict | Useful for moving some conflicts to ordinary Review; it never promotes a conflict directly to High | Human exception routing only |
+| Splink probability | Learn local Fellegi-Sunter agreement/disagreement weights | Useful for ranking Review candidates; no probability threshold met automatic High requirements | Ranking, diagnosis, and future recalibration only |
+| Hybrid | Apply deterministic safety gates around calibrated Splink scores | Cannot add automatic High decisions without a validated probabilistic High threshold | Shadow/review prioritization only |
+
+The methods have not been discarded. They now have different governed roles:
+control, automatic High recommendation, conflict routing, queue ranking, and
+future research.
+
+## Evidence and results
+
+### Sanitized data profile
+
+| Measure | POC value |
+| --- | ---: |
+| CCD Master records in the locked governed snapshot | 251,520 |
+| Governed registered sources | 10 |
+| Production records | 161,112 (64.06%) |
+| UAT records | 89,377 (35.53%) |
+| Fake/test records | 1,031 (0.41%) |
+| Candidate pairs after phone-quality correction | 821,592 |
+| Eligible unseen candidate pairs | 820,886 |
+| Eligible unseen deterministic High pairs | 3,950 |
+| High population in source groups represented by the 100-pair sample | 3,933 (99.57%) |
+| Sparse-group High candidates retained as exceptions | 17 |
+
+Three unregistered source labels contained one record each. They were excluded
+rather than having field mappings guessed.
+
+The environment classification was reproduced from the frozen snapshot at
+2026-08-12 16:49:33 UTC using the management-supplied source-name and physical-
+hostname rules. All ten governed sources matched exactly one rule, with no
+ambiguous or unclassified records. The identifying rule values, source labels,
+and hostnames are intentionally omitted from this sanitized GitHub POC.
+
+These proportions describe records, not candidate pairs or labeled pairs.
+Because 35.53% of the governed records are UAT, the current validation is a
+mixed-environment POC result and must not be described as a production-only
+performance estimate. A production-only claim requires a separately stratified
+evaluation.
+
+### POC result summary for management
+
+| Follow-up path | Measured POC result | Current operational result |
+| --- | --- | --- |
+| Tiered Evidence recommendation | Targeted validation: 100/100 Same; 100% precision; Wilson 95% lower bound 96.30%; recall not estimated | 3,961 High candidates; 3,528 passed safety gates as `Proposed`; 433 remain inactive exceptions; 0 Active |
+| Splink-prioritized human Review | At cutoff `0.938995074`: calibration precision/recall 66.67%/61.22%; held-out precision/recall 56.52%/61.90%; no automatic High threshold | 816,534 eligible pairs scored; 11,177 queued as model `Review`; 0 human reviews complete |
+
+The first row is a reversible model recommendation path. The second is only a
+human-work ordering path. Neither row reports merged people or production match
+changes, because none occurred.
+
+### Latest `pilot-1.6` representative threshold evaluation
+
+- 500 previously unseen labeled pairs: 70 Same and 430 Different.
+- 100 randomized double-review assignments.
+- Every observed Same required two distinct human confirmations, resulting in
+  175 total double-reviewed pairs.
+- 93% raw agreement on the randomized double-review set.
+- Cohen's kappa: 0.7009.
+- 25 disagreements/Unsure outcomes required adjudication.
+- No stale labeled pairs at finalization.
+- Candidate generation covered 821,592 pairs without truncation or skipped
+  oversized blocks.
+- Splink produced usable probabilities for 490/500 pairs. The ten unavailable
+  pairs were excluded from probability calibration rather than treated as
+  score zero; all ten were human-labeled Different.
+
+Current five-method observations:
+
+| Method/result | Precision | Recall | Interpretation |
+| --- | ---: | ---: | --- |
+| Baseline current flag, all labeled | 28.76% | 62.86% | Control only |
+| Baseline current flag, held-out | 23.64% | 61.90% | Too imprecise for automatic identity decisions |
+| Tiered Evidence High, all labeled (16 predictions) | 100% | 22.86% | No false positives observed; targeted validation below provides the stronger precision evidence |
+| Tiered Evidence High, held-out (3 predictions) | 100% | 14.29% | Correct but deliberately narrow |
+| Recoverable-Conflict High | Same as Tiered High | Same as Tiered High | Two observed conflicts stayed Conflict Review and both were Different |
+| Splink Review cutoff, calibration | 66.67% | 61.22% | Cutoff `0.938995074`, selected by maximum calibration F1 |
+| Splink Review cutoff, held-out | 56.52% | 61.90% | Human-review prioritization only, not automatic matching |
+| Hybrid High | No predictions | 0% | Disabled because Splink has no validated High cutoff |
+| Hybrid Review queue, held-out | 10.82% | 100% | Preserves deterministic Review signals but is too broad to be a mandatory backlog |
+
+Neither the baseline nor corrected Splink model produced a valid automatic High
+threshold meeting 95% precision with the required sample size. Splink's
+promising research cutoff `0.991342105` was 17/17 Same in calibration and 5/5
+Same in held-out data, but both supports are below the policy minimum of 30.
+It therefore remains unapproved for automatic High.
+
+#### How to interpret the Splink Review cutoff
+
+The selected `0.938995074` cutoff is a first-priority operating point, not a
+Same/Different boundary:
+
+- It prioritized 68/490 scored pairs: 43 Same and 25 Different.
+- It captured 43/70 confirmed Same pairs (61.43% recall across all scored
+  labeled pairs).
+- Another 27 confirmed Same pairs scored below the cutoff.
+- A score below the cutoff means lower review priority, never confirmed
+  Different.
+- Deterministic Review and Conflict candidates remain eligible for human work
+  regardless of their Splink score. Splink orders optional work within the
+  available staffing capacity.
+
+Lowering the cutoff increases recall but also expands the queue and reduces its
+Same-pair yield. The final operating queue size should therefore be governed by
+review capacity and an explicit recall-versus-precision objective, while the
+stored probability remains a ranking value.
+
+#### 5,000 versus 20,000 training feasibility
+
+A 2026-08-14 read-only experiment held the approved 500 labels, frozen data,
+worker, Splink 4.0.16, DuckDB 1.4.5, and both 250,000-pair compute budgets
+constant. The 5,000-record control scored all 500 pairs with average precision
+0.6242, ROC AUC 0.8714, and top-30 precision 73.33%; it still produced no valid
+automatic High threshold. The 20,000-record run exceeded the worker memory
+limit before it could score the labels, so no performance comparison can be
+made and no larger model is proposed.
+
+This is a capacity boundary, not evidence that 20,000 would be more or less
+accurate. Testing it responsibly requires an isolated higher-memory worker or
+a more memory-efficient training design, followed by comparison on the same
+frozen labels and fresh human validation. The approved v1.1 model, Review
+cutoff, live 11,177-row queue, and production matching state were unchanged.
+
+The run also found that the worker loaded DuckDB 1.4.5 while the repository
+declares 1.5.5. Both experiment arms used the same runtime, but this dependency
+precedence drift must be corrected and versioned before a future probability
+model is eligible for promotion. Correcting it may change scores, so it must be
+treated as a new adapter/runtime calibration rather than silently applied to
+the existing cutoff.
+
+### Targeted deterministic High validation
+
+- Deterministic uniform sample from 3,950 previously unseen High predictions.
+- 100/100 pairs received two independent reviews.
+- Final labels: 100 Same, 0 Different.
+- 98% raw reviewer agreement; two disagreements were adjudicated.
+- Precision: 100%.
+- Wilson 95% precision interval: 96.30% to 100%.
+- Recall was not estimated because every sampled pair was model-predicted High.
+- Approval history: the run was first approved in ERPNext by the project
+  operator. Management reviewed this result on 2026-08-19 and approved its use
+  in the follow-up recommendation workflow.
+
+The near-zero kappa in this High-only cohort is a prevalence artifact: almost
+every ordinary label was `Same`, and the two `Different` labels occurred on
+opposite disagreement pairs. Raw agreement and adjudicated precision are more
+informative for this deliberately enriched cohort.
+
+### Recommendation-only canary preview
+
+After the approved policy snapshot was promoted to `Pilot`, the full preview
+completed on the latest governed snapshot:
+
+| Measure | Preview result |
+| --- | ---: |
+| Governed records | 251,520 |
+| Candidate pairs | 821,592 |
+| Candidate generation truncated / skipped blocks | No / 0 |
+| Tiered High candidates | 3,961 |
+| Passed all gates (`Proposed`) | 3,528 |
+| Safety exceptions | 433 |
+| Active recommendations | 0 |
+| Recommendation records / immutable creation events | 3,961 / 3,961 |
+| High components / largest component | 3,711 / 7 |
+| Stale High records | 0 |
+| Exception component-review cases | 191 |
+| Deterministic random QC sample | 100 |
+
+Every current exception has reason `one_to_many_source_conflict`; the whole
+affected component stays inactive rather than selecting one convenient edge.
+No current High candidate failed source-coverage validation, although future
+unvalidated source-pair candidates will still fail closed. The audit found no
+CCD Master modification after the frozen snapshot, no duplicate recommendation
+key, and no recommendation missing its creation event.
+
+`Proposed` means eligible for a separately authorized recommendation-status
+approval. It does not mean merged, matched in production, or human-confirmed.
+
+The deployed review interface shows pair evidence on the recommendation form.
+Ordinary reviewers receive masked values and no CCD record keys; users with the
+Sensitive Reviewer role and System Managers retain full permitted values and
+record links. The 433 exception edges are presented as 191 connected-component
+cases with `All Same`, `Partial Match`, `All Different`, and `Unsure` decisions.
+Human submissions are independent and auditable. A separate deterministic
+100-pair sample supports ongoing QC of Proposed recommendations.
+
+### Optional Splink Review queue
+
+The selected maximum-F1 operating point is now implemented as a separate,
+capacity-based human-review pool. It does not share `Proposed`/`Exception`
+statuses with deterministic High recommendations:
+
+| Measure | Queue result |
+| --- | ---: |
+| Governed candidate pairs | 821,592 |
+| Tiered High pairs excluded | 3,961 |
+| Previously human-used pairs excluded | 1,097 |
+| Eligible pairs scored exactly once | 816,534 |
+| Reproduced training records / stale endpoints | 5,000 / 0 |
+| Approved maximum-F1 cutoff | 0.938995074 |
+| Candidates stored at or above cutoff | 11,177 |
+| Candidate generation truncated / skipped blocks | No / 0 |
+| Automatic High decisions | 0 |
+
+Every stored row remains model tier `Review` and is ranked from highest score
+downward. The observed queued range is 0.940477224 to 0.999996923; the minimum
+is above the selected cutoff simply because no eligible score occurred between
+those values. A score below the cutoff remains lower priority, not `Different`.
+
+The integrity audit found no overlap with Tiered High or prior human-used pairs,
+no duplicate pair key, no prefilled human label, and no CCD Master change after
+queue start. Ordinary reviewers see masked values without record IDs or scores.
+Sensitive Reviewers/System Managers retain permitted full-value links, while
+individual probabilities remain System Manager-only. `Same` requires two
+independent confirmations; `Unsure` and disagreement require adjudication.
+The 11,177 candidates are an optional pool whose assignment must be limited by
+operational capacity, not a mandatory backlog.
+
+## Important quality findings during the POC
+
+The POC tested the surrounding workflow as well as the matching rules. It found
+and corrected several issues before approval:
+
+1. Partial, masked, or check-digit-invalid HKIDs cannot become trusted global
+   identifiers. Only complete valid HKIDs may use the governed global scope.
+2. An obvious sequential phone placeholder shared by many records created an
+   oversized block. Malformed, non-eight-digit, and full sequential phone
+   values are now missing evidence rather than exact identity evidence.
+3. Splink originally received missing values as empty strings and learned
+   missing/missing pairs as exact agreements. Missing comparison fields are now
+   SQL nulls. The repaired High-run probabilities range from 0.998864 to 1.0.
+4. Randomized reviewer-agreement assignments are preserved separately from
+   outcome-triggered positive confirmations, preventing biased kappa metrics.
+5. Previous human-used pairs are excluded from later validation cohorts.
+
+The latest `pilot-1.6` 500-pair recalibration still produced no valid automatic
+High threshold. The project operator initially accepted `0.938995074` for
+optional Review prioritization; management approved that limited workflow role
+on 2026-08-19.
+
+## Safety and governance controls
+
+| Risk | Control |
+| --- | --- |
+| Common or similar names | Names alone never create automatic High |
+| Shared family phone/email | High still requires an exact full name; cluster/one-to-many gates remain mandatory |
+| Partial or masked HKID | Never trusted as global identifier evidence |
+| Conflicting trusted identifiers | Gated to human Conflict Review |
+| Dummy or malformed phone data | Removed during normalization before blocking/scoring |
+| New or changed source mapping | Explicit versioned source profile; no inferred mappings |
+| Record changes after sampling | Snapshot timestamps and stale-pair exclusion |
+| Reviewer anchoring | Ordinary reviewers do not see model scores/reason codes |
+| One reviewer confirming a positive | Every Same requires two distinct people |
+| Transitive cluster contradiction | Full cluster safety check before recommendation rollout |
+| Irreversible production action | POC is shadow-only; next phase stores reversible recommendations |
+| Client-data leakage | Local computation, masked identifiers, no raw data in GitHub |
+
+## POC acceptance criteria
+
+| Criterion | Result |
+| --- | --- |
+| Run on locally governed multi-source CCD data | Passed |
+| No production match-table or `Is Matched?` mutation | Passed |
+| Complete representative human label set | Passed |
+| Independent double review and adjudication | Passed |
+| Deterministic High precision lower confidence bound at least 95% | Passed: 96.30% |
+| No truncation or oversized block in corrected High run | Passed |
+| Valid general probabilistic High threshold | Not met; Splink remains review-ranking only |
+| Management approval of the follow-up Tiered recommendation workflow | Passed on 2026-08-19; formal ERPNext canary approval/activation remains unrecorded |
+| Management approval of Splink's optional human-review ordering role | Passed on 2026-08-19; no probabilistic automatic High approved |
+| Reversible recommendation-only preview | Passed: 3,528 Proposed, 433 Exception, 0 Active |
+| Optional Splink Review-priority queue | Passed: all 816,534 eligible pairs scored; 11,177 queued; no automatic High |
+| 20,000-record Splink shadow training on current worker | Resource limit exceeded; no accuracy result and no model change |
+| Production automation approval | Not part of this POC |
+
+## Recommended operating model
+
+The system must not create a 250,000-record manual-review project. After a
+separate rollout authorization:
+
+1. Recompute `pilot-1.6` on the latest data.
+2. Emit passing pairs as reversible model-High recommendations.
+3. Apply trusted-ID conflict, one-to-many, transitive-cluster, stale-record,
+   source-coverage, and data-quality gates.
+4. Activate safe High recommendation records only after aggregate approval.
+5. Route only exceptions and a periodic random QC sample to humans.
+6. Use the deployed Splink queue to rank optional/on-demand Review work. Treat
+   its 11,177 current rows as a capacity-based pool, not a mandatory backlog;
+   `0.938995074` is a first-priority band, not a Same/Different boundary.
+7. Store human-confirmed Review pairs separately from model High predictions.
+
+```mermaid
+flowchart LR
+    A[Latest candidate pair] --> B{Tiered High rule?}
+    B -- No --> C[Leave unmatched or optional ranked Review]
+    B -- Yes --> D{Safety and cluster gates pass?}
+    D -- No --> E[Human exception queue]
+    D -- Yes --> F[Reversible High recommendation]
+    F --> G[Periodic QC sample]
+    E --> H[Human Confirmed Same or Different]
+```
+
+## Next-phase rollout proposal
+
+### Phase 1: recommendation-only engineering — completed
+
+- Versioned recommendations now store model version, evidence reason, snapshot
+  time, source scope, status, and immutable reversal history.
+- The preview generated safe High recommendations without modifying existing
+  match flags.
+- Source-coverage and all other safety failures fail closed as exceptions.
+- Aggregate conflict/cluster counts are available without opening client data.
+
+### Phase 2: controlled canary
+
+- Start with the source groups represented in validation.
+- Compare recommendations against subsequent human/operational outcomes.
+- Review a small random sample of new High predictions for drift.
+- Stop automatically if precision, stale rate, or conflict rate breaches its
+  approved limit.
+
+### Phase 3: separate production decision
+
+Management chooses one explicit action:
+
+1. display recommendations only;
+2. populate the existing Matching Score table; or
+3. set `Is Matched?` automatically.
+
+The POC recommends starting with option 1 or 2. Record merging and automatic
+`Is Matched?` remain out of scope until the canary has been reviewed.
+
+## Limitations
+
+- High validation estimates conditional precision, not candidate-generation
+  recall or total duplicate prevalence.
+- A 100/100 result does not guarantee zero future errors; the 95% lower bound
+  is 96.30%.
+- Three sparse source-pair groups representing 17 historical High candidates
+  were outside the targeted sample. None appeared as a High source-coverage
+  exception in the current preview; future candidates in unvalidated groups
+  remain exception-only.
+- New centres, mapping changes, and data drift require monitoring and may need
+  fresh validation.
+- Pair-level High edges cannot be treated as a person cluster until transitive
+  consistency and one-to-many conflicts are checked.
+- The Splink model remains optional and unsuitable for automatic High decisions
+  until a future labeled cohort validates a probability threshold.
+- The approved Splink Review cutoff misses some true pairs by design: 27/70
+  scored confirmed Same pairs in the latest labeled cohort were below it.
+  Scores below the cutoff must remain lower priority rather than be labeled
+  Different.
+
+## Decision boundary
+
+This POC proves that a narrow deterministic High recommendation tier is viable
+on the evaluated governed data. It does not prove that all fuzzy candidates
+should be matched, that every possible duplicate is discoverable, or that a
+probabilistic score can replace governance and human exception handling.
+
+The follow-up workflow was approved by management on 2026-08-19. The remaining
+governance step is to record the exact activation scope in ERPNext before any
+status changes. If the approval includes the current frozen preview, record:
+
+> Activate the 3,528 safety-gated `Proposed` records as reversible
+> recommendations, leave all 433 exceptions inactive, sample the active cohort
+> for drift/QC, and continue to prohibit production merge or `Is Matched?`
+> mutation.

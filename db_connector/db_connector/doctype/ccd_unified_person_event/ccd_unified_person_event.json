@@ -1,0 +1,38 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "event_key", "unified_person", "related_person", "ccd_master", "identity_group",
+  "event_type", "reason", "origin_doctype", "origin_document", "event_at", "actor", "metadata_json"
+ ],
+ "fields": [
+  {"fieldname": "event_key", "fieldtype": "Data", "hidden": 1, "label": "Event Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "unified_person", "fieldtype": "Link", "in_list_view": 1, "label": "Unified Person", "options": "CCD Unified Person", "read_only": 1, "reqd": 1},
+  {"fieldname": "related_person", "fieldtype": "Link", "label": "Related Unified Person", "options": "CCD Unified Person", "read_only": 1},
+  {"description": "Immutable record-name snapshot; historical source may be retired.", "fieldname": "ccd_master", "fieldtype": "Data", "label": "CCD Master Snapshot", "permlevel": 1, "read_only": 1},
+  {"fieldname": "identity_group", "fieldtype": "Link", "label": "Identity Group", "options": "CCD Identity Group", "read_only": 1},
+  {"fieldname": "event_type", "fieldtype": "Select", "in_list_view": 1, "label": "Event Type", "options": "Issue\nAssign\nEnd Assignment\nMerge Alias\nSplit Reactivate\nRetire\nReconcile", "read_only": 1, "reqd": 1},
+  {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason", "read_only": 1, "reqd": 1},
+  {"fieldname": "origin_doctype", "fieldtype": "Link", "label": "Origin DocType", "options": "DocType", "read_only": 1},
+  {"description": "Immutable origin snapshot; it remains readable if the source document is later retired.", "fieldname": "origin_document", "fieldtype": "Data", "label": "Origin Document", "read_only": 1},
+  {"fieldname": "event_at", "fieldtype": "Datetime", "label": "Event At", "read_only": 1, "reqd": 1},
+  {"fieldname": "actor", "fieldtype": "Link", "label": "Actor", "options": "User", "read_only": 1, "reqd": 1},
+  {"fieldname": "metadata_json", "fieldtype": "Code", "label": "Metadata", "options": "JSON", "permlevel": 2, "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Unified Person Event",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "event_at",
+ "sort_order": "DESC",
+ "track_changes": 0
+}
