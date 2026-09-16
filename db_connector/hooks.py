@@ -9,12 +9,14 @@ after_migrate = ["db_connector.identity_resolution_setup.after_migrate"]
 
 doctype_js = {
     "CCD Master": "public/js/ccd_master_identity_resolution.js",
+    "CCD Unified Person": "public/js/ccd_unified_person.js",
 }
 
 doctype_list_js = {
     "CCD Master": "public/js/ccd_master_identity_resolution_list.js",
     "CCD Match Component Review": "public/js/ccd_match_component_review_list.js",
     "CCD Match Review Candidate": "public/js/ccd_match_review_candidate_list.js",
+    "CCD Unified Person": "public/js/ccd_unified_person_list.js",
 }
 
 app_include_js = [

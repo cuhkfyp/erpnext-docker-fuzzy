@@ -15,7 +15,10 @@ without writing that number onto `CCD Master`.
 
 - Open a CCD Master and select **Identity Resolution** to see its current
   Unified Person Number and active aliases.
-- Open **CCD Unified Person** for the permanent registry.
+- Open **CCD Unified Person** for the permanent registry. Its list has a
+  one-click **Unified Person Register** button, and each registry record has an
+  **Identity Resolution → Unified Person Register** button that opens the
+  report pre-filtered to that number.
 - Open the **CCD Unified Person Register** report for current or historical
   assignments, source lineage, and validity dates.
 - Open **CCD Identity Resolution Register** for the existing operational view;
