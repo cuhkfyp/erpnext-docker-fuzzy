@@ -5,6 +5,7 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		add_tiered_control(frm);
 		add_breaker_control(frm);
 		add_integrity_control(frm);
+		add_notification_control(frm);
 		frm.add_custom_button(__("Preview Automatic Tiered Run"), () => preview_automatic(frm), __("Automation"));
 		if (frm.doc.automatic_tiered_enabled) {
 			frm.add_custom_button(
@@ -25,6 +26,27 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		}
 	},
 });
+
+function add_notification_control(frm) {
+	if (!frm.doc.automation_notifications_enabled) return;
+	frm.add_custom_button(
+		__("Send Test Notification"),
+		() => frappe.call({
+			method: "db_connector.api_identity_notifications.send_test_automation_notification",
+			freeze: true,
+			callback(response) {
+				const result = response.message || {};
+				frappe.msgprint({
+					title: __("Automation email notification"),
+					indicator: result.status === "Queued" ? "green" : "orange",
+					message: `<p>${__("Status")}: ${esc(result.status)}</p>` +
+						`<p>${__("Recipients")}: ${esc(result.recipient_count || 0)}</p>`,
+				});
+			},
+		}),
+		__("Automation"),
+	);
+}
 
 function add_integrity_control(frm) {
 	frm.add_custom_button(

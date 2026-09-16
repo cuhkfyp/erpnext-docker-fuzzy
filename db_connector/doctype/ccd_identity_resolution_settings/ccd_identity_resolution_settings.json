@@ -6,6 +6,7 @@
   "materialization_enabled", "automation_controls_section", "automatic_tiered_enabled", "automation_paused", "pause_scope", "pause_reason", "automation_control_revision",
   "automatic_tiered_canary", "automatic_tiered_policy", "automatic_tiered_components_per_run", "automatic_tiered_schedule", "automatic_tiered_authorization_event", "last_automatic_run_at", "last_automatic_batch", "last_automatic_status", "last_automatic_error",
   "qc_controls_section", "automatic_qc_assignment_enabled", "qc_cases_per_week", "qc_assignment_interval_days", "rolling_qc_window", "qc_sla_days",
+  "notification_controls_section", "automation_notifications_enabled", "automation_notification_recipients",
   "manual_defaults_section", "initial_pilot_wave_components", "demo_holdout_components", "default_review_batch_size"
  ],
  "fields": [
@@ -33,6 +34,9 @@
   {"default": "7", "fieldname": "qc_assignment_interval_days", "fieldtype": "Int", "label": "QC Assignment Interval Days"},
   {"default": "100", "fieldname": "rolling_qc_window", "fieldtype": "Int", "label": "Rolling QC Window"},
   {"default": "14", "fieldname": "qc_sla_days", "fieldtype": "Int", "label": "QC SLA Days"},
+  {"fieldname": "notification_controls_section", "fieldtype": "Section Break", "label": "Automation Email Notifications"},
+  {"default": "0", "description": "Send an operational summary after the daily monitor, after a manual automatic cycle, and whenever a manager manually assigns new QC cases. Email delivery failures never roll back identity or QC work.", "fieldname": "automation_notifications_enabled", "fieldtype": "Check", "label": "Automation Email Notifications Enabled"},
+  {"description": "Plain email addresses separated by commas, semicolons, spaces, or new lines.", "fieldname": "automation_notification_recipients", "fieldtype": "Small Text", "label": "Automation Notification Recipients"},
   {"fieldname": "manual_defaults_section", "fieldtype": "Section Break", "label": "Manual Workflow Defaults"},
   {"default": "100", "fieldname": "default_review_batch_size", "fieldtype": "Int", "label": "Suggested Review Batch Size"}
  ],

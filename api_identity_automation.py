@@ -17,6 +17,7 @@ from db_connector.api_identity_qc import (
     SETTINGS_DOCTYPE,
     _append_control_event,
     _lock_settings,
+    _notify_after_commit,
     _pause_automation,
     _require_manager,
     _set_single_values,
@@ -247,9 +248,13 @@ def _execute_cycle() -> dict[str, Any]:
             "skipped_unsafe_component_count": created.get(
                 "skipped_unsafe_component_count", 0
             ),
+            "skipped_components": created.get("skipped_components", []),
         }
 
     batch = frappe.get_doc(BATCH_DOCTYPE, batch_name)
+    # The batch creation already committed. Recording it immediately ensures a
+    # later apply failure can still link operators to the exact failed batch.
+    _update_last_run(status="Prepared", batch=batch.name)
     if not batch.is_automatic or int(batch.automation_control_revision or 0) != frozen_revision:
         frappe.throw("The frozen automatic batch authorization is stale")
     if batch.status == "Reviewed":
@@ -258,7 +263,14 @@ def _execute_cycle() -> dict[str, Any]:
         frappe.throw(f"Automatic batch is not applicable from status {batch.status}")
     if batch.status == "Applied":
         _update_last_run(status="Already Applied", batch=batch.name)
-        return {"status": "Already Applied", "batch": batch.name}
+        return {
+            "status": "Already Applied",
+            "batch": batch.name,
+            "skipped_unsafe_component_count": created.get(
+                "skipped_unsafe_component_count", 0
+            ),
+            "skipped_components": created.get("skipped_components", []),
+        }
 
     # Control actions and direct master-switch saves must wait on this lock.
     # Conversely, a control change committed before this point changes the
@@ -279,6 +291,10 @@ def _execute_cycle() -> dict[str, Any]:
             "status": "Blocked Before Apply",
             "batch": batch.name,
             "blockers": sorted(set(locked_blockers)),
+            "skipped_unsafe_component_count": created.get(
+                "skipped_unsafe_component_count", 0
+            ),
+            "skipped_components": created.get("skipped_components", []),
         }
     result = _apply_activation_batch(batch.name, allow_automatic=True)
     _update_last_run(status=str(result["status"]), batch=batch.name)
@@ -289,6 +305,7 @@ def _execute_cycle() -> dict[str, Any]:
         "skipped_unsafe_component_count": created.get(
             "skipped_unsafe_component_count", 0
         ),
+        "skipped_components": created.get("skipped_components", []),
     }
 
 
@@ -303,8 +320,23 @@ def run_automatic_tiered_cycle(*, scheduled: bool = False) -> dict[str, Any]:
         return _execute_cycle()
     except Exception as exc:
         frappe.db.rollback()
+        last_status = str(
+            frappe.db.get_single_value(SETTINGS_DOCTYPE, "last_automatic_status")
+            or ""
+        )
+        batch_name = (
+            str(
+                frappe.db.get_single_value(
+                    SETTINGS_DOCTYPE, "last_automatic_batch"
+                )
+                or ""
+            )
+            if last_status == "Prepared"
+            else ""
+        )
         _update_last_run(
             status="Failed",
+            batch=batch_name,
             error=f"{type(exc).__name__}:{str(exc)[:110]}",
         )
         frappe.log_error(
@@ -315,7 +347,7 @@ def run_automatic_tiered_cycle(*, scheduled: bool = False) -> dict[str, Any]:
             raise
         return {
             "status": "Failed",
-            "batch": "",
+            "batch": batch_name,
             "error": f"{type(exc).__name__}:{str(exc)[:110]}",
         }
     finally:
@@ -326,4 +358,27 @@ def run_automatic_tiered_cycle(*, scheduled: bool = False) -> dict[str, Any]:
 @frappe.whitelist()
 def run_automatic_tiered_now() -> dict[str, Any]:
     _require_manager()
-    return run_automatic_tiered_cycle(scheduled=False)
+    try:
+        result = run_automatic_tiered_cycle(scheduled=False)
+    except Exception as exc:
+        failure = {
+            "status": "Failed",
+            "batch": str(
+                frappe.db.get_single_value(
+                    SETTINGS_DOCTYPE, "last_automatic_batch"
+                )
+                or ""
+            ),
+            "error": f"{type(exc).__name__}:{str(exc)[:180]}",
+        }
+        _notify_after_commit(
+            "db_connector.api_identity_notifications.notify_manual_automatic_cycle",
+            failure,
+            error=failure["error"],
+        )
+        raise
+    result["notification"] = _notify_after_commit(
+        "db_connector.api_identity_notifications.notify_manual_automatic_cycle",
+        result,
+    )
+    return result

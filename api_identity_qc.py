@@ -42,6 +42,25 @@ def _require_manager() -> None:
         frappe.throw("System Manager role is required", frappe.PermissionError)
 
 
+def _notify_after_commit(
+    method: str, result: dict[str, Any], **kwargs: Any
+) -> dict[str, Any]:
+    """Invoke optional notification code without affecting committed work."""
+    try:
+        return frappe.get_attr(method)(result, **kwargs)
+    except Exception as exc:
+        frappe.db.rollback()
+        frappe.log_error(
+            title="Identity automation notification invocation failed",
+            message=frappe.get_traceback(),
+        )
+        return {
+            "status": "Failed",
+            "recipient_count": 0,
+            "error": f"{type(exc).__name__}:{str(exc)[:180]}",
+        }
+
+
 def _lock_settings() -> None:
     frappe.db.sql(
         "SELECT field FROM `tabSingles` WHERE doctype = %s ORDER BY field FOR UPDATE",
@@ -689,6 +708,7 @@ def _assign_qc_cases(
     return {
         "run": run.name,
         "assigned": len(available),
+        "recommendations": [str(row.name) for row in available],
         "replenished": replenished,
         "due_at": due,
         "assignment_event": event,
@@ -707,6 +727,9 @@ def assign_qc_cases(run_name: str, count: int | str | None = None) -> dict[str, 
         run_name, requested, automated=False, advance_cadence=True
     )
     frappe.db.commit()
+    result["notification"] = _notify_after_commit(
+        "db_connector.api_identity_notifications.notify_qc_assignment", result
+    )
     return result
 
 
@@ -1070,25 +1093,48 @@ def set_automatic_qc_assignment(
     }
 
 
-def run_qc_monitor() -> None:
+def run_qc_monitor() -> dict[str, Any]:
     if not frappe.db.table_exists(RUN_DOCTYPE):
-        return
-    settings = frappe.get_single(SETTINGS_DOCTYPE)
-    if settings.automatic_qc_assignment_enabled:
-        run_qc_cadence()
-    runs = frappe.get_all(
-        RUN_DOCTYPE,
-        filters={"status": ["in", ["Ready", "Active"]], "qc_sample_count": [">", 0]},
-        pluck="name",
-        limit_page_length=100,
+        return {"status": "Not Installed"}
+    result: dict[str, Any] = {
+        "status": "Running",
+        "qc_cadence": {"status": "Disabled", "assigned": 0},
+        "qc_monitors": [],
+        "automatic_tiered": {"status": "Not Run", "batch": ""},
+    }
+    try:
+        settings = frappe.get_single(SETTINGS_DOCTYPE)
+        if settings.automatic_qc_assignment_enabled:
+            result["qc_cadence"] = run_qc_cadence()
+        runs = frappe.get_all(
+            RUN_DOCTYPE,
+            filters={
+                "status": ["in", ["Ready", "Active"]],
+                "qc_sample_count": [">", 0],
+            },
+            pluck="name",
+            limit_page_length=100,
+        )
+        for run_name in runs:
+            result["qc_monitors"].append(refresh_qc_monitor(run_name))
+        frappe.db.commit()
+
+        # Keep the existing daily scheduler hook as the single orchestration
+        # point. The automatic worker performs fresh lock-time checks.
+        from db_connector.api_identity_automation import run_automatic_tiered_cycle
+
+        result["automatic_tiered"] = run_automatic_tiered_cycle(scheduled=True)
+        result["status"] = "Completed"
+    except Exception as exc:
+        frappe.db.rollback()
+        result["status"] = "Failed"
+        result["error"] = f"{type(exc).__name__}:{str(exc)[:180]}"
+        result["notification"] = _notify_after_commit(
+            "db_connector.api_identity_notifications.notify_daily_monitor", result
+        )
+        raise
+
+    result["notification"] = _notify_after_commit(
+        "db_connector.api_identity_notifications.notify_daily_monitor", result
     )
-    for run_name in runs:
-        refresh_qc_monitor(run_name)
-    frappe.db.commit()
-
-    # Keep the existing daily scheduler hook as the single orchestration point.
-    # The automatic worker has its own default-off controls and fresh lock-time
-    # checks, so importing it here cannot create identity objects by itself.
-    from db_connector.api_identity_automation import run_automatic_tiered_cycle
-
-    run_automatic_tiered_cycle(scheduled=True)
+    return result

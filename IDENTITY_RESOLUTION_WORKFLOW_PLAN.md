@@ -1104,10 +1104,13 @@ step 8. Complete High-validation run `i04u936qii` and replacement threshold run
 `dh1ml9skc7` are approved. Truncated
 threshold run `tuvlt5me82` remains immutable evidence but cannot authorize the
 optional queue. Policy `pilot-1.7` is Pilot and replacement Canary
-`snakh96bf9` is Ready. Its 2,086 exception components and 100 randomized QC
-recommendations are unreviewed, and no optional Splink queue exists. Step 9
-remains deliberately gated, not incomplete automation work. Current evidence
-and exact verification results are recorded in
+`snakh96bf9` has advanced from Ready to Active through separately authorized
+pilot/bounded materialization. Its 2,086 exception components remain
+unreviewed; two of the 100 randomized QC recommendations are assigned and none
+is finalized or overdue. Human-only Splink queue `i3uek3cjjd` is Ready and has
+five completed Same reviews. Step 9 remains a governed, backup-dependent
+operation rather than implicit permission for wider materialization. Current
+evidence and exact verification results are recorded in
 `IDENTITY_RESOLUTION_IMPLEMENTATION_STATUS.md`.
 
 ### 27.1 Complete deterministic-High universe repair — 2026-09-15
@@ -1178,8 +1181,35 @@ unreviewed randomized QC sample. All recommendation keys, pair fingerprints,
 and audit-event links are complete and unique; no activation batch, identity
 decision, identity group, or membership was created.
 
-The optional, always-human Splink Review queue may now be generated against
-this Ready canary and approved cutoff `0.865469813`. Exception-component and QC
-review remain human work. Unified-person materialization remains a later,
-separately backed-up and accepted-canary gate; all materialization and
-automatic controls remain off.
+The optional, always-human Splink Review queue was subsequently generated as
+`i3uek3cjjd` against this Canary and approved cutoff `0.865469813`. It is Ready,
+untruncated, and contains 12,144 human-review candidates after complete scoring
+of 817,217 eligible pairs. Exception-component, QC, and Splink decisions remain
+human work. Any wider unified-person materialization remains separately
+governed and backup-dependent.
+
+### 27.3 Operational notification boundary — 2026-09-16
+
+Production operation must not depend on a manager opening every Identity
+Group, Decision, Exception, Membership, QC, and batch list each day. The
+Settings singleton therefore has a separate default-off email notification
+switch and a validated recipient list. Notification configuration is not a
+matching-policy or materialization authorization and does not increment the
+automation control revision.
+
+The Daily scheduled orchestration remains the only unattended monitoring path:
+it releases QC work when the cadence is due, refreshes active QC safety state,
+commits, invokes one independently governed bounded Tiered cycle, and finally
+queues one consolidated email. That message reports assignment, rolling QC,
+overdue/stale/failure state, automation status/blockers, counts, and direct
+Desk links to relevant Canary, recommendations, investigations, batch,
+finished components, Decisions, Groups, and exception reviews.
+
+The manual **Run One Automatic Cycle Now** action does not simulate or invoke
+the Daily monitor. It runs only the bounded Tiered cycle and sends a separate
+cycle result. A manager's manual QC assignment sends a notification only when
+it actually releases new cases; cadence assignments are already included in
+the Daily message. Email composition and queueing happen after business commits
+and are fail-open for notification only: SMTP/rendering errors are logged but
+cannot roll back or block identity/QC work. A System Manager can verify the
+route with **Send Test Notification**, which changes no identity or QC record.

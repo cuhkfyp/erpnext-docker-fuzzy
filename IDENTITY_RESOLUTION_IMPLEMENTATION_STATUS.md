@@ -4,19 +4,20 @@
 
 | Item | Verified state |
 | --- | --- |
-| Date | 2026-09-15 UTC |
-| Status updated | 2026-09-15 UTC |
+| Date | 2026-09-16 UTC |
+| Status updated | 2026-09-16 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
 | Deployment | Schema, services, controllers, managed CCD Master Form/List Client Scripts, and frontend assets deployed |
-| Materialization | Disabled by default (`materialization_enabled = 0`) |
+| Materialization | Currently disabled (`materialization_enabled = 0`); this remains the final write gate |
 | Automation circuit breaker | Not tripped (`automation_paused = 0`) |
-| Automatic QC / Tiered | Both separately controlled and disabled (`automatic_qc_assignment_enabled = 0`, `automatic_tiered_enabled = 0`) |
+| Automatic QC / Tiered | Both governed controls are enabled on replacement Canary `snakh96bf9`; Tiered is presently fail-closed because Live Materialization is off (`would_write_now = false`) |
+| Automation email | Enabled for the configured operational recipient; daily monitor, manual automatic-cycle, and newly assigned QC notifications are active |
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
 | 2026-08-31 historical totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
 | 2026-09-13 integrity restoration | Audited orphan retirement run `6v6b99amn6` applied; the post-repair audit reports zero active issues and zero planned writes while retaining marked historical evidence |
-| Current matching gate | Complete High run `i04u936qii` and complete threshold run `dh1ml9skc7` are approved; policy `pilot-1.7` is Pilot; replacement Canary `snakh96bf9` is Ready with no materialization; the optional Splink queue has not been generated |
+| Current matching gate | Complete High run `i04u936qii` and threshold run `dh1ml9skc7` are approved; policy `pilot-1.7` is Pilot; Canary `snakh96bf9` is Active; human-only Splink queue `i3uek3cjjd` is Ready and untruncated |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 | QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
 
@@ -204,18 +205,73 @@ is the sole automatic-readiness reason. This does not block the governed
 human-only Review queue. Complete High run `i04u936qii` is also `Completed`
 and `Approved`, and policy `pilot-1.7` is now `Pilot`.
 
-Replacement Canary `snakh96bf9` completed atomically and is `Ready`. Across
+Replacement Canary `snakh96bf9` completed atomically and was initially `Ready`. Across
 256,092 governed records it generated 78,104 deterministic-High candidates
 with no truncation or skipped blocks, then retained 75,971 High recommendations:
 68,262 Proposed and 7,709 safely quarantined as Exception. The exceptions map
 exactly to 2,086 unreviewed component cases; a deterministic randomized sample
 of 100 Proposed recommendations is also ready for QC. All 75,971 recommendation
-keys, pair fingerprints, and audit-event links are unique and complete. There
-are zero activation-batch, identity-decision, identity-group, or materialized
-membership links. The optional Splink Review queue has not been generated.
-Live Materialization, Automatic QC, and Automatic Tiered remain disabled,
-`would_write_now = false`, and the orphan audit remains at zero active issues
-and zero planned writes.
+keys, pair fingerprints, and audit-event links are unique and complete. At the
+initial generation checkpoint there were zero activation-batch,
+identity-decision, identity-group, or materialized-membership links. Subsequent
+explicit pilot and bounded automatic actions advanced the Canary to `Active`.
+The current Canary rollup records 41 active recommendations, 68,220 Proposed,
+7,709 Exceptions, 43 materialized Groups, and 88 materialized Memberships.
+Its 100-case QC sample has two cases assigned, none finalized or overdue, and
+the next cadence is due 2026-09-23. Live Materialization is currently off;
+Automatic QC and Automatic Tiered are enabled at control revision 18 with a
+two-component limit, so the automatic preview correctly reports
+`master_materialization_disabled` and `would_write_now = false`.
+
+Human-only Splink Review queue `i3uek3cjjd` is `Ready`. It reproduced all
+893,979 untruncated candidates with zero skipped blocks, excluded 75,955 Tiered
+High pairs and 807 prior-review pairs, scored all 817,217 eligible pairs, and
+queued 12,144 at or above cutoff `0.865469813`. Five human reviews are complete
+and all five are Same; none needs adjudication. Splink remains incapable of
+unattended materialization.
+
+## Automation email notifications — 2026-09-16
+
+Before notification code changed, full backup `20260916_143138-frontend-*` was
+created and verified. Database gzip, public/private file tar gzip archives, and
+site configuration JSON all passed format and archive checks. Their SHA-256
+digests are, respectively,
+`7ed7a607ca615bc5083c8c0daa0a97340afcd356e91326ba70b814b479160c0d`,
+`8eabb8a770309db429ab308e1bb2867585714f729974498d3c7c3140f913bf5f`,
+`4981869048a3fd1d1a29c2846ee62a7ce292921bbf3e949a9c9aff06fb22d219`,
+and `c0ff4032f726d8c73f30edc5d6219298b357df51d9b42883c957337bb852be89`.
+
+`CCD Identity Resolution Settings` now provides a default-off notification
+switch and a validated, delimiter-tolerant recipient list. The live site has
+notifications enabled for its configured operational recipient. This setting
+is deliberately outside the governed matching fields: enabling it did not
+change materialization, either automatic authorization, Canary/Policy, the
+component limit, circuit-breaker state, or control revision. Identity-object
+counts were asserted unchanged in the configuration transaction.
+
+Notification behavior is:
+
+- the existing Daily scheduler runs QC cadence when due, refreshes every active
+  QC monitor, commits that work, runs the bounded Automatic Tiered cycle, then
+  queues one consolidated result email;
+- **Run One Automatic Cycle Now** runs and reports only that bounded Tiered
+  cycle. It does not invoke the daily QC monitor or assignment cadence;
+- a manager's manual QC assignment sends a separate email only when at least
+  one new case is released. Automatically assigned cases are included in the
+  Daily email instead of producing a duplicate message; and
+- summaries link directly to Settings, Canary, assigned recommendations,
+  activation batch, finished component recommendations/Decisions/Groups,
+  skipped unsafe component reviews, and new QC investigations where those
+  records exist. Detail lists are bounded to 100 records per section.
+
+All mail rendering and queueing is best-effort and occurs only after governed
+QC/identity transactions commit. An email failure is logged and returned as a
+notification failure but cannot roll back, interrupt, or change the completed
+identity action. The System Manager form includes **Send Test Notification**.
+Two isolated test messages were queued through the existing default outgoing
+account and reached `Sent` with no SMTP error; generated Desk links use the
+configured HTTPS host. The deployed container suite passes 95/95 tests, and a
+full site migration/build/restart completed successfully.
 
 ## Implemented controls
 

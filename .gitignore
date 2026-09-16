@@ -17,11 +17,13 @@
 !api_identity_automation.py
 !api_identity_correction.py
 !api_identity_human.py
+!api_identity_notifications.py
 !api_identity_qc.py
 !api_identity_retirement.py
 !api_identity_resolution.py
 !api_identity_review_batch.py
 !identity_resolution_setup.py
+!notification_utils.py
 !synthetic_overlap_fixture.py
 !synthetic_qc_automation_fixture.py
 !hooks.py

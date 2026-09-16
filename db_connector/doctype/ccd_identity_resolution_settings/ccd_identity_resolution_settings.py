@@ -1,6 +1,11 @@
 import frappe
 from frappe.model.document import Document
 
+from db_connector.notification_utils import (
+    invalid_notification_recipients,
+    parse_notification_recipients,
+)
+
 
 class CCDIdentityResolutionSettings(Document):
     def before_validate(self):
@@ -75,6 +80,24 @@ class CCDIdentityResolutionSettings(Document):
                 "Rolling QC Window must be at least 73; a smaller window cannot "
                 "reach a 95% Wilson lower bound even when every result is Same"
             )
+
+        recipients = parse_notification_recipients(
+            self.automation_notification_recipients
+        )
+        invalid = invalid_notification_recipients(
+            self.automation_notification_recipients
+        )
+        if invalid:
+            frappe.throw(
+                "Automation Notification Recipients contains invalid plain email "
+                "addresses: " + ", ".join(invalid)
+            )
+        if self.automation_notifications_enabled and not recipients:
+            frappe.throw(
+                "Add at least one Automation Notification Recipient before "
+                "enabling email notifications"
+            )
+        self.automation_notification_recipients = "\n".join(recipients)
 
         if self.automatic_tiered_canary and self.automatic_tiered_policy:
             canary_policy = frappe.db.get_value(

@@ -517,7 +517,7 @@ Any blocking key that would produce a block larger than `max_block_size = 10,000
 
 For `dob_surname`, `chi_name_prefix`, and `eng_name`, the blocking step does not generate all combinations within a block. Instead, each record nominates its **closest normalized-name counterpart per other source**, and nominations are ranked from the sparsest endpoints first. DOB+surname compares complete normalized Chinese and English names; the two prefix routes compare their governed given-name representation. Stronger exact-route provenance is retained when the same pair is also nominated. This prevents large integrated sources and common surname/date or name-prefix blocks from consuming the candidate budget before sparse sources receive any candidates.
 
-The deployed `pilot-blocking-1.7` full-population validation on 2026-09-15 produced 893,979 unique cross-source candidates from 256,092 governed records, with `candidate_truncated = 0`, zero skipped blocks, and recovery of all 225 eligible non-stale known-Same evaluation pairs. Fresh threshold run `dh1ml9skc7` reproduced those counts and finalized 500 non-stale decisions: 56 Same and 444 Different. All 100 randomized double reviews and 46 additional positive confirmations completed across three distinct reviewers; six disagreements were adjudicated. Randomized agreement was 97% with Cohen's kappa `0.852652259`. Splink had 40 calibration and 16 held-out positives and selected human-review cutoff `0.865469813`; held-out precision, recall, and F1 were 45%, 56.25%, and 50%. No automatic probabilistic High threshold was accepted. Management approved `dh1ml9skc7` and complete High run `i04u936qii`, then policy `pilot-1.7` was promoted to Pilot. Replacement Canary `snakh96bf9` is Ready after complete generation of 78,104 deterministic-High candidates and 75,971 High recommendations: 68,262 Proposed and 7,709 safely quarantined as Exception. Its 2,086 exception components and 100 randomized QC recommendations are unreviewed. It created no activation batch or identity links; the optional human-only Splink Review queue has not yet been generated.
+The deployed `pilot-blocking-1.7` full-population validation on 2026-09-15 produced 893,979 unique cross-source candidates from 256,092 governed records, with `candidate_truncated = 0`, zero skipped blocks, and recovery of all 225 eligible non-stale known-Same evaluation pairs. Fresh threshold run `dh1ml9skc7` reproduced those counts and finalized 500 non-stale decisions: 56 Same and 444 Different. All 100 randomized double reviews and 46 additional positive confirmations completed across three distinct reviewers; six disagreements were adjudicated. Randomized agreement was 97% with Cohen's kappa `0.852652259`. Splink had 40 calibration and 16 held-out positives and selected human-review cutoff `0.865469813`; held-out precision, recall, and F1 were 45%, 56.25%, and 50%. No automatic probabilistic High threshold was accepted. Management approved `dh1ml9skc7` and complete High run `i04u936qii`, then policy `pilot-1.7` was promoted to Pilot. Replacement Canary `snakh96bf9` completed generation of 78,104 deterministic-High candidates and 75,971 High recommendations: 68,262 Proposed and 7,709 safely quarantined as Exception at that checkpoint. It has since advanced to Active through separately governed pilot/bounded actions. Human-only Splink Review queue `i3uek3cjjd` reproduced all 893,979 candidates without truncation or skipped blocks, scored all 817,217 eligible pairs after exclusions, queued 12,144 at cutoff `0.865469813`, and is Ready. Five reviews are complete and all are Same; the queue still has no unattended decision path.
 
 ---
 
@@ -1246,6 +1246,38 @@ flowchart LR
     H -- Yes --> HIGH[Proposed High]
 ```
 
+### 29.5 Daily and manual notification boundary
+
+```mermaid
+flowchart TD
+    D[Daily scheduler] --> Q[Run due QC assignment and refresh QC monitors]
+    Q --> C1[Commit QC transaction]
+    C1 --> A[Run one independently governed bounded Tiered cycle]
+    A --> C2[Commit or record blocked/failed cycle]
+    C2 --> E1[Queue one consolidated operational email]
+
+    M[Run One Automatic Cycle Now] --> A2[Run bounded Tiered cycle only]
+    A2 --> E2[Queue manual-cycle result email]
+
+    QA[Manager assigns QC cases] --> C3[Commit assignment]
+    C3 -->|assigned count greater than zero| E3[Queue QC assignment email]
+
+    E1 --> X{Email succeeds?}
+    E2 --> X
+    E3 --> X
+    X -- Yes --> S[SMTP delivery]
+    X -- No --> L[Log notification failure; preserve committed identity/QC result]
+```
+
+The recipient list and notification switch live in **CCD Identity Resolution
+Settings**. They do not authorize materialization or change the automation
+control revision. Emails contain bounded Desk links and operational IDs/counts,
+not copied raw identity evidence. The manual action intentionally does not run
+the Daily QC monitor.
+
 ---
 
-*This guide reflects the management-approved post-POC operating baseline as of 2026-08-19. All statements are grounded in the current repository code and POC documentation. No real client data or source-system identifiers are included.*
+*This guide reflects the management-approved post-POC baseline with verified
+implementation updates through 2026-09-16. Statements are grounded in the
+current repository code and operating documentation. No raw client identity
+values are included.*

@@ -89,6 +89,7 @@ for container in "${containers[@]}"; do
 			db_connector/api_identity_automation.py \
 			db_connector/api_identity_correction.py \
 			db_connector/api_identity_human.py \
+			db_connector/api_identity_notifications.py \
 			db_connector/api_identity_overlap.py \
 			db_connector/api_identity_qc.py \
 			db_connector/api_identity_retirement.py \
@@ -96,6 +97,7 @@ for container in "${containers[@]}"; do
 			db_connector/api_identity_review_batch.py \
 			db_connector/identity_resolution_setup.py \
 			db_connector/identity_snapshot_backfill.py \
+			db_connector/notification_utils.py \
 			db_connector/synthetic_overlap_fixture.py \
 			db_connector/synthetic_qc_automation_fixture.py \
 			db_connector/hooks.py \

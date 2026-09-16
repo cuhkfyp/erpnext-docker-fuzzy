@@ -7,6 +7,10 @@ from fuzzy_matching.automation import (
     deterministic_qc_selection,
     rolling_qc_summary,
 )
+from notification_utils import (
+    invalid_notification_recipients,
+    parse_notification_recipients,
+)
 
 
 class AutomationHelperTests(unittest.TestCase):
@@ -61,6 +65,22 @@ class AutomationHelperTests(unittest.TestCase):
         self.assertTrue(cadence_due(None, now))
         self.assertTrue(cadence_due(now - timedelta(seconds=1), now))
         self.assertFalse(cadence_due(now + timedelta(seconds=1), now))
+
+    def test_notification_recipients_support_common_separators_and_deduplicate(self):
+        self.assertEqual(
+            parse_notification_recipients(
+                "ops@example.com; reviewer@example.org\nOPS@example.com"
+            ),
+            ("ops@example.com", "reviewer@example.org"),
+        )
+
+    def test_notification_recipient_validation_rejects_non_mailboxes(self):
+        self.assertEqual(
+            invalid_notification_recipients(
+                "valid@example.com, display name <wrong@example.com>, no-domain@example"
+            ),
+            ("display", "name", "<wrong@example.com>", "no-domain@example"),
+        )
 
 
 if __name__ == "__main__":
