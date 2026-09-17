@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any
@@ -25,6 +26,9 @@ SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
 RETIREMENT_DOCTYPE = "CCD Identity Retirement Run"
 HISTORICAL_SOURCE_RETIRED = "Historical Source Retired"
 CHUNK_SIZE = 1_000
+REGISTRATION_OPERATION_TTL_SECONDS = 21_600
+REGISTRATION_PREVIEW_TIMEOUT_SECONDS = 1_800
+REGISTRATION_APPLY_TIMEOUT_SECONDS = 7_200
 
 
 def _require_manager() -> None:
@@ -2001,10 +2005,7 @@ def apply_bulk_deletion(
     )
 
 
-@frappe.whitelist()
-def preview_registration_cancellation(registration_name: str) -> dict[str, Any]:
-    """Preview the CCD Master and identity impact of cancelling a revision."""
-    _require_manager()
+def _registration_cancellation_preview(registration_name: str) -> dict[str, Any]:
     registration = frappe.get_doc("CCD Registration", registration_name)
     if int(registration.docstatus or 0) != 1:
         frappe.throw("Only a submitted CCD Registration can be cancelled")
@@ -2016,6 +2017,207 @@ def preview_registration_cancellation(registration_name: str) -> dict[str, Any]:
         "stable_source_key": source,
         "generated_doctype": str(registration.get("ccd_reg_doctype") or ""),
     }
+
+
+@frappe.whitelist()
+def preview_registration_cancellation(registration_name: str) -> dict[str, Any]:
+    """Synchronous bench/API compatibility entry point for small sources."""
+    _require_manager()
+    return _registration_cancellation_preview(registration_name)
+
+
+def _registration_operation_cache_key(operation_token: str) -> str:
+    return f"ccd_registration_retirement_operation:{operation_token}"
+
+
+def _registration_operation_active_key(
+    operation: str, registration_name: str, requested_by: str
+) -> str:
+    digest = hashlib.sha256(
+        f"{operation}\x1f{registration_name}\x1f{requested_by}".encode()
+    ).hexdigest()
+    return f"ccd_registration_retirement_active:{digest}"
+
+
+def _cache_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value or "")
+
+
+def _registration_operation_payload(operation_token: str) -> dict[str, Any] | None:
+    raw = frappe.cache.get_value(
+        _registration_operation_cache_key(operation_token)
+    )
+    if not raw:
+        return None
+    try:
+        value = json.loads(_cache_text(raw))
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _set_registration_operation(
+    operation_token: str, payload: dict[str, Any]
+) -> None:
+    frappe.cache.set_value(
+        _registration_operation_cache_key(operation_token),
+        canonical_json(payload),
+        expires_in_sec=REGISTRATION_OPERATION_TTL_SECONDS,
+    )
+
+
+def _existing_registration_operation(
+    operation: str, registration_name: str, requested_by: str
+) -> dict[str, str] | None:
+    active_key = _registration_operation_active_key(
+        operation, registration_name, requested_by
+    )
+    operation_token = _cache_text(frappe.cache.get_value(active_key))
+    payload = (
+        _registration_operation_payload(operation_token)
+        if operation_token
+        else None
+    )
+    if payload and str(payload.get("status")) in {"Queued", "Running"}:
+        return {
+            "operation_token": operation_token,
+            "status": str(payload.get("status")),
+        }
+    return None
+
+
+def _queue_registration_operation(
+    *,
+    operation: str,
+    registration_name: str,
+    requested_by: str,
+    method: str,
+    timeout: int,
+    kwargs: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    existing = _existing_registration_operation(
+        operation, registration_name, requested_by
+    )
+    if existing:
+        return existing
+    operation_token = uuid.uuid4().hex
+    payload = {
+        "operation": operation,
+        "operation_token": operation_token,
+        "registration": registration_name,
+        "requested_by": requested_by,
+        "status": "Queued",
+        "queued_at": str(frappe.utils.now_datetime()),
+    }
+    _set_registration_operation(operation_token, payload)
+    frappe.cache.set_value(
+        _registration_operation_active_key(
+            operation, registration_name, requested_by
+        ),
+        operation_token,
+        expires_in_sec=REGISTRATION_OPERATION_TTL_SECONDS,
+    )
+    frappe.enqueue(
+        method,
+        queue="long",
+        timeout=timeout,
+        enqueue_after_commit=True,
+        job_id=f"ccd-registration-{operation.lower()}-{operation_token}",
+        operation_token=operation_token,
+        registration_name=registration_name,
+        requested_by=requested_by,
+        **(kwargs or {}),
+    )
+    frappe.db.commit()
+    return {"operation_token": operation_token, "status": "Queued"}
+
+
+@frappe.whitelist(methods=["POST"])
+def start_registration_cancellation_preview(
+    registration_name: str,
+) -> dict[str, str]:
+    """Queue a potentially expensive zero-write impact preview."""
+    _require_manager()
+    registration = frappe.get_doc("CCD Registration", registration_name)
+    if int(registration.docstatus or 0) != 1:
+        frappe.throw("Only a submitted CCD Registration can be cancelled")
+    registration_source_key(registration)
+    return _queue_registration_operation(
+        operation="Preview",
+        registration_name=str(registration.name),
+        requested_by=str(frappe.session.user),
+        method=(
+            "db_connector.api_identity_retirement."
+            "run_registration_cancellation_preview"
+        ),
+        timeout=REGISTRATION_PREVIEW_TIMEOUT_SECONDS,
+    )
+
+
+def run_registration_cancellation_preview(
+    operation_token: str,
+    registration_name: str,
+    requested_by: str,
+) -> dict[str, Any]:
+    """Long-queue worker for a cancellation impact preview."""
+    if "System Manager" not in set(frappe.get_roles(requested_by)):
+        raise frappe.PermissionError("System Manager role is required")
+    frappe.set_user(requested_by)
+    payload = {
+        "operation": "Preview",
+        "operation_token": operation_token,
+        "registration": registration_name,
+        "requested_by": requested_by,
+        "status": "Running",
+        "started_at": str(frappe.utils.now_datetime()),
+    }
+    _set_registration_operation(operation_token, payload)
+    try:
+        preview = _registration_cancellation_preview(registration_name)
+        payload.update(
+            {
+                "status": "Completed",
+                "completed_at": str(frappe.utils.now_datetime()),
+                "preview": preview,
+            }
+        )
+        _set_registration_operation(operation_token, payload)
+        return preview
+    except Exception as exc:
+        payload.update(
+            {
+                "status": "Failed",
+                "completed_at": str(frappe.utils.now_datetime()),
+                "error": f"{type(exc).__name__}: {str(exc)}"[:1000],
+            }
+        )
+        _set_registration_operation(operation_token, payload)
+        frappe.log_error(
+            frappe.get_traceback(),
+            "CCD Registration cancellation preview failed",
+        )
+        raise
+
+
+@frappe.whitelist()
+def get_registration_retirement_operation(
+    operation_token: str,
+) -> dict[str, Any]:
+    """Return one queued preview/apply state to its requesting manager."""
+    _require_manager()
+    token = str(operation_token or "").strip()
+    if len(token) != 32 or any(
+        character not in "0123456789abcdef" for character in token
+    ):
+        frappe.throw("Invalid registration retirement operation token")
+    payload = _registration_operation_payload(token)
+    if not payload:
+        return {"operation_token": token, "status": "Expired"}
+    if str(payload.get("requested_by")) != str(frappe.session.user):
+        frappe.throw("This registration retirement operation belongs to another user")
+    return payload
 
 
 @frappe.whitelist()
@@ -2049,6 +2251,90 @@ def cancel_registration_with_retirement(
         "registration": registration.name,
         "registration_status": "Cancelled",
     }
+
+
+@frappe.whitelist(methods=["POST"])
+def start_registration_cancellation_with_retirement(
+    registration_name: str,
+    confirm_scope_fingerprint: str,
+    reason: str,
+) -> dict[str, str]:
+    """Queue confirmed retirement/cancellation outside the web timeout."""
+    _require_manager()
+    registration = frappe.get_doc("CCD Registration", registration_name)
+    if int(registration.docstatus or 0) != 1:
+        frappe.throw("Only a submitted CCD Registration can be cancelled")
+    fingerprint = str(confirm_scope_fingerprint or "").strip()
+    reason_text = str(reason or "").strip()
+    if len(fingerprint) != 64:
+        frappe.throw("Type the exact 64-character preview fingerprint to confirm")
+    if not reason_text:
+        frappe.throw("A cancellation and retirement reason is required")
+    return _queue_registration_operation(
+        operation="Apply",
+        registration_name=str(registration.name),
+        requested_by=str(frappe.session.user),
+        method=(
+            "db_connector.api_identity_retirement."
+            "run_registration_cancellation_with_retirement"
+        ),
+        timeout=REGISTRATION_APPLY_TIMEOUT_SECONDS,
+        kwargs={
+            "confirm_scope_fingerprint": fingerprint,
+            "reason": reason_text,
+        },
+    )
+
+
+def run_registration_cancellation_with_retirement(
+    operation_token: str,
+    registration_name: str,
+    requested_by: str,
+    confirm_scope_fingerprint: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Long-queue worker for atomic retirement and Registration cancellation."""
+    if "System Manager" not in set(frappe.get_roles(requested_by)):
+        raise frappe.PermissionError("System Manager role is required")
+    frappe.set_user(requested_by)
+    payload = {
+        "operation": "Apply",
+        "operation_token": operation_token,
+        "registration": registration_name,
+        "requested_by": requested_by,
+        "status": "Running",
+        "started_at": str(frappe.utils.now_datetime()),
+    }
+    _set_registration_operation(operation_token, payload)
+    try:
+        result = cancel_registration_with_retirement(
+            registration_name,
+            confirm_scope_fingerprint,
+            reason,
+        )
+        payload.update(
+            {
+                "status": "Completed",
+                "completed_at": str(frappe.utils.now_datetime()),
+                "result": result,
+            }
+        )
+        _set_registration_operation(operation_token, payload)
+        return result
+    except Exception as exc:
+        payload.update(
+            {
+                "status": "Failed",
+                "completed_at": str(frappe.utils.now_datetime()),
+                "error": f"{type(exc).__name__}: {str(exc)}"[:1000],
+            }
+        )
+        _set_registration_operation(operation_token, payload)
+        frappe.log_error(
+            frappe.get_traceback(),
+            "CCD Registration retirement cancellation failed",
+        )
+        raise
 
 
 def before_cancel_registration(registration: Any, method: str | None = None) -> None:
