@@ -7,6 +7,7 @@
  "is_standard": "Yes",
  "module": "Db Connector",
  "name": "CCD Unified Person Register",
+ "prepared_report": 0,
  "ref_doctype": "CCD Unified Person",
  "report_name": "CCD Unified Person Register",
  "report_type": "Script Report",

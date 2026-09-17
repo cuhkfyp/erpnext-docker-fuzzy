@@ -20,7 +20,9 @@ without writing that number onto `CCD Master`.
   **Identity Resolution → Unified Person Register** button that opens the
   report pre-filtered to that number.
 - Open the **CCD Unified Person Register** report for current or historical
-  assignments, source lineage, and validity dates.
+  assignments, source lineage, and validity dates. The default Active view is
+  indexed and runs as a normal interactive report; it is not a prepared or
+  background report.
 - Open **CCD Identity Resolution Register** for the existing operational view;
   users without direct CCD Master access see masked record/group/person aliases.
 - Open **CCD Identity Resolution Settings** and use the **Identity Integrity**

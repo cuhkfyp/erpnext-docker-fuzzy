@@ -10,6 +10,7 @@ IDENTITY_LIST_CLIENT_SCRIPT = "CCD Master Identity Resolution List"
 REGISTRATION_CANCEL_CLIENT_SCRIPT = "CCD Registration Governed Cancellation"
 SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
 UNIFIED_PERSON_SETTINGS_DOCTYPE = "CCD Unified Person Settings"
+UNIFIED_PERSON_REGISTER_REPORT = "CCD Unified Person Register"
 
 
 def _initialize_unified_person_sequence() -> dict[str, int]:
@@ -231,12 +232,37 @@ def _add_indexes() -> None:
         ("CCD Unified Person Membership", ["ccd_master", "status"], "ccd_unified_member_current"),
         ("CCD Unified Person Membership", ["unified_person", "status"], "ccd_unified_person_current"),
         ("CCD Unified Person Membership", ["source_lineage_key", "status"], "ccd_unified_source_lineage"),
+        ("CCD Unified Person Membership", ["status", "valid_from", "name"], "ccd_unified_membership_report"),
         ("CCD Unified Person Alias", ["alias_person", "status"], "ccd_unified_alias_current"),
         ("CCD Unified Person Alias", ["canonical_person", "status"], "ccd_unified_canonical_current"),
     )
     for doctype, fields, index_name in indexes:
         if frappe.db.table_exists(doctype):
             frappe.db.add_index(doctype, fields, index_name=index_name)
+
+
+def _configure_unified_person_register() -> dict[str, object]:
+    """Keep the indexed operational register interactive after migration."""
+    if not frappe.db.exists("Report", UNIFIED_PERSON_REGISTER_REPORT):
+        return {"found": False, "prepared_report": False, "updated": False}
+    was_prepared = bool(
+        frappe.db.get_value(
+            "Report", UNIFIED_PERSON_REGISTER_REPORT, "prepared_report"
+        )
+    )
+    if was_prepared:
+        frappe.db.set_value(
+            "Report",
+            UNIFIED_PERSON_REGISTER_REPORT,
+            "prepared_report",
+            0,
+            update_modified=False,
+        )
+    return {
+        "found": True,
+        "prepared_report": False,
+        "updated": was_prepared,
+    }
 
 
 def _migrate_recommendation_terms() -> dict[str, int]:
@@ -299,6 +325,7 @@ def install_identity_resolution() -> dict[str, object]:
     create_custom_fields(_identity_custom_fields(), update=True)
     client_scripts = _install_identity_client_scripts()
     _add_indexes()
+    unified_person_register = _configure_unified_person_register()
     migration = _migrate_recommendation_terms()
     automation_defaults = _backfill_fail_closed_automation_defaults()
     registration_sources = _backfill_registration_source_keys()
@@ -326,6 +353,7 @@ def install_identity_resolution() -> dict[str, object]:
         "recommendation_term_migration": migration,
         "activation_item_source_backfill": activation_item_source_backfill,
         "unified_person_sequence": unified_person_sequence,
+        "unified_person_register": unified_person_register,
     }
 
 

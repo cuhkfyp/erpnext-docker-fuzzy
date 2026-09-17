@@ -345,6 +345,14 @@ population reconciled exactly to 256,092 source rows and 256,043 logical
 people; the three source-key-less special CCD records are intentionally
 outside that governed-source total.
 
+On 2026-09-17 the Unified Person Register's default Active view was returned
+to normal interactive mode after Frappe had automatically enabled prepared
+reports following a run longer than its 15-second threshold. The membership
+table now has a `status, valid_from, name` index; live `EXPLAIN` uses that index
+without a filesort, and the complete Desk report path for 500 Active rows
+finished in 3.6 seconds including command startup. Idempotent setup explicitly
+keeps this indexed operational report out of background mode.
+
 The six Phase-7 DocTypes and reports synchronized successfully. The later
 site-wide migrate pass stopped during an unrelated pre-existing Insights
 fixture import because its installed `ibis/sqlglot` combination lacks
