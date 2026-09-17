@@ -44,9 +44,9 @@ function poll_retirement_operation(operation_token, dialog, on_completed) {
 			if (operation.status === "Queued" || operation.status === "Running") {
 				update_retirement_progress(
 					dialog,
-					operation.status === "Queued"
+					operation.progress_message || (operation.status === "Queued"
 						? __("Waiting for the long-running worker…")
-						: __("Calculating or applying the governed identity retirement…"),
+						: __("Calculating or applying the governed identity retirement…")),
 				);
 				setTimeout(
 					() => poll_retirement_operation(operation_token, dialog, on_completed),

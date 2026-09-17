@@ -1195,6 +1195,7 @@ def _apply_state_actions(
             reason="historical_source_retired",
             origin_doctype=RETIREMENT_DOCTYPE,
             origin_document=retirement_run,
+            progress_callback=_update_registration_operation_progress,
         )
 
 
@@ -1728,7 +1729,13 @@ def _apply_source_retirement(
 
     source_name = resolve_source_key(source_name)
     target_ids = _source_record_ids(source_name, source_keys)
+    _update_registration_operation_progress(
+        f"Locking {len(target_ids):,} confirmed CCD Master records"
+    )
     _lock_names(MASTER_DOCTYPE, target_ids)
+    _update_registration_operation_progress(
+        "Revalidating the confirmed matching and identity scope"
+    )
     state, public = _source_state(source_name, source_keys)
     if public["scope_fingerprint"] != fingerprint:
         frappe.throw("The deletion population changed; run a fresh zero-write preview")
@@ -1737,6 +1744,9 @@ def _apply_source_retirement(
     if state is None:
         frappe.throw("Unable to reconstruct the confirmed source retirement scope")
 
+    _update_registration_operation_progress(
+        "Locking the linked matching and identity lifecycle records"
+    )
     _lock_state(state)
     now = frappe.utils.now_datetime()
     run = frappe.get_doc(
@@ -1754,7 +1764,13 @@ def _apply_source_retirement(
             "started_by": frappe.session.user,
         }
     ).insert(ignore_permissions=True)
+    _update_registration_operation_progress(
+        "Retiring linked matching and identity lifecycle state"
+    )
     _apply_state_actions(state, run.name, reason, now)
+    _update_registration_operation_progress(
+        "Deleting CCD Masters in 1,000-record SQL chunks"
+    )
     deleted = 0
     for chunk in _chunks(target_ids):
         placeholders = ", ".join(["%s"] * len(chunk))
@@ -1763,6 +1779,10 @@ def _apply_source_retirement(
             chunk,
         )
         deleted += len(chunk)
+
+    _update_registration_operation_progress(
+        "Finalizing the retirement run and Registration cancellation"
+    )
 
     result = {
         "retirement_run": run.name,
@@ -2047,7 +2067,8 @@ def _cache_text(value: Any) -> str:
 
 def _registration_operation_payload(operation_token: str) -> dict[str, Any] | None:
     raw = frappe.cache.get_value(
-        _registration_operation_cache_key(operation_token)
+        _registration_operation_cache_key(operation_token),
+        expires=True,
     )
     if not raw:
         return None
@@ -2066,6 +2087,25 @@ def _set_registration_operation(
         canonical_json(payload),
         expires_in_sec=REGISTRATION_OPERATION_TTL_SECONDS,
     )
+
+
+def _update_registration_operation_progress(message: str) -> None:
+    operation_token = str(
+        getattr(
+            frappe.flags,
+            "ccd_registration_retirement_operation_token",
+            "",
+        )
+        or ""
+    )
+    if not operation_token:
+        return
+    payload = _registration_operation_payload(operation_token)
+    if not payload or str(payload.get("status")) != "Running":
+        return
+    payload["progress_message"] = str(message)
+    payload["progress_at"] = str(frappe.utils.now_datetime())
+    _set_registration_operation(operation_token, payload)
 
 
 def _existing_registration_operation(
@@ -2297,6 +2337,7 @@ def run_registration_cancellation_with_retirement(
     if "System Manager" not in set(frappe.get_roles(requested_by)):
         raise frappe.PermissionError("System Manager role is required")
     frappe.set_user(requested_by)
+    frappe.flags.ccd_registration_retirement_operation_token = operation_token
     payload = {
         "operation": "Apply",
         "operation_token": operation_token,
@@ -2335,6 +2376,8 @@ def run_registration_cancellation_with_retirement(
             "CCD Registration retirement cancellation failed",
         )
         raise
+    finally:
+        frappe.flags.ccd_registration_retirement_operation_token = None
 
 
 def before_cancel_registration(registration: Any, method: str | None = None) -> None:

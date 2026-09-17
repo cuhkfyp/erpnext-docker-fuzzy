@@ -37,6 +37,7 @@ RESOLUTION_SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
 CURRENT_IDENTITY_STATUSES = ("Active", "Needs Revalidation")
 MAX_BACKFILL_BATCH_SIZE = 5_000
 DEFAULT_BACKFILL_BATCH_SIZE = 2_000
+RETIREMENT_CHUNK_SIZE = 1_000
 
 
 def _json(value: Any) -> str:
@@ -413,6 +414,206 @@ def _end_membership(
     )
 
 
+def _bulk_unified_retirement_events(
+    rows: Iterable[Any],
+    retired_people: Iterable[str],
+    *,
+    reason: str,
+    origin_doctype: str,
+    origin_document: str,
+    now: Any,
+) -> None:
+    """Insert immutable retirement events without one Document insert per row."""
+    actor = str(frappe.session.user)
+    metadata_json = _json({})
+    fields = [
+        "name",
+        "creation",
+        "modified",
+        "modified_by",
+        "owner",
+        "docstatus",
+        "idx",
+        "event_key",
+        "unified_person",
+        "related_person",
+        "ccd_master",
+        "identity_group",
+        "event_type",
+        "reason",
+        "origin_doctype",
+        "origin_document",
+        "event_at",
+        "actor",
+        "metadata_json",
+    ]
+
+    def event_values():
+        for row in rows:
+            key = _event_key(
+                str(row.unified_person),
+                "End Assignment",
+                reason,
+                origin_doctype,
+                origin_document,
+                str(row.name),
+            )
+            yield (
+                key,
+                now,
+                now,
+                actor,
+                actor,
+                0,
+                0,
+                key,
+                str(row.unified_person),
+                None,
+                str(row.ccd_master),
+                str(row.identity_group or "") or None,
+                "End Assignment",
+                reason,
+                origin_doctype or None,
+                origin_document or None,
+                now,
+                actor,
+                metadata_json,
+            )
+        for person in retired_people:
+            key = _event_key(
+                str(person),
+                "Retire",
+                reason,
+                origin_doctype,
+                origin_document,
+                f"retire:{person}:{origin_document}",
+            )
+            yield (
+                key,
+                now,
+                now,
+                actor,
+                actor,
+                0,
+                0,
+                key,
+                str(person),
+                None,
+                None,
+                None,
+                "Retire",
+                reason,
+                origin_doctype or None,
+                origin_document or None,
+                now,
+                actor,
+                metadata_json,
+            )
+
+    frappe.db.bulk_insert(
+        EVENT_DOCTYPE,
+        fields=fields,
+        values=event_values(),
+        ignore_duplicates=True,
+        chunk_size=5_000,
+    )
+
+
+def _bulk_end_unified_memberships(
+    rows: list[Any],
+    *,
+    reason: str,
+    now: Any,
+) -> None:
+    actor = str(frappe.session.user)
+    names = tuple(str(row.name) for row in rows)
+    for offset in range(0, len(names), RETIREMENT_CHUNK_SIZE):
+        chunk = names[offset : offset + RETIREMENT_CHUNK_SIZE]
+        placeholders = ", ".join(["%s"] * len(chunk))
+        frappe.db.sql(
+            f"""UPDATE `tab{MEMBERSHIP_DOCTYPE}`
+                   SET status='Ended', valid_to=%s, ended_reason=%s, ended_by=%s
+                 WHERE status='Active' AND name IN ({placeholders})""",
+            (now, reason, actor, *chunk),
+        )
+
+
+def _bulk_reconcile_retired_people(
+    people: list[str],
+    *,
+    reason: str,
+    now: Any,
+) -> list[str]:
+    """Refresh active counts and retire only people with no surviving members."""
+    statuses: dict[str, str] = {}
+    active_counts: dict[str, int] = {}
+    for offset in range(0, len(people), RETIREMENT_CHUNK_SIZE):
+        chunk = people[offset : offset + RETIREMENT_CHUNK_SIZE]
+        placeholders = ", ".join(["%s"] * len(chunk))
+        statuses.update(
+            {
+                str(row.name): str(row.status)
+                for row in frappe.db.sql(
+                    f"SELECT name, status FROM `tab{PERSON_DOCTYPE}` "
+                    f"WHERE name IN ({placeholders})",
+                    chunk,
+                    as_dict=True,
+                )
+            }
+        )
+        active_counts.update(
+            {
+                str(row.unified_person): int(row.active_count or 0)
+                for row in frappe.db.sql(
+                    f"""SELECT unified_person, COUNT(*) AS active_count
+                          FROM `tab{MEMBERSHIP_DOCTYPE}`
+                         WHERE status='Active'
+                           AND unified_person IN ({placeholders})
+                         GROUP BY unified_person""",
+                    chunk,
+                    as_dict=True,
+                )
+            }
+        )
+        frappe.db.sql(
+            f"""UPDATE `tab{PERSON_DOCTYPE}`
+                   SET active_member_count=0, last_reconciled_at=%s
+                 WHERE name IN ({placeholders})""",
+            (now, *chunk),
+        )
+        frappe.db.sql(
+            f"""UPDATE `tab{PERSON_DOCTYPE}` person
+                  JOIN (
+                        SELECT unified_person, COUNT(*) AS active_count
+                          FROM `tab{MEMBERSHIP_DOCTYPE}`
+                         WHERE status='Active'
+                           AND unified_person IN ({placeholders})
+                         GROUP BY unified_person
+                       ) counts ON counts.unified_person=person.name
+                   SET person.active_member_count=counts.active_count,
+                       person.last_reconciled_at=%s""",
+            (*chunk, now),
+        )
+
+    retired_people = sorted(
+        person
+        for person in people
+        if statuses.get(person) == "Active" and not active_counts.get(person, 0)
+    )
+    for offset in range(0, len(retired_people), RETIREMENT_CHUNK_SIZE):
+        chunk = retired_people[offset : offset + RETIREMENT_CHUNK_SIZE]
+        placeholders = ", ".join(["%s"] * len(chunk))
+        frappe.db.sql(
+            f"""UPDATE `tab{PERSON_DOCTYPE}`
+                   SET status='Retired', current_identity_group=NULL,
+                       retired_at=%s, retired_reason=%s,
+                       active_member_count=0, last_reconciled_at=%s
+                 WHERE status='Active' AND name IN ({placeholders})""",
+            (now, reason, now, *chunk),
+        )
+    return retired_people
+
+
 def _end_active_alias(
     person: str,
     *,
@@ -706,6 +907,7 @@ def retire_unified_person_records(
     reason: str,
     origin_doctype: str = "",
     origin_document: str = "",
+    progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     """End current Unified Person assignments before CCD source retirement."""
     if not _tables_ready():
@@ -716,49 +918,30 @@ def retire_unified_person_records(
     people = sorted({str(row.unified_person) for row in rows})
     _lock_names(PERSON_DOCTYPE, people)
     now = frappe.utils.now_datetime()
-    for row in rows:
-        _end_membership(
-            row,
-            reason=reason,
-            origin_doctype=origin_doctype,
-            origin_document=origin_document,
-            now=now,
-        )
-    retired = 0
-    for person in people:
-        count = frappe.db.count(
-            MEMBERSHIP_DOCTYPE, {"unified_person": person, "status": "Active"}
-        )
-        status = frappe.db.get_value(PERSON_DOCTYPE, person, "status")
-        values: dict[str, Any] = {
-            "active_member_count": count,
-            "last_reconciled_at": now,
-        }
-        if count == 0 and status == "Active":
-            values.update(
-                {
-                    "status": "Retired",
-                    "current_identity_group": None,
-                    "retired_at": now,
-                    "retired_reason": reason,
-                }
-            )
-            retired += 1
-            _append_event(
-                person=person,
-                event_type="Retire",
-                reason=reason,
-                origin_doctype=origin_doctype,
-                origin_document=origin_document,
-                nonce=f"retire:{person}:{origin_document}",
-            )
-        frappe.db.set_value(
-            PERSON_DOCTYPE, person, values, update_modified=False
-        )
+    if progress_callback:
+        progress_callback("Ending Unified Person memberships in SQL chunks")
+    _bulk_end_unified_memberships(rows, reason=reason, now=now)
+    if progress_callback:
+        progress_callback("Recalculating Unified Person member counts")
+    retired_people = _bulk_reconcile_retired_people(
+        people,
+        reason=reason,
+        now=now,
+    )
+    if progress_callback:
+        progress_callback("Writing Unified Person retirement audit events in bulk")
+    _bulk_unified_retirement_events(
+        rows,
+        retired_people,
+        reason=reason,
+        origin_doctype=origin_doctype,
+        origin_document=origin_document,
+        now=now,
+    )
     return {
         "status": "Retired",
         "ended_membership_count": len(rows),
-        "retired_person_count": retired,
+        "retired_person_count": len(retired_people),
     }
 
 
