@@ -1512,17 +1512,40 @@ def stable_source_key(ccd_reg_doctype: str) -> str:
 
 
 def registration_source_key(registration: Any) -> str:
-    return stable_source_key(str(registration.get("ccd_reg_doctype") or ""))
+    stored = str(registration.get("ccd_stable_source_key") or "").strip()
+    generated_doctype = str(registration.get("ccd_reg_doctype") or "").strip()
+    if stored:
+        source = stable_source_key(stored)
+        if generated_doctype and stable_source_key(generated_doctype) != source:
+            frappe.throw("CCD Registration stable source key is inconsistent")
+        return source
+    return stable_source_key(generated_doctype)
 
 
 def resolve_source_key(value: str) -> str:
     """Resolve a Registration revision name or generated DocType to its key."""
     candidate = str(value or "").strip()
+    source_candidate = stable_source_key(candidate)
+    if candidate.startswith("CCD-REG-"):
+        return source_candidate
+
+    # A stable source key can also be the name of its original, now-cancelled
+    # Registration revision.  Prefer the current submitted owner before
+    # interpreting the same string as a historical document name.
+    meta = frappe.get_meta("CCD Registration")
+    if meta.has_field("ccd_stable_source_key") and frappe.db.exists(
+        "CCD Registration",
+        {
+            "docstatus": 1,
+            "ccd_stable_source_key": source_candidate,
+        },
+    ):
+        return source_candidate
     if frappe.db.exists("CCD Registration", candidate):
         return registration_source_key(
             frappe.get_doc("CCD Registration", candidate)
         )
-    return stable_source_key(candidate)
+    return source_candidate
 
 
 def _source_keys(value: Any) -> tuple[str, ...] | None:
