@@ -10,6 +10,8 @@ from frappe.utils import cint
 
 
 MAXIMUM_LIMIT = 5_000
+CURRENT_IDENTITY_STATUSES = ("Active", "Needs Revalidation")
+LOOKUP_CHUNK_SIZE = 500
 
 
 def execute(filters: dict[str, Any] | None = None):
@@ -55,6 +57,7 @@ def execute(filters: dict[str, Any] | None = None):
         parameters,
         as_dict=True,
     )
+    _add_identity_group_context(rows)
     reveal_records = bool(frappe.has_permission("CCD Master", "read"))
     if not reveal_records:
         for index, row in enumerate(rows, start=1):
@@ -62,6 +65,9 @@ def execute(filters: dict[str, Any] | None = None):
             row.governed_source = _("Masked")
             row.source_record_key = _("Masked")
             row.identity_group = ""
+            row.identity_group_status = ""
+            row.current_identity_group = ""
+            row.current_identity_group_status = ""
     return _columns(reveal_records), rows, None, None, [
         {"value": len(rows), "label": _("Displayed Memberships"), "datatype": "Int"},
         {
@@ -73,6 +79,65 @@ def execute(filters: dict[str, Any] | None = None):
     ]
 
 
+def _chunks(values: list[str], size: int = LOOKUP_CHUNK_SIZE):
+    for offset in range(0, len(values), size):
+        yield values[offset : offset + size]
+
+
+def _add_identity_group_context(rows: list[Any]) -> None:
+    """Separate assignment-time group provenance from current active groups."""
+    record_ids = sorted({str(row.ccd_master) for row in rows if row.ccd_master})
+    current_memberships = []
+    for chunk in _chunks(record_ids):
+        current_memberships.extend(
+            frappe.get_all(
+                "CCD Identity Membership",
+                filters={
+                    "ccd_master": ["in", chunk],
+                    "status": ["in", CURRENT_IDENTITY_STATUSES],
+                },
+                fields=["name", "ccd_master", "identity_group", "valid_from"],
+                order_by="valid_from desc, name desc",
+                limit_page_length=100_000,
+            )
+        )
+
+    group_ids = {
+        str(row.identity_group) for row in rows if row.identity_group
+    } | {
+        str(membership.identity_group)
+        for membership in current_memberships
+        if membership.identity_group
+    }
+    group_statuses = {}
+    for chunk in _chunks(sorted(group_ids)):
+        for group in frappe.get_all(
+            "CCD Identity Group",
+            filters={"name": ["in", chunk]},
+            fields=["name", "status"],
+            limit_page_length=100_000,
+        ):
+            group_statuses[str(group.name)] = str(group.status or "")
+
+    current_by_record: dict[str, list[str]] = {}
+    for membership in current_memberships:
+        group = str(membership.identity_group or "")
+        if not group or group_statuses.get(group) not in CURRENT_IDENTITY_STATUSES:
+            continue
+        groups = current_by_record.setdefault(str(membership.ccd_master), [])
+        if group not in groups:
+            groups.append(group)
+
+    for row in rows:
+        origin_group = str(row.identity_group or "")
+        current_groups = current_by_record.get(str(row.ccd_master), [])
+        row.identity_group_status = group_statuses.get(origin_group, "")
+        row.current_identity_group = ",".join(current_groups)
+        row.current_identity_group_status = ",".join(
+            group_statuses[group] for group in current_groups
+        )
+
+
 def _columns(reveal_records: bool) -> list[dict[str, Any]]:
     return [
         {"fieldname": "unified_person", "label": _("Unified Person Number"), "fieldtype": "Link", "options": "CCD Unified Person", "width": 175},
@@ -81,7 +146,8 @@ def _columns(reveal_records: bool) -> list[dict[str, Any]]:
         {"fieldname": "ccd_master", "label": _("CCD Master") if reveal_records else _("Masked Record"), "fieldtype": "Link" if reveal_records else "Data", **({"options": "CCD Master"} if reveal_records else {}), "width": 155},
         {"fieldname": "governed_source", "label": _("Stable CCD Source"), "fieldtype": "Data", "width": 180},
         {"fieldname": "source_record_key", "label": _("Stable Source Record Key"), "fieldtype": "Data", "width": 190},
-        {"fieldname": "identity_group", "label": _("Identity Group"), "fieldtype": "Link" if reveal_records else "Data", **({"options": "CCD Identity Group"} if reveal_records else {}), "width": 145},
+        {"fieldname": "identity_group", "label": _("Origin Identity Group"), "fieldtype": "Data", "width": 210},
+        {"fieldname": "current_identity_group", "label": _("Current Identity Group"), "fieldtype": "Data", "width": 210},
         {"fieldname": "membership_status", "label": _("Membership Status"), "fieldtype": "Data", "width": 145},
         {"fieldname": "assignment_reason", "label": _("Assignment Reason"), "fieldtype": "Data", "width": 220},
         {"fieldname": "valid_from", "label": _("Valid From"), "fieldtype": "Datetime", "width": 165},

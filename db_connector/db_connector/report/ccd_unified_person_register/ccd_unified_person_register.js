@@ -9,8 +9,29 @@ frappe.query_reports["CCD Unified Person Register"] = {
 	],
 	formatter(value, row, column, data, default_formatter) {
 		const rendered = default_formatter(value, row, column, data);
-		if (column.fieldname !== "person_status") return rendered;
-		const colour = { Active: "green", Alias: "blue", Retired: "gray" }[data.person_status] || "gray";
-		return `<span class="indicator-pill ${colour}">${rendered}</span>`;
+		if (column.fieldname === "person_status") {
+			const colour = { Active: "green", Alias: "blue", Retired: "gray" }[data.person_status] || "gray";
+			return `<span class="indicator-pill ${colour}">${rendered}</span>`;
+		}
+		if (column.fieldname === "identity_group") {
+			return formatIdentityGroups(value, data.identity_group_status);
+		}
+		if (column.fieldname === "current_identity_group") {
+			return formatIdentityGroups(value, data.current_identity_group_status);
+		}
+		return rendered;
 	},
 };
+
+function formatIdentityGroups(value, statusValue) {
+	const groups = String(value || "").split(",").filter(Boolean);
+	const statuses = String(statusValue || "").split(",");
+	return groups.map((group, index) => {
+		const escapedGroup = frappe.utils.escape_html(group);
+		const link = `<a href="/app/ccd-identity-group/${encodeURIComponent(group)}">${escapedGroup}</a>`;
+		const status = statuses[index];
+		return status
+			? `${link} <span class="text-muted">— ${frappe.utils.escape_html(__(status))}</span>`
+			: link;
+	}).join("<br>");
+}
