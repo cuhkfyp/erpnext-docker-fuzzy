@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ctypes
+import gc
 import hashlib
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from itertools import combinations
@@ -32,6 +34,30 @@ BLOCKING_VERSION = "pilot-blocking-1.7"
 HIGH_BLOCKING_VERSION = "pilot-high-blocking-1.7"
 BROAD_NAME_ROUTES = frozenset({"chi_name_prefix", "eng_name"})
 SPARSE_NOMINATION_ROUTES = BROAD_NAME_ROUTES | {"dob_surname"}
+ROUTE_BITS = {
+    route: 1 << index
+    for index, route in enumerate(
+        sorted({*BLOCK_ROUTE_PRIORITY, "dob_chi_full", "dob_eng_full"})
+    )
+}
+
+
+def _release_unused_memory() -> None:
+    """Release completed large blocking indexes before the next phase."""
+    gc.collect()
+    try:
+        ctypes.CDLL(None).malloc_trim(0)
+    except (AttributeError, OSError):
+        pass
+
+
+def _progress(
+    callback: Callable[[str, int], None] | None,
+    stage: str,
+    count: int,
+) -> None:
+    if callback is not None:
+        callback(stage, count)
 
 
 @dataclass(frozen=True)
@@ -39,6 +65,60 @@ class BlockingResult:
     pairs: tuple[CandidatePair, ...]
     skipped_blocks: tuple[str, ...]
     truncated: bool = False
+
+
+def _add_route(
+    routes_by_pair: dict[tuple[str, str], int],
+    pair_key: tuple[str, str],
+    route: str,
+) -> bool:
+    """Add one route to a compact pair map and report whether the pair is new."""
+    current = routes_by_pair.get(pair_key)
+    routes_by_pair[pair_key] = (current or 0) | ROUTE_BITS[route]
+    return current is None
+
+
+def _materialize_pairs(
+    routes_by_pair: dict[tuple[str, str], int],
+    by_id: dict[str, dict[str, Any]],
+) -> tuple[CandidatePair, ...]:
+    """Build immutable candidates while releasing the large mutable map.
+
+    Source-pair and route tuples are shared because only a small number of
+    combinations exists.  Popping each mutable entry as its immutable result
+    is created prevents candidate materialization from briefly retaining two
+    complete million-row representations.
+    """
+    ordered_keys = sorted(routes_by_pair)
+    source_pair_cache: dict[tuple[str, str], str] = {}
+    routes_cache: dict[int, tuple[str, ...]] = {}
+
+    def candidates() -> Iterable[CandidatePair]:
+        for left_id, right_id in ordered_keys:
+            mask = routes_by_pair.pop((left_id, right_id))
+            left_source = record_source(by_id[left_id])
+            right_source = record_source(by_id[right_id])
+            source_key = tuple(sorted((left_source, right_source)))
+            source_pair = source_pair_cache.get(source_key)
+            if source_pair is None:
+                source_pair = "::".join(source_key)
+                source_pair_cache[source_key] = source_pair
+            blocking_routes = routes_cache.get(mask)
+            if blocking_routes is None:
+                blocking_routes = tuple(
+                    route
+                    for route in sorted(ROUTE_BITS)
+                    if mask & ROUTE_BITS[route]
+                )
+                routes_cache[mask] = blocking_routes
+            yield CandidatePair(
+                left_id,
+                right_id,
+                source_pair,
+                blocking_routes,
+            )
+
+    return tuple(candidates())
 
 
 def record_id(record: dict[str, Any]) -> str:
@@ -158,6 +238,11 @@ def _ranked_broad_candidates(
         metadata = (scarcity, -score, digest)
         if current is None or metadata < current:
             ranked[pair] = metadata
+    # These dictionaries can contain hundreds of thousands of entries. Drop
+    # the two no-longer-needed copies before sorting the final rank keys.
+    best.clear()
+    selector_counts.clear()
+    _release_unused_memory()
     return sorted(ranked, key=ranked.__getitem__)
 
 
@@ -233,45 +318,73 @@ def deterministic_high_blocking_keys(
     universe. Candidates are still scored afterward, so conflicting trusted
     identifiers continue to gate a discovered pair out of High.
     """
+    return _deterministic_high_blocking_keys_for_routes(
+        record,
+        policy,
+        {
+            "global_id",
+            "phone",
+            "email",
+            "dob_chi_full",
+            "dob_eng_full",
+        },
+    )
+
+
+def _deterministic_high_blocking_keys_for_routes(
+    record: dict[str, Any],
+    policy: MatchingPolicy,
+    routes: set[str],
+) -> set[str]:
+    """Return deterministic-High keys for only the requested route group."""
     keys: set[str] = set()
     source = record_source(record)
 
-    for attribute in policy.trusted_global_identifiers:
-        if not policy.globally_comparable(source, attribute):
-            continue
-        raw_value = policy.value(record, attribute)
-        if attribute == "hkid" and not norm.valid_hkid(raw_value):
-            continue
-        value = norm.identifier(raw_value)
-        if value:
-            keys.add(f"global_id:{attribute}:{value}")
+    if "global_id" in routes:
+        for attribute in policy.trusted_global_identifiers:
+            if not policy.globally_comparable(source, attribute):
+                continue
+            raw_value = policy.value(record, attribute)
+            if attribute == "hkid" and not norm.valid_hkid(raw_value):
+                continue
+            value = norm.identifier(raw_value)
+            if value:
+                keys.add(f"global_id:{attribute}:{value}")
 
-    phone = norm.phone(policy.value(record, "phone"))
-    if phone:
-        keys.add(f"phone:{phone}")
-    email = norm.email(policy.value(record, "email"))
-    if email:
-        keys.add(f"email:{email}")
+    if "phone" in routes:
+        phone = norm.phone(policy.value(record, "phone"))
+        if phone:
+            keys.add(f"phone:{phone}")
+    if "email" in routes:
+        email = norm.email(policy.value(record, "email"))
+        if email:
+            keys.add(f"email:{email}")
 
+    if not {"dob_chi_full", "dob_eng_full"} & routes:
+        return keys
     birthday = norm.birthday(policy.value(record, "birthday"))
     if not birthday:
         return keys
 
-    chi_surname = norm.chinese_compact(policy.value(record, "chi_surname"))
-    chi_firstname = norm.chinese_compact(policy.value(record, "chi_firstname"))
-    if chi_surname and chi_firstname:
-        keys.add(f"dob_chi_full:{birthday}:{chi_surname}:{chi_firstname}")
+    if "dob_chi_full" in routes:
+        chi_surname = norm.chinese_compact(policy.value(record, "chi_surname"))
+        chi_firstname = norm.chinese_compact(policy.value(record, "chi_firstname"))
+        if chi_surname and chi_firstname:
+            keys.add(f"dob_chi_full:{birthday}:{chi_surname}:{chi_firstname}")
 
-    eng_surname = norm.english_compact(policy.value(record, "eng_surname"))
-    eng_firstname = norm.english_compact(policy.value(record, "eng_firstname"))
-    if eng_surname and eng_firstname:
-        keys.add(f"dob_eng_full:{birthday}:{eng_surname}:{eng_firstname}")
+    if "dob_eng_full" in routes:
+        eng_surname = norm.english_compact(policy.value(record, "eng_surname"))
+        eng_firstname = norm.english_compact(policy.value(record, "eng_firstname"))
+        if eng_surname and eng_firstname:
+            keys.add(f"dob_eng_full:{birthday}:{eng_surname}:{eng_firstname}")
     return keys
 
 
 def generate_deterministic_high_candidate_pairs(
     records: Iterable[dict[str, Any]],
     policy: MatchingPolicy,
+    *,
+    progress: Callable[[str, int], None] | None = None,
 ) -> BlockingResult:
     """Generate the complete bounded candidate universe for deterministic High.
 
@@ -281,67 +394,99 @@ def generate_deterministic_high_candidate_pairs(
     """
     rows = list(records)
     by_id = {record_id(row): row for row in rows if record_id(row)}
-    index: dict[str, list[str]] = defaultdict(list)
-    for row_id, row in by_id.items():
-        for key in deterministic_high_blocking_keys(row, policy):
-            index[key].append(row_id)
-
-    routes_by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
+    rows.clear()
+    routes_by_pair: dict[tuple[str, str], int] = {}
     skipped: list[str] = []
-    blocks: list[tuple[str, tuple[str, ...]]] = []
-    for key, raw_ids in index.items():
-        ids = tuple(sorted(set(raw_ids)))
-        route = key.split(":", 1)[0]
-        if len(ids) > policy.max_block_size:
-            digest = hashlib.sha256(key.encode()).hexdigest()[:12]
-            skipped.append(f"{route}:{digest} ({len(ids)} records)")
-            continue
-        blocks.append((key, ids))
-
-    blocks.sort(
-        key=lambda item: (
-            BLOCK_ROUTE_PRIORITY.get(item[0].split(":", 1)[0], 2),
-            len(item[1]),
-            hashlib.sha256(item[0].encode()).digest(),
-        )
-    )
     truncated = False
-    for key, ids in blocks:
-        route = key.split(":", 1)[0]
-        for left_id, right_id in combinations(ids, 2):
-            left_source = record_source(by_id[left_id])
-            right_source = record_source(by_id[right_id])
-            if not left_source or not right_source or left_source == right_source:
+    high_routes = {
+        "global_id",
+        "phone",
+        "email",
+        "dob_chi_full",
+        "dob_eng_full",
+    }
+    priority_groups: dict[int, set[str]] = defaultdict(set)
+    for route in high_routes:
+        priority_groups[BLOCK_ROUTE_PRIORITY.get(route, 2)].add(route)
+
+    # Build only one priority-equivalent route group at a time. Sorting all
+    # blocks within that group retains the original priority/size/hash order,
+    # while releasing the large unique-value index before the next group.
+    for priority, group_routes in sorted(priority_groups.items()):
+        index: dict[str, list[str]] = defaultdict(list)
+        for row_id, row in by_id.items():
+            for key in _deterministic_high_blocking_keys_for_routes(
+                row,
+                policy,
+                group_routes,
+            ):
+                index[key].append(row_id)
+        _progress(progress, f"high_index_priority_{priority}", len(index))
+
+        blocks: list[tuple[str, tuple[str, ...]]] = []
+        for key, raw_ids in index.items():
+            ids = tuple(sorted(set(raw_ids)))
+            route = key.split(":", 1)[0]
+            if len(ids) > policy.max_block_size:
+                digest = hashlib.sha256(key.encode()).hexdigest()[:12]
+                skipped.append(f"{route}:{digest} ({len(ids)} records)")
                 continue
-            pair_key = (left_id, right_id)
-            if pair_key not in routes_by_pair and len(routes_by_pair) >= policy.max_candidate_pairs:
-                truncated = True
+            blocks.append((key, ids))
+        index.clear()
+        _release_unused_memory()
+
+        blocks.sort(
+            key=lambda item: (
+                len(item[1]),
+                hashlib.sha256(item[0].encode()).digest(),
+            )
+        )
+        _progress(progress, f"high_blocks_priority_{priority}", len(blocks))
+        for key, ids in blocks:
+            route = key.split(":", 1)[0]
+            for left_id, right_id in combinations(ids, 2):
+                left_source = record_source(by_id[left_id])
+                right_source = record_source(by_id[right_id])
+                if not left_source or not right_source or left_source == right_source:
+                    continue
+                pair_key = (left_id, right_id)
+                if (
+                    pair_key not in routes_by_pair
+                    and len(routes_by_pair) >= policy.max_candidate_pairs
+                ):
+                    truncated = True
+                    break
+                was_new = _add_route(routes_by_pair, pair_key, route)
+                if was_new and len(routes_by_pair) % 100_000 == 0:
+                    _progress(progress, "high_candidate_progress", len(routes_by_pair))
+            if truncated:
                 break
-            routes_by_pair[pair_key].add(route)
+        blocks.clear()
+        _release_unused_memory()
         if truncated:
             break
-
-    pairs = []
-    for (left_id, right_id), routes in sorted(routes_by_pair.items()):
-        source_pair = "::".join(
-            sorted((record_source(by_id[left_id]), record_source(by_id[right_id])))
-        )
-        pairs.append(CandidatePair(left_id, right_id, source_pair, tuple(sorted(routes))))
-    return BlockingResult(tuple(pairs), tuple(sorted(skipped)), truncated)
+    _progress(progress, "high_candidates_ready", len(routes_by_pair))
+    pairs = _materialize_pairs(routes_by_pair, by_id)
+    _progress(progress, "high_candidates_materialized", len(pairs))
+    return BlockingResult(pairs, tuple(sorted(skipped)), truncated)
 
 
 def generate_candidate_pairs(
     records: Iterable[dict[str, Any]],
     policy: MatchingPolicy,
+    *,
+    progress: Callable[[str, int], None] | None = None,
 ) -> BlockingResult:
     rows = list(records)
     by_id = {record_id(row): row for row in rows if record_id(row)}
+    rows.clear()
     index: dict[str, list[str]] = defaultdict(list)
     for row_id, row in by_id.items():
         for key in blocking_keys(row, policy):
             index[key].append(row_id)
+    _progress(progress, "threshold_index_ready", len(index))
 
-    routes_by_pair: dict[tuple[str, str], set[str]] = defaultdict(set)
+    routes_by_pair: dict[tuple[str, str], int] = {}
     skipped: list[str] = []
     strong_blocks: list[tuple[str, tuple[str, ...]]] = []
     nomination_blocks: dict[str, list[tuple[str, ...]]] = defaultdict(list)
@@ -357,6 +502,14 @@ def generate_candidate_pairs(
             nomination_blocks[route].append(ids)
         else:
             strong_blocks.append((key, ids))
+
+    index.clear()
+    _release_unused_memory()
+    _progress(
+        progress,
+        "threshold_blocks_ready",
+        len(strong_blocks) + sum(len(items) for items in nomination_blocks.values()),
+    )
 
     # Retain every stronger exact candidate before the bounded name fallbacks.
     strong_blocks.sort(
@@ -374,12 +527,16 @@ def generate_candidate_pairs(
             if not left_source or not right_source or left_source == right_source:
                 continue
             pair_key = (left_id, right_id)
-            routes_by_pair[pair_key].add(key.split(":", 1)[0])
+            was_new = _add_route(routes_by_pair, pair_key, key.split(":", 1)[0])
+            if was_new and len(routes_by_pair) % 100_000 == 0:
+                _progress(progress, "threshold_candidate_progress", len(routes_by_pair))
             if len(routes_by_pair) >= policy.max_candidate_pairs:
                 truncated = True
                 break
         if truncated:
             break
+    strong_blocks.clear()
+    _release_unused_memory()
 
     # DOB+surname and broad prefix blocks can contain millions of
     # cross-products. DOB+surname first contributes one closest full-name
@@ -395,11 +552,11 @@ def generate_candidate_pairs(
             set(),
         )
         for pair_key in ranked_dob:
-            was_present = pair_key in routes_by_pair
-            routes_by_pair[pair_key].add("dob_surname")
-            if not was_present and len(routes_by_pair) >= policy.max_candidate_pairs:
+            was_new = _add_route(routes_by_pair, pair_key, "dob_surname")
+            if was_new and len(routes_by_pair) >= policy.max_candidate_pairs:
                 truncated = True
                 break
+        ranked_dob.clear()
 
     # The two broad name routes nominate independently against the same frozen
     # stronger-route universe, then round-robin their ranked nominations. This
@@ -422,6 +579,7 @@ def generate_candidate_pairs(
             )
             for route, blocks in sorted(broad_blocks.items())
         }
+        existing_pairs.clear()
         offsets = {route: 0 for route in ranked_by_route}
         active = list(sorted(ranked_by_route))
         while active and len(routes_by_pair) < policy.max_candidate_pairs:
@@ -433,9 +591,8 @@ def generate_candidate_pairs(
                 while offset < len(ranked):
                     pair_key = ranked[offset]
                     offset += 1
-                    was_present = pair_key in routes_by_pair
-                    routes_by_pair[pair_key].add(route)
-                    if not was_present:
+                    was_new = _add_route(routes_by_pair, pair_key, route)
+                    if was_new:
                         added = True
                         break
                 offsets[route] = offset
@@ -450,9 +607,12 @@ def generate_candidate_pairs(
             offsets[route] < len(ranked)
             for route, ranked in ranked_by_route.items()
         )
+        ranked_by_route.clear()
+        _release_unused_memory()
 
-    pairs = []
-    for (left_id, right_id), routes in sorted(routes_by_pair.items()):
-        source_pair = "::".join(sorted((record_source(by_id[left_id]), record_source(by_id[right_id]))))
-        pairs.append(CandidatePair(left_id, right_id, source_pair, tuple(sorted(routes))))
-    return BlockingResult(tuple(pairs), tuple(sorted(skipped)), truncated)
+    nomination_blocks.clear()
+    _release_unused_memory()
+    _progress(progress, "threshold_candidates_ready", len(routes_by_pair))
+    pairs = _materialize_pairs(routes_by_pair, by_id)
+    _progress(progress, "threshold_candidates_materialized", len(pairs))
+    return BlockingResult(pairs, tuple(sorted(skipped)), truncated)

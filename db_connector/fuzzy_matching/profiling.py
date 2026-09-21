@@ -27,7 +27,7 @@ def _normalized(attribute: str, value: Any) -> str:
 
 
 def profile_attributes(records: Iterable[dict[str, Any]], policy: MatchingPolicy) -> dict[str, Any]:
-    rows = list(records)
+    rows = records if isinstance(records, (list, tuple)) else list(records)
     by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         by_source[str(row.get("source") or row.get("ccd_reg_source") or "")].append(row)
@@ -36,20 +36,29 @@ def profile_attributes(records: Iterable[dict[str, Any]], policy: MatchingPolicy
     for source, source_rows in sorted(by_source.items()):
         attributes = {}
         for attribute in policy.attributes():
-            values = [_normalized(attribute, policy.value(row, attribute)) for row in source_rows]
-            present = [value for value in values if value]
-            counts = Counter(present)
-            source_values[source][attribute] = set(present)
+            counts = Counter()
+            for row in source_rows:
+                value = _normalized(attribute, policy.value(row, attribute))
+                if value:
+                    counts[value] += 1
+            present_count = sum(counts.values())
+            source_values[source][attribute] = set(counts)
             attributes[attribute] = {
-                "coverage": len(present) / len(source_rows) if source_rows else 0.0,
-                "present": len(present),
+                "coverage": present_count / len(source_rows) if source_rows else 0.0,
+                "present": present_count,
                 "distinct": len(counts),
                 "duplicate_values": sum(1 for count in counts.values() if count > 1),
                 "duplicate_rows": sum(count for count in counts.values() if count > 1),
             }
             if attribute == "hkid":
                 attributes[attribute]["valid_rate"] = (
-                    sum(norm.valid_hkid(value) for value in present) / len(present) if present else 0.0
+                    sum(
+                        norm.valid_hkid(value) * count
+                        for value, count in counts.items()
+                    )
+                    / present_count
+                    if present_count
+                    else 0.0
                 )
         output["sources"][source] = {"record_count": len(source_rows), "attributes": attributes}
 

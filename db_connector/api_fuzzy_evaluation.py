@@ -6,9 +6,13 @@ It stores predictions and human labels in dedicated evaluation DocTypes.
 
 from __future__ import annotations
 
+import ctypes
+import gc
 import hashlib
 import heapq
 import json
+import re
+import resource
 import traceback
 from collections import Counter
 from collections.abc import Iterable
@@ -62,6 +66,8 @@ SENSITIVE_ROLE = "CCD Match Sensitive Reviewer"
 ALLOWED_LABELS = {"Same", "Different", "Unsure"}
 SENSITIVE_ATTRIBUTES = {"hkid", "hksr_num"}
 MAX_SPLINK_TRAINING_RECORDS = 5_000
+MAX_SPLINK_TRAINING_CANDIDATE_PAIRS = 250_000
+MAX_SPLINK_U_RANDOM_PAIRS = 250_000
 THRESHOLD_EVALUATION = "Threshold Evaluation"
 POSITIVE_BENCHMARK = "Positive Benchmark"
 HIGH_TIER_VALIDATION = "High Tier Validation"
@@ -124,6 +130,28 @@ def _require_manager() -> None:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _release_unused_memory() -> None:
+    """Return completed large evaluation allocations to the worker container."""
+    gc.collect()
+    try:
+        ctypes.CDLL(None).malloc_trim(0)
+    except (AttributeError, OSError):
+        pass
+
+
+def _evaluation_progress(run_name: str, stage: str, count: int) -> None:
+    """Log non-sensitive stage telemetry for long governed evaluations."""
+    payload = _json(
+        {
+            "run": run_name,
+            "stage": stage,
+            "count": int(count),
+            "max_rss_kib": int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss),
+        }
+    )
+    frappe.logger("ccd_matching_evaluation", allow_site=True).warning(payload)
 
 
 def _ordered_pair_key(left_id: Any, right_id: Any) -> tuple[str, str]:
@@ -383,7 +411,11 @@ def _policy_snapshot(policy: MatchingPolicy) -> dict[str, Any]:
     }
 
 
-def _canonical_record(row: dict[str, Any], policy: MatchingPolicy) -> dict[str, Any]:
+def _canonical_record(
+    row: dict[str, Any],
+    policy: MatchingPolicy,
+    passthrough_fields: Iterable[str] = (),
+) -> dict[str, Any]:
     source = str(row.get("ccd_reg_source") or "")
     record = {
         "record_id": str(row.get("name") or ""),
@@ -393,21 +425,20 @@ def _canonical_record(row: dict[str, Any], policy: MatchingPolicy) -> dict[str, 
     }
     for attribute in policy.attributes():
         record[attribute] = policy.value(row, attribute)
-    record["chi_full"] = norm.chinese_compact(
-        f"{record.get('chi_surname') or ''}{record.get('chi_firstname') or ''}"
-    )
-    record["eng_full"] = norm.english_words(
-        f"{record.get('eng_surname') or ''} {record.get('eng_firstname') or ''}"
-    )
-    record["eng_surname"] = norm.english_words(record.get("eng_surname"))
-    record["eng_given_prefix"] = norm.english_compact(record.get("eng_firstname"))[:2]
-    record["surname_key"] = norm.chinese_compact(record.get("chi_surname")) or norm.english_compact(
-        record.get("eng_surname")
-    )
-    record["birthday"] = norm.birthday(record.get("birthday"))
-    record["phone"] = norm.phone(record.get("phone"))
-    record["email"] = norm.email(record.get("email"))
+    for fieldname in passthrough_fields:
+        if fieldname not in record:
+            record[fieldname] = row.get(fieldname)
+    return record
+
+
+def _splink_record(record: dict[str, Any], policy: MatchingPolicy) -> dict[str, Any]:
+    """Derive optional probabilistic fields only for the bounded local sample."""
+    chi_surname = norm.chinese_compact(record.get("chi_surname"))
+    chi_firstname = norm.chinese_compact(record.get("chi_firstname"))
+    eng_surname = norm.english_words(record.get("eng_surname"))
+    eng_firstname = norm.english_words(record.get("eng_firstname"))
     global_values = []
+    source = str(record.get("source") or "")
     for attribute in policy.trusted_global_identifiers:
         if policy.globally_comparable(source, attribute):
             raw_value = record.get(attribute)
@@ -416,8 +447,153 @@ def _canonical_record(row: dict[str, Any], policy: MatchingPolicy) -> dict[str, 
             value = norm.identifier(raw_value)
             if value:
                 global_values.append(f"{attribute}:{value}")
-    record["global_id"] = "|".join(sorted(global_values))
-    return record
+    return {
+        "record_id": record.get("record_id"),
+        "source": source,
+        "chi_full": f"{chi_surname}{chi_firstname}",
+        "eng_full": " ".join(value for value in (eng_surname, eng_firstname) if value),
+        "eng_surname": eng_surname,
+        "eng_given_prefix": norm.english_compact(record.get("eng_firstname"))[:2],
+        "surname_key": chi_surname or norm.english_compact(record.get("eng_surname")),
+        "birthday": norm.birthday(record.get("birthday")),
+        "phone": norm.phone(record.get("phone")),
+        "email": norm.email(record.get("email")),
+        "global_id": "|".join(sorted(global_values)),
+    }
+
+
+def _registration_formulas(
+    policy: MatchingPolicy,
+) -> dict[str, str]:
+    """Return the frozen Registration formula for every governed source."""
+    revision_by_source = {
+        source: policy.profile(source).registration_revision
+        for source in policy.sources()
+    }
+    revision_names = [
+        revision for revision in revision_by_source.values() if revision
+    ]
+    formula_by_revision = {
+        str(item.name): str(item.fuzzymachingscript or "")
+        for item in frappe.get_all(
+            "CCD Registration",
+            filters={"name": ["in", revision_names]},
+            fields=["name", "fuzzymachingscript"],
+            limit_page_length=max(len(revision_names), 1),
+        )
+    }
+    return {
+        source: formula_by_revision.get(revision, "")
+        for source, revision in revision_by_source.items()
+    }
+
+
+def _formula_record_fields(formulas: Iterable[str]) -> set[str]:
+    """Extract CCD Master fields read by governed fuzzy-formula macros."""
+    fields: set[str] = set()
+    macro_pattern = re.compile(
+        r"@(ChineseMatch|EnglishMatch|PhoneMatch|IDMatch)\((.+?)\)",
+        re.DOTALL,
+    )
+    for formula in formulas:
+        for match in macro_pattern.finditer(str(formula or "")):
+            expression = match.group(2).strip()
+            f_string = re.fullmatch(r"f(['\"])(.*)\1", expression, re.DOTALL)
+            if f_string:
+                fields.update(
+                    re.findall(
+                        r"\{([A-Za-z_][A-Za-z0-9_]*)\}",
+                        f_string.group(2),
+                    )
+                )
+                continue
+            unquoted = expression.strip("'\"").strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", unquoted):
+                fields.add(unquoted)
+    return fields
+
+
+def _evaluation_record_fields(
+    policy: MatchingPolicy,
+    formulas: dict[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Return the bounded CCD Master projection needed by one evaluation."""
+    fields = {"name", "modified", "ccd_reg_source", "ccd_source_key"}
+    for profile in policy.source_profiles.values():
+        fields.update(
+            fieldname
+            for fieldname in profile.field_map.values()
+            if fieldname
+        )
+    fields.update(_formula_record_fields((formulas or {}).values()))
+
+    meta = frappe.get_meta("CCD Master")
+    valid_fields = {
+        "name",
+        "modified",
+        "creation",
+        "owner",
+        "modified_by",
+        "docstatus",
+    }
+    valid_fields.update(field.fieldname for field in meta.fields)
+    missing = sorted(fields - valid_fields)
+    if missing:
+        frappe.throw(
+            "Evaluation formula or policy references missing CCD Master fields: "
+            + ", ".join(missing)
+        )
+    return tuple(sorted(fields))
+
+
+def _evaluation_records(
+    policy: MatchingPolicy,
+    snapshot_at: Any,
+    formulas: dict[str, str] | None = None,
+    progress: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Convert keyset DB batches directly into canonical records."""
+    sources = policy.sources()
+    placeholders = ", ".join(["%s"] * len(sources))
+    fields = _evaluation_record_fields(policy, formulas)
+    projection = ", ".join(f"`{fieldname}`" for fieldname in fields)
+    name_index = fields.index("name")
+    formula_fields = _formula_record_fields((formulas or {}).values())
+    records: list[dict[str, Any]] = []
+    last_name = ""
+    batch_size = 5_000
+    while True:
+        batch = frappe.db.sql(
+            f"""SELECT {projection} FROM `tabCCD Master`
+                WHERE modified <= %s
+                  AND ccd_reg_source IN ({placeholders})
+                  AND name > %s
+                ORDER BY name
+                LIMIT %s""",
+            (snapshot_at, *sources, last_name, batch_size),
+            as_list=True,
+        )
+        if not batch:
+            break
+        batch_count = len(batch)
+        for values in batch:
+            records.append(
+                _canonical_record(
+                    dict(zip(fields, values, strict=True)),
+                    policy,
+                    formula_fields,
+                )
+            )
+        last_name = str(batch[-1][name_index])
+        if progress is not None:
+            progress("canonical_progress", len(records))
+        batch.clear()
+        _release_unused_memory()
+        if batch_count < batch_size:
+            break
+    if progress is not None:
+        progress("canonical_ready", len(records))
+    return records
 
 
 def _bounded_probability_records(
@@ -533,6 +709,170 @@ def _select_high_tier_validation_results(
     }
 
 
+def _high_exact_values(
+    record: dict[str, Any],
+    policy: MatchingPolicy,
+) -> dict[str, Any]:
+    """Return only normalized evidence that can make deterministic High."""
+    eng_surname_words = norm.english_words(policy.value(record, "eng_surname"))
+    eng_firstname_words = norm.english_words(policy.value(record, "eng_firstname"))
+    return {
+        "chi_surname": norm.chinese_compact(policy.value(record, "chi_surname")),
+        "chi_firstname": norm.chinese_compact(policy.value(record, "chi_firstname")),
+        "eng_surname_words": eng_surname_words,
+        "eng_surname_compact": norm.english_compact(eng_surname_words),
+        "eng_firstname_words": eng_firstname_words,
+        "eng_firstname_compact": norm.english_compact(eng_firstname_words),
+        "birthday": norm.birthday(policy.value(record, "birthday")),
+        "phone": norm.phone(policy.value(record, "phone")),
+        "email": norm.email(policy.value(record, "email")),
+        "trusted": {
+            attribute: (
+                norm.identifier(policy.value(record, attribute)),
+                (
+                    attribute != "hkid"
+                    or norm.valid_hkid(policy.value(record, attribute))
+                ),
+            )
+            for attribute in policy.trusted_global_identifiers
+        },
+    }
+
+
+def _exact_available(left: str, right: str) -> bool:
+    return bool(left and right and left == right)
+
+
+def _deterministic_high_exact(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    left_values: dict[str, Any],
+    right_values: dict[str, Any],
+    policy: MatchingPolicy,
+) -> bool:
+    """Evaluate the exact predicate equivalent to tiered-gated High."""
+    left_source = str(left.get("source") or "")
+    right_source = str(right.get("source") or "")
+    exact_identifier = False
+    conflicting_identifier = False
+    for attribute in policy.trusted_global_identifiers:
+        if not (
+            policy.globally_comparable(left_source, attribute)
+            and policy.globally_comparable(right_source, attribute)
+        ):
+            continue
+        left_identifier, left_valid = left_values["trusted"].get(
+            attribute,
+            ("", False),
+        )
+        right_identifier, right_valid = right_values["trusted"].get(
+            attribute,
+            ("", False),
+        )
+        if not (left_valid and right_valid and left_identifier and right_identifier):
+            continue
+        if left_identifier == right_identifier:
+            exact_identifier = True
+        else:
+            conflicting_identifier = True
+    if conflicting_identifier:
+        return False
+    if exact_identifier:
+        return True
+
+    chinese_exact = _exact_available(
+        left_values["chi_surname"],
+        right_values["chi_surname"],
+    ) and _exact_available(
+        left_values["chi_firstname"],
+        right_values["chi_firstname"],
+    )
+    english_surname_exact = _exact_available(
+        left_values["eng_surname_words"],
+        right_values["eng_surname_words"],
+    ) or _exact_available(
+        left_values["eng_surname_compact"],
+        right_values["eng_surname_compact"],
+    )
+    english_firstname_exact = _exact_available(
+        left_values["eng_firstname_words"],
+        right_values["eng_firstname_words"],
+    ) or _exact_available(
+        left_values["eng_firstname_compact"],
+        right_values["eng_firstname_compact"],
+    )
+    exact_secondary = any(
+        _exact_available(left_values[attribute], right_values[attribute])
+        for attribute in ("birthday", "phone", "email")
+    )
+    return (chinese_exact or (english_surname_exact and english_firstname_exact)) and exact_secondary
+
+
+def _select_high_tier_validation_pairs(
+    pairs: Iterable[CandidatePair],
+    record_by_id: dict[str, dict[str, Any]],
+    policy: MatchingPolicy,
+    sample_size: int,
+    *,
+    seed: str,
+) -> tuple[list[CandidatePair], dict[str, Any]]:
+    """Select the High sample without fuzzy-scoring the full candidate universe."""
+    normalized: dict[str, dict[str, Any]] = {}
+    reservoir: list[tuple[int, int, CandidatePair]] = []
+    source_pair_counts: Counter = Counter()
+    blocking_route_counts: Counter = Counter()
+    high_candidate_count = 0
+    sequence = 0
+    for pair in pairs:
+        left = record_by_id[pair.left_id]
+        right = record_by_id[pair.right_id]
+        left_values = normalized.get(pair.left_id)
+        if left_values is None:
+            left_values = _high_exact_values(left, policy)
+            normalized[pair.left_id] = left_values
+        right_values = normalized.get(pair.right_id)
+        if right_values is None:
+            right_values = _high_exact_values(right, policy)
+            normalized[pair.right_id] = right_values
+        if not _deterministic_high_exact(
+            left,
+            right,
+            left_values,
+            right_values,
+            policy,
+        ):
+            continue
+        high_candidate_count += 1
+        source_pair_counts[pair.source_pair] += 1
+        blocking_route_counts["+".join(sorted(pair.blocking_routes))] += 1
+        digest = int(
+            hashlib.sha256(
+                f"high-validation:{seed}:{pair.left_id}:{pair.right_id}".encode()
+            ).hexdigest(),
+            16,
+        )
+        item = (-digest, sequence, pair)
+        sequence += 1
+        if len(reservoir) < sample_size:
+            heapq.heappush(reservoir, item)
+        elif digest < -reservoir[0][0]:
+            heapq.heapreplace(reservoir, item)
+
+    sampled = [
+        pair
+        for _, _, pair in sorted(
+            reservoir,
+            key=lambda item: (-item[0], item[1]),
+        )
+    ]
+    return sampled, {
+        "eligible_high_candidates": high_candidate_count,
+        "source_pair_counts": dict(sorted(source_pair_counts.items())),
+        "blocking_route_counts": dict(sorted(blocking_route_counts.items())),
+        "sampling_method": "uniform_deterministic_bottom_k",
+    }
+
+
 def _positive_benchmark_rows(
     policy: MatchingPolicy,
     snapshot_at: Any,
@@ -584,9 +924,16 @@ def _probability_map(
     required_record_ids: set[str] | None = None,
     requested_pairs: set[tuple[str, str]] | None = None,
 ) -> tuple[dict[tuple[str, str], float], str | None, int]:
-    training_records = _bounded_probability_records(records, required_record_ids)
     if not available():
-        return {}, "splink_dependency_unavailable", len(training_records)
+        return (
+            {},
+            "splink_dependency_unavailable",
+            min(len(records), MAX_SPLINK_TRAINING_RECORDS),
+        )
+    training_records = [
+        _splink_record(record, policy)
+        for record in _bounded_probability_records(records, required_record_ids)
+    ]
     requested = {
         tuple(sorted((str(left), str(right))))
         for left, right in (requested_pairs or ())
@@ -602,7 +949,7 @@ def _probability_map(
             for record_id in pair
         }
         scoring_records = [
-            row
+            _splink_record(row, policy)
             for row in records
             if str(row.get("record_id") or "") in required
         ]
@@ -610,13 +957,17 @@ def _probability_map(
         predictions = fit_predict(
             training_records,
             max_block_size=policy.max_block_size,
-            max_prediction_pairs=policy.max_candidate_pairs,
+            max_prediction_pairs=min(
+                policy.max_candidate_pairs,
+                MAX_SPLINK_TRAINING_CANDIDATE_PAIRS,
+            ),
             requested_pairs=requested,
             scoring_records=scoring_records,
             # Evaluation needs probabilities only for its already-selected,
             # bounded human-review sample. Materialising a million-row full
             # prediction frame here wastes memory and can OOM the worker.
             batch_requested_pairs=requested_pairs is not None,
+            u_random_max_pairs=MAX_SPLINK_U_RANDOM_PAIRS,
         )
     except (SplinkUnavailable, ValueError) as exc:
         return {}, str(exc), len(training_records)
@@ -630,6 +981,12 @@ def _probability_map(
         key = tuple(sorted((prediction.left_id, prediction.right_id)))
         output[key] = prediction.probability
     return output, None, len(training_records)
+
+
+def _splink_status(warning: str | None) -> str:
+    if warning == "not_applicable_to_deterministic_high_validation":
+        return "not_applicable"
+    return "local" if not warning else "unavailable"
 
 
 def _formula_baseline(
@@ -1041,52 +1398,50 @@ def run_evaluation(run_name: str) -> None:
         sources = policy.sources()
         if len(sources) < 2:
             frappe.throw("At least two governed CCD sources are required for an evaluation")
-        placeholders = ", ".join(["%s"] * len(sources))
-        raw_rows = frappe.db.sql(
-            f"""SELECT * FROM `tabCCD Master`
-                WHERE modified <= %s AND ccd_reg_source IN ({placeholders})""",
-            (run.snapshot_at, *sources),
-            as_dict=True,
+        formulas = _registration_formulas(policy)
+
+        def progress(stage: str, count: int) -> None:
+            _evaluation_progress(run.name, stage, count)
+
+        records = _evaluation_records(
+            policy,
+            run.snapshot_at,
+            formulas,
+            progress=progress,
         )
-        records = [_canonical_record(dict(row), policy) for row in raw_rows]
-        raw_by_id = {str(row.name): dict(row) for row in raw_rows}
-        record_by_id = {row["record_id"]: row for row in records if row["record_id"]}
         run.db_set("record_count", len(records), update_modified=False)
-        run.db_set("profile_json", _json(profile_attributes(raw_rows, policy)), update_modified=False)
+        run.db_set(
+            "profile_json",
+            _json(profile_attributes(records, policy)),
+            update_modified=False,
+        )
+        _evaluation_progress(run.name, "profile_ready", len(records))
+        _release_unused_memory()
+        record_by_id = {row["record_id"]: row for row in records if row["record_id"]}
+        raw_by_id = record_by_id
 
         run.db_set("status", "Generating Candidates")
         run_purpose = run.run_purpose or THRESHOLD_EVALUATION
+
         if run_purpose == HIGH_TIER_VALIDATION:
-            blocked = generate_deterministic_high_candidate_pairs(records, policy)
+            blocked = generate_deterministic_high_candidate_pairs(
+                records,
+                policy,
+                progress=progress,
+            )
             blocking_version = HIGH_BLOCKING_VERSION
         else:
-            blocked = generate_candidate_pairs(records, policy)
+            blocked = generate_candidate_pairs(
+                records,
+                policy,
+                progress=progress,
+            )
             blocking_version = BLOCKING_VERSION
         run.db_set("candidate_count", len(blocked.pairs), update_modified=False)
         run.db_set("candidate_truncated", int(blocked.truncated), update_modified=False)
         run.db_set("skipped_blocks_json", _json(blocked.skipped_blocks), update_modified=False)
 
         run.db_set("status", "Scoring")
-        revision_by_source = {
-            source: policy.profile(source).registration_revision
-            for source in sources
-        }
-        revision_names = [
-            revision for revision in revision_by_source.values() if revision
-        ]
-        formula_by_revision = {
-            str(item.name): str(item.fuzzymachingscript or "")
-            for item in frappe.get_all(
-                "CCD Registration",
-                filters={"name": ["in", revision_names]},
-                fields=["name", "fuzzymachingscript"],
-                limit_page_length=max(len(revision_names), 1),
-            )
-        }
-        formulas = {
-            source: formula_by_revision.get(revision, "")
-            for source, revision in revision_by_source.items()
-        }
         historical_pair_keys: set[tuple[str, str]] = set()
         historical_candidate_exclusions = 0
         eligible_source_pair_counts = Counter(pair.source_pair for pair in blocked.pairs)
@@ -1161,25 +1516,44 @@ def run_evaluation(run_name: str) -> None:
                     "candidate_recovered": int(key in recovered),
                 }
         elif (run.run_purpose or THRESHOLD_EVALUATION) == HIGH_TIER_VALIDATION:
-            sampled, high_validation_metadata = _select_high_tier_validation_results(
-                evaluated_results(apply_formula=False),
+            sampled_pairs, high_validation_metadata = _select_high_tier_validation_pairs(
+                (
+                    pair
+                    for pair in blocked.pairs
+                    if _ordered_pair_key(pair.left_id, pair.right_id)
+                    not in historical_pair_keys
+                ),
+                record_by_id,
+                policy,
                 int(run.sample_size),
                 seed=run.name,
             )
-            if len(sampled) != int(run.sample_size):
+            _evaluation_progress(
+                run.name,
+                "high_exact_selection_ready",
+                int(high_validation_metadata["eligible_high_candidates"]),
+            )
+            if len(sampled_pairs) != int(run.sample_size):
                 frappe.throw(
                     "Fewer unseen deterministic-High pairs are available than requested"
                 )
             sampled = [
                 _formula_baseline(
-                    result,
-                    raw_by_id[result.pair.left_id],
-                    raw_by_id[result.pair.right_id],
-                    formulas.get(record_by_id[result.pair.left_id]["source"], ""),
-                    formulas.get(record_by_id[result.pair.right_id]["source"], ""),
+                    compare_all_models(
+                        pair,
+                        record_by_id[pair.left_id],
+                        record_by_id[pair.right_id],
+                        policy,
+                    ),
+                    raw_by_id[pair.left_id],
+                    raw_by_id[pair.right_id],
+                    formulas.get(record_by_id[pair.left_id]["source"], ""),
+                    formulas.get(record_by_id[pair.right_id]["source"], ""),
                 )
-                for result in sampled
+                for pair in sampled_pairs
             ]
+            if any(result.tiered_gated.tier != MatchTier.HIGH for result in sampled):
+                frappe.throw("Exact High selector disagreed with the governed tiered model")
         else:
             sampled = stratified_sample(
                 evaluated_results(),
@@ -1196,12 +1570,17 @@ def run_evaluation(run_name: str) -> None:
             tuple(sorted((result.pair.left_id, result.pair.right_id)))
             for result in sampled
         }
-        probabilities, probability_warning, splink_training_count = _probability_map(
-            records,
-            policy,
-            required_ids,
-            requested_pairs,
-        )
+        if run_purpose == HIGH_TIER_VALIDATION:
+            probabilities = {}
+            probability_warning = "not_applicable_to_deterministic_high_validation"
+            splink_training_count = 0
+        else:
+            probabilities, probability_warning, splink_training_count = _probability_map(
+                records,
+                policy,
+                required_ids,
+                requested_pairs,
+            )
         rescored = []
         for result in sampled:
             pair = result.pair
@@ -1296,11 +1675,15 @@ def run_evaluation(run_name: str) -> None:
                     "splink_random_match_prior": RANDOM_MATCH_PRIOR,
                     "splink_training_record_count": splink_training_count,
                     "splink_training_record_limit": MAX_SPLINK_TRAINING_RECORDS,
+                    "splink_training_candidate_pair_limit": (
+                        MAX_SPLINK_TRAINING_CANDIDATE_PAIRS
+                    ),
+                    "splink_u_random_pair_limit": MAX_SPLINK_U_RANDOM_PAIRS,
                     "splink_direct_scoring_pair_limit": MAX_DIRECT_SCORING_PAIRS,
                     "splink_scored_sample_pairs": sum(
                         int(pair in probabilities) for pair in requested_pairs
                     ),
-                    "splink_status": "local" if not probability_warning else "unavailable",
+                    "splink_status": _splink_status(probability_warning),
                     "splink_warning": probability_warning,
                     "benchmark_sample_pairs": len(benchmark_metadata),
                     "benchmark_candidate_recovered": sum(
@@ -1338,15 +1721,8 @@ def repair_run_probabilistic_scores(run_name: str) -> None:
         if run.status not in {"Scoring", "Reviewing"}:
             frappe.throw("Probability repair is only allowed before evaluation finalization")
         policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
-        sources = policy.sources()
-        placeholders = ", ".join(["%s"] * len(sources))
-        raw_rows = frappe.db.sql(
-            f"""SELECT * FROM `tabCCD Master`
-                WHERE modified <= %s AND ccd_reg_source IN ({placeholders})""",
-            (run.snapshot_at, *sources),
-            as_dict=True,
-        )
-        records = [_canonical_record(dict(row), policy) for row in raw_rows]
+        records = _evaluation_records(policy, run.snapshot_at)
+        _release_unused_memory()
         pairs = frappe.get_all(
             "CCD Match Evaluation Pair",
             filters={"evaluation_run": run.name},
@@ -1391,8 +1767,12 @@ def repair_run_probabilistic_scores(run_name: str) -> None:
                 "splink_random_match_prior": RANDOM_MATCH_PRIOR,
                 "splink_training_record_count": splink_training_count,
                 "splink_training_record_limit": MAX_SPLINK_TRAINING_RECORDS,
+                "splink_training_candidate_pair_limit": (
+                    MAX_SPLINK_TRAINING_CANDIDATE_PAIRS
+                ),
+                "splink_u_random_pair_limit": MAX_SPLINK_U_RANDOM_PAIRS,
                 "splink_direct_scoring_pair_limit": MAX_DIRECT_SCORING_PAIRS,
-                "splink_status": "local" if not probability_warning else "unavailable",
+                "splink_status": _splink_status(probability_warning),
                 "splink_warning": probability_warning,
                 "splink_scored_sample_pairs": scored_count,
             }
@@ -1714,19 +2094,13 @@ def install_complete_high_sample_repair(run_name: str) -> dict[str, Any]:
 
     try:
         policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
-        sources = policy.sources()
-        placeholders = ", ".join(["%s"] * len(sources))
-        raw_rows = frappe.db.sql(
-            f"""SELECT * FROM `tabCCD Master`
-                WHERE modified <= %s AND ccd_reg_source IN ({placeholders})""",
-            (run.snapshot_at, *sources),
-            as_dict=True,
-        )
-        records = [_canonical_record(dict(row), policy) for row in raw_rows]
-        raw_by_id = {str(row.name): dict(row) for row in raw_rows}
+        formulas = _registration_formulas(policy)
+        records = _evaluation_records(policy, run.snapshot_at, formulas)
+        _release_unused_memory()
         record_by_id = {
             row["record_id"]: row for row in records if row.get("record_id")
         }
+        raw_by_id = record_by_id
         blocked = generate_deterministic_high_candidate_pairs(records, policy)
         if blocked.truncated or blocked.skipped_blocks:
             frappe.throw(
@@ -1799,26 +2173,6 @@ def install_complete_high_sample_repair(run_name: str) -> dict[str, Any]:
             frappe.throw(
                 "The complete High sample differs from the diagnosed one-pair repair"
             )
-
-        revision_by_source = {
-            source: policy.profile(source).registration_revision for source in sources
-        }
-        revision_names = [
-            revision for revision in revision_by_source.values() if revision
-        ]
-        formula_by_revision = {
-            str(item.name): str(item.fuzzymachingscript or "")
-            for item in frappe.get_all(
-                "CCD Registration",
-                filters={"name": ["in", revision_names]},
-                fields=["name", "fuzzymachingscript"],
-                limit_page_length=max(len(revision_names), 1),
-            )
-        }
-        formulas = {
-            source: formula_by_revision.get(revision, "")
-            for source, revision in revision_by_source.items()
-        }
 
         added_key = next(iter(added_keys))
         added_result = sampled_by_key[added_key]
@@ -1929,8 +2283,12 @@ def install_complete_high_sample_repair(run_name: str) -> dict[str, Any]:
                 "splink_random_match_prior": RANDOM_MATCH_PRIOR,
                 "splink_training_record_count": splink_training_count,
                 "splink_training_record_limit": MAX_SPLINK_TRAINING_RECORDS,
+                "splink_training_candidate_pair_limit": (
+                    MAX_SPLINK_TRAINING_CANDIDATE_PAIRS
+                ),
+                "splink_u_random_pair_limit": MAX_SPLINK_U_RANDOM_PAIRS,
                 "splink_direct_scoring_pair_limit": MAX_DIRECT_SCORING_PAIRS,
-                "splink_status": "local" if not probability_warning else "unavailable",
+                "splink_status": _splink_status(probability_warning),
                 "splink_warning": probability_warning,
                 "splink_scored_sample_pairs": sum(
                     int(pair.probabilistic_available)

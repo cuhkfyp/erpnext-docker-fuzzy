@@ -51,7 +51,7 @@ class ModelResult:
     probability: float | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CandidatePair:
     left_id: str
     right_id: str

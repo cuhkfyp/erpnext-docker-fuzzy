@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
+from .vendor import activate_vendor
+
 
 class SplinkUnavailable(RuntimeError):
     pass
@@ -20,7 +22,7 @@ RANDOM_MATCH_PRIOR = 0.0001
 MAX_DIRECT_SCORING_PAIRS = 5_000
 REQUESTED_PAIR_BATCH_SIZE = 20_000
 U_RANDOM_MAX_PAIRS = 1_000_000
-SPLINK_ADAPTER_VERSION = "pilot-splink-1.1"
+SPLINK_ADAPTER_VERSION = "pilot-splink-1.2"
 COMPARISON_FIELDS = ("chi_full", "eng_full", "birthday", "phone", "email")
 
 
@@ -47,6 +49,7 @@ def _null_missing_comparison_values(
 
 
 def available() -> bool:
+    activate_vendor()
     try:
         import duckdb
         import splink
@@ -57,6 +60,7 @@ def available() -> bool:
 
 
 def dependency_versions() -> dict[str, str]:
+    activate_vendor()
     output = {}
     for package in ("splink", "duckdb"):
         try:
@@ -138,6 +142,7 @@ def fit_predict(
     Input rows must contain `record_id`, `source`, and the canonical fields used
     below. The function performs no network calls and does not persist raw data.
     """
+    activate_vendor()
     try:
         import pandas as pd
         import splink.comparison_library as cl

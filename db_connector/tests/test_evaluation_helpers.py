@@ -120,6 +120,63 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertEqual(by_attribute["hkid"]["reliability_status"], "Approved")
         self.assertNotIn("res_addr1", {row["fieldname"] for row in rows})
 
+    def test_formula_record_fields_cover_all_supported_macros(self):
+        fields = self.module._formula_record_fields(
+            [
+                '(@ChineseMatch(f"{chi_surname} {chi_firstname}") * 0.5 '
+                '+ @EnglishMatch("eng_surname") * 0.2 '
+                '+ @PhoneMatch("phone_num") * 0.2 '
+                '+ @IDMatch("hkid") * 0.1) > 0.8'
+            ]
+        )
+        self.assertEqual(
+            fields,
+            {
+                "chi_surname",
+                "chi_firstname",
+                "eng_surname",
+                "phone_num",
+                "hkid",
+            },
+        )
+
+    def test_evaluation_projection_excludes_unreferenced_operational_fields(self):
+        policy = MatchingPolicy(
+            source_profiles={
+                "A": SourceProfile(
+                    "A",
+                    {"phone": "phone_num", "chi_surname": "chi_surname"},
+                )
+            }
+        )
+        meta = types.SimpleNamespace(
+            fields=[
+                types.SimpleNamespace(fieldname=fieldname)
+                for fieldname in (
+                    "ccd_reg_source",
+                    "ccd_source_key",
+                    "phone_num",
+                    "chi_surname",
+                    "hkid",
+                    "res_addr1",
+                    "res_area",
+                )
+            ]
+        )
+        with patch.object(
+            self.module.frappe,
+            "get_meta",
+            return_value=meta,
+            create=True,
+        ):
+            fields = self.module._evaluation_record_fields(
+                policy,
+                {"A": '@IDMatch("hkid") > 0.9'},
+            )
+        self.assertIn("hkid", fields)
+        self.assertNotIn("res_addr1", fields)
+        self.assertNotIn("res_area", fields)
+
     def test_probability_training_sample_is_bounded_and_keeps_review_records(self):
         records = [{"record_id": f"R{index}", "source": "A"} for index in range(100)]
         first = self.module._bounded_probability_records(
