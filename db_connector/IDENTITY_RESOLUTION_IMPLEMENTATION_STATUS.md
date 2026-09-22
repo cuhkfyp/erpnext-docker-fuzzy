@@ -48,10 +48,10 @@ connection. A later Start checks the queue's terminal state and zero committed
 rows before releasing a stale in-progress guard.
 
 Start Recommendation Canary is now atomic and idempotent while a canary is
-Queued or running: concurrent clicks return the existing run rather than
-enqueueing another one, including across policies. Governed Registration
-cancellation serializes confirmed starts across System Managers; an exact
-retry returns the existing operation or the applied retirement result. Even a
+Queued or running: concurrent clicks for the same policy return the existing
+run; a different policy is blocked while any canary is processing. Governed
+Registration cancellation serializes confirmed starts across System Managers;
+an exact retry returns the existing operation or the applied retirement result. Even a
 zero-record cancellation writes an auditable retirement run so a later retry
 can be recognized. Ordinary ERPNext Cancel remains fail-closed.
 
