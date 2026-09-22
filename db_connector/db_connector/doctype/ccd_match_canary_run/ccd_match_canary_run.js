@@ -113,8 +113,16 @@ function create_all_batch(frm) {
 }
 
 function create_activation_batch(frm, selectionMethod, componentLimit, demonstration) {
+	if (frm.__ccd_batch_creation_starting) return;
+	frm.__ccd_batch_creation_starting = true;
+	const progress = new frappe.ui.Dialog({
+		title: __("Creating Activation Batch"),
+		fields: [{ fieldname: "operation_status_html", fieldtype: "HTML" }],
+	});
+	progress.show();
+	update_activation_creation_progress(progress, __("Queueing the component safety preview…"));
 	frappe.call({
-		method: "db_connector.api_identity_activation.create_activation_batch",
+		method: "db_connector.api_identity_activation.start_activation_batch_creation",
 		args: {
 			run_name: frm.doc.name,
 			selection_method: selectionMethod,
@@ -122,9 +130,65 @@ function create_activation_batch(frm, selectionMethod, componentLimit, demonstra
 			is_pilot_wave: selectionMethod === "Explicit Wave" ? 1 : 0,
 			is_demonstration: demonstration || 0,
 		},
-		freeze: true,
 		callback(response) {
-			if (response.message?.batch) frappe.set_route("Form", "CCD Identity Activation Batch", response.message.batch);
+			frm.__ccd_batch_creation_starting = false;
+			const token = response.message?.operation_token;
+			if (!token) {
+				progress.hide();
+				frappe.msgprint(__("No operation token was returned. Check the Activation Batch list before retrying."));
+				return;
+			}
+			poll_activation_batch_creation(token, progress);
+		},
+		error() {
+			frm.__ccd_batch_creation_starting = false;
+			progress.hide();
+		},
+	});
+}
+
+function update_activation_creation_progress(dialog, message) {
+	const field = dialog.get_field("operation_status_html");
+	if (!field?.$wrapper) return;
+	field.$wrapper.html(
+		`<p>${frappe.utils.escape_html(message)}</p>`
+		+ `<p class="text-muted small">${__("The safety preview continues in the background even if you close this dialog. Creating a batch does not approve or apply it.")}</p>`,
+	);
+}
+
+function poll_activation_batch_creation(operationToken, dialog) {
+	frappe.call({
+		method: "db_connector.api_identity_activation.get_activation_batch_creation",
+		args: { operation_token: operationToken },
+		callback(response) {
+			const operation = response.message || {};
+			if (["Queued", "Running"].includes(operation.status)) {
+				update_activation_creation_progress(
+					dialog,
+					operation.status === "Queued"
+						? __("Waiting for the background worker…")
+						: __("Checking the selected components and creating the batch…"),
+				);
+				setTimeout(() => poll_activation_batch_creation(operationToken, dialog), 4000);
+				return;
+			}
+			dialog.hide();
+			if (operation.status === "Completed" && operation.batch) {
+				frappe.show_alert({ message: __("Activation Batch created."), indicator: "green" });
+				frappe.set_route("Form", "CCD Identity Activation Batch", operation.batch);
+				return;
+			}
+			frappe.msgprint({
+				title: operation.status === "Failed" ? __("Activation Batch creation failed") : __("Activation Batch result unavailable"),
+				indicator: operation.status === "Failed" ? "red" : "orange",
+				message: frappe.utils.escape_html(
+					operation.error || __("The result could not be confirmed. Check the Activation Batch list before retrying."),
+				),
+			});
+		},
+		error() {
+			update_activation_creation_progress(dialog, __("The status check was interrupted. Retrying…"));
+			setTimeout(() => poll_activation_batch_creation(operationToken, dialog), 4000);
 		},
 	});
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from collections import defaultdict
 from typing import Any, Iterable
 
@@ -28,6 +29,8 @@ RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 BATCH_DOCTYPE = "CCD Identity Activation Batch"
 EVENT_DOCTYPE = "CCD Match Recommendation Event"
 SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
+CREATION_OPERATION_TTL_SECONDS = 21_600
+CREATION_OPERATION_TIMEOUT_SECONDS = 7_200
 
 
 def _json(value: Any) -> str:
@@ -521,6 +524,201 @@ def create_activation_batch(
         is_demonstration,
         allow_structural_overlap=False,
     )
+
+
+def _creation_operation_key(operation_token: str) -> str:
+    return f"ccd_activation_batch_creation:{operation_token}"
+
+
+def _creation_active_key(
+    run_name: str,
+    selection_method: str,
+    component_limit: int | None,
+    is_pilot_wave: int,
+    is_demonstration: int,
+) -> str:
+    values = (run_name, selection_method, component_limit, is_pilot_wave, is_demonstration)
+    digest = hashlib.sha256(_json(values).encode()).hexdigest()
+    return f"ccd_activation_batch_creation_active:{digest}"
+
+
+def _creation_operation(operation_token: str) -> dict[str, Any] | None:
+    raw = frappe.cache.get_value(_creation_operation_key(operation_token), expires=True)
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        payload = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _set_creation_operation(operation_token: str, payload: dict[str, Any]) -> None:
+    frappe.cache.set_value(
+        _creation_operation_key(operation_token),
+        _json(payload),
+        expires_in_sec=CREATION_OPERATION_TTL_SECONDS,
+    )
+
+
+@frappe.whitelist(methods=["POST"])
+def start_activation_batch_creation(
+    run_name: str,
+    selection_method: str = "Explicit Wave",
+    component_limit: int | str | None = None,
+    is_pilot_wave: int | str = 0,
+    is_demonstration: int | str = 0,
+) -> dict[str, Any]:
+    """Return promptly; build the reviewed batch on the long queue."""
+    _require_manager()
+    if selection_method not in {"Explicit Wave", "Approve All Eligible"}:
+        frappe.throw("Unsupported Desk Activation Batch selection method")
+    run = _run(str(run_name))
+    limit = int(component_limit) if component_limit not in (None, "") else None
+    if selection_method == "Explicit Wave" and (limit is None or limit <= 0):
+        frappe.throw("Component limit must be greater than zero")
+    if selection_method == "Approve All Eligible" and limit is not None:
+        frappe.throw("Approve All Eligible does not accept a component limit")
+    pilot = int(is_pilot_wave or 0)
+    demonstration = int(is_demonstration or 0)
+    if pilot not in {0, 1} or demonstration not in {0, 1}:
+        frappe.throw("Invalid Activation Batch flags")
+    locked = frappe.db.sql(
+        "SELECT name FROM `tabCCD Match Canary Run` WHERE name=%s FOR UPDATE",
+        (run.name,),
+    )
+    if not locked:
+        frappe.throw("CCD Match Canary Run no longer exists")
+    active_key = _creation_active_key(
+        run.name, selection_method, limit, pilot, demonstration
+    )
+    active_token = frappe.cache.get_value(active_key)
+    if isinstance(active_token, bytes):
+        active_token = active_token.decode("utf-8", "replace")
+    existing = _creation_operation(str(active_token)) if active_token else None
+    if existing and existing.get("status") in {"Queued", "Running"}:
+        if existing.get("requested_by") != frappe.session.user:
+            frappe.throw("Another System Manager is creating this Activation Batch")
+        return {
+            "operation_token": str(active_token),
+            "status": existing["status"],
+            "already_running": True,
+        }
+
+    operation_token = uuid.uuid4().hex
+    requested_by = str(frappe.session.user)
+    _set_creation_operation(operation_token, {
+        "operation_token": operation_token,
+        "run_name": run.name,
+        "requested_by": requested_by,
+        "status": "Queued",
+        "queued_at": str(frappe.utils.now_datetime()),
+    })
+    frappe.cache.set_value(
+        active_key,
+        operation_token,
+        expires_in_sec=CREATION_OPERATION_TTL_SECONDS,
+    )
+    try:
+        frappe.enqueue(
+            "db_connector.api_identity_activation.run_activation_batch_creation",
+            queue="long",
+            timeout=CREATION_OPERATION_TIMEOUT_SECONDS,
+            enqueue_after_commit=True,
+            job_id=f"ccd-activation-batch-{operation_token}",
+            operation_token=operation_token,
+            run_name=run.name,
+            selection_method=selection_method,
+            component_limit=limit,
+            is_pilot_wave=pilot,
+            is_demonstration=demonstration,
+            requested_by=requested_by,
+        )
+        frappe.db.commit()
+    except Exception:
+        frappe.cache.delete_value(active_key)
+        frappe.cache.delete_value(_creation_operation_key(operation_token))
+        raise
+    return {"operation_token": operation_token, "status": "Queued"}
+
+
+def run_activation_batch_creation(
+    operation_token: str,
+    run_name: str,
+    selection_method: str,
+    component_limit: int | None,
+    is_pilot_wave: int,
+    is_demonstration: int,
+    requested_by: str,
+) -> dict[str, Any]:
+    """Only plan a batch; this worker never approves or materializes it."""
+    if "System Manager" not in set(frappe.get_roles(requested_by)):
+        raise frappe.PermissionError("System Manager role is required")
+    frappe.set_user(requested_by)
+    payload = _creation_operation(operation_token)
+    if not payload or payload.get("requested_by") != requested_by:
+        raise frappe.PermissionError("Activation Batch creation operation is unavailable")
+    payload["status"] = "Running"
+    payload["started_at"] = str(frappe.utils.now_datetime())
+    _set_creation_operation(operation_token, payload)
+    try:
+        result = _create_activation_batch(
+            run_name,
+            selection_method,
+            component_limit,
+            None,
+            is_pilot_wave,
+            is_demonstration,
+        )
+    except Exception as exc:
+        frappe.db.rollback()
+        payload.update({
+            "status": "Failed",
+            "completed_at": str(frappe.utils.now_datetime()),
+            "error": f"{type(exc).__name__}: {str(exc)}"[:1000],
+        })
+        _set_creation_operation(operation_token, payload)
+        frappe.log_error(frappe.get_traceback(), "CCD Activation Batch creation failed")
+        raise
+    # _create_activation_batch committed before returning. If publishing the
+    # result fails, the outcome is unknown to the UI, never a false failure.
+    payload.update({
+        "status": "Completed",
+        "completed_at": str(frappe.utils.now_datetime()),
+        "batch": result["batch"],
+        "batch_status": result["status"],
+    })
+    _set_creation_operation(operation_token, payload)
+    return result
+
+
+@frappe.whitelist()
+def get_activation_batch_creation(operation_token: str) -> dict[str, Any]:
+    """Read one manager's queued creation result without repeating the work."""
+    _require_manager()
+    token = str(operation_token or "").strip()
+    if len(token) != 32 or any(character not in "0123456789abcdef" for character in token):
+        frappe.throw("Invalid Activation Batch operation token")
+    payload = _creation_operation(token)
+    if not payload:
+        return {"operation_token": token, "status": "Expired"}
+    if payload.get("requested_by") != frappe.session.user:
+        frappe.throw("This Activation Batch operation belongs to another user")
+    if payload.get("status") in {"Queued", "Running"}:
+        from frappe.utils.background_jobs import get_job_status
+
+        job_status = get_job_status(f"ccd-activation-batch-{token}")
+        if job_status is None or job_status in {"failed", "canceled", "stopped", "finished"}:
+            # A worker can stop after committing the batch but before its
+            # result reaches Redis. Never report that uncertain outcome as a
+            # definite creation failure.
+            payload["status"] = "Unknown"
+            payload["error"] = (
+                "The background worker ended without a confirmed result. "
+                "Check existing batches before retrying."
+            )
+            _set_creation_operation(token, payload)
+    return payload
 
 
 @frappe.whitelist()

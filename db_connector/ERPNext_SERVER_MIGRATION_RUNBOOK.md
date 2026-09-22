@@ -1091,6 +1091,13 @@ component must be excluded, open one of its Proposed recommendations and use
 **Hold Complete Component for Later/Demo** before batch creation. The hold
 applies to the entire component.
 
+Desk queues Activation Batch creation and polls its operation result. The
+progress dialog can be closed without cancelling the safety preview. Wait for
+the confirmed batch link before approving anything; if the result cannot be
+confirmed, inspect existing Activation Batches for the canary before retrying.
+The batch-creation worker only plans and reviews the frozen selection; it never
+approves or applies identity links.
+
 The component limit is counted *after* held components are excluded. Therefore:
 
 - hold `0`, enter `5` → 5 pilot components and no deliberate holdout;
