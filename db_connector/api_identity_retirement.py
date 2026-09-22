@@ -1721,6 +1721,19 @@ def _apply_source_retirement(
         "SELECT value FROM `tabSingles` WHERE doctype=%s ORDER BY field FOR UPDATE",
         (SETTINGS_DOCTYPE,),
     )
+    # The first idempotency read can predate another transaction's commit.
+    # Repeat it as a locking read after the shared retirement lock.
+    applied = frappe.db.sql(
+        f"SELECT name FROM `tab{RETIREMENT_DOCTYPE}` "
+        "WHERE retirement_key = %s AND status = 'Applied' FOR UPDATE",
+        (retirement_key,),
+    )
+    if applied:
+        return {
+            "retirement_run": str(applied[0][0]),
+            "status": "Applied",
+            "idempotent": True,
+        }
     enabled = _control_state()
     if any(enabled.values()):
         frappe.throw(
@@ -1740,7 +1753,47 @@ def _apply_source_retirement(
     if public["scope_fingerprint"] != fingerprint:
         frappe.throw("The deletion population changed; run a fresh zero-write preview")
     if not target_ids:
-        return {**public, "status": "No Changes", "idempotent": True}
+        # A zero-record cancellation still needs a durable, auditable result
+        # so a later retry can prove it is the same completed operation.
+        now = frappe.utils.now_datetime()
+        run = frappe.get_doc(
+            {
+                "doctype": RETIREMENT_DOCTYPE,
+                "retirement_key": retirement_key,
+                "scope_type": "Source Retirement",
+                "scope_fingerprint": fingerprint,
+                "status": "Applying",
+                "reason": reason,
+                "preview_json": canonical_json(public),
+                "missing_record_count": 0,
+                "active_issue_count": 0,
+                "started_at": now,
+                "started_by": frappe.session.user,
+            }
+        ).insert(ignore_permissions=True)
+        result = {
+            "retirement_run": run.name,
+            "status": "Applied",
+            "scope_fingerprint": fingerprint,
+            "source_name": str(source_name),
+            "deleted_ccd_masters": 0,
+            "counts": {},
+            "historical_affected_counts": {},
+        }
+        frappe.db.set_value(
+            RETIREMENT_DOCTYPE,
+            run.name,
+            {
+                "status": "Applied",
+                "result_json": canonical_json(result),
+                "completed_at": frappe.utils.now_datetime(),
+                "completed_by": frappe.session.user,
+            },
+            update_modified=False,
+        )
+        if commit:
+            frappe.db.commit()
+        return result
     if state is None:
         frappe.throw("Unable to reconstruct the confirmed source retirement scope")
 
@@ -2053,8 +2106,11 @@ def _registration_operation_cache_key(operation_token: str) -> str:
 def _registration_operation_active_key(
     operation: str, registration_name: str, requested_by: str
 ) -> str:
+    # Apply is one destructive operation per Registration, regardless of which
+    # manager clicked. Preview remains scoped to each requester's own UI.
+    owner = "" if operation == "Apply" else requested_by
     digest = hashlib.sha256(
-        f"{operation}\x1f{registration_name}\x1f{requested_by}".encode()
+        f"{operation}\x1f{registration_name}\x1f{owner}".encode()
     ).hexdigest()
     return f"ccd_registration_retirement_active:{digest}"
 
@@ -2109,7 +2165,10 @@ def _update_registration_operation_progress(message: str) -> None:
 
 
 def _existing_registration_operation(
-    operation: str, registration_name: str, requested_by: str
+    operation: str,
+    registration_name: str,
+    requested_by: str,
+    confirm_scope_fingerprint: str = "",
 ) -> dict[str, str] | None:
     active_key = _registration_operation_active_key(
         operation, registration_name, requested_by
@@ -2121,11 +2180,65 @@ def _existing_registration_operation(
         else None
     )
     if payload and str(payload.get("status")) in {"Queued", "Running"}:
+        if str(payload.get("requested_by")) != requested_by:
+            frappe.throw(
+                "A different System Manager already has this Registration "
+                "retirement in progress"
+            )
+        if (
+            operation == "Apply"
+            and str(payload.get("confirm_scope_fingerprint"))
+            != confirm_scope_fingerprint
+        ):
+            frappe.throw("A different confirmed retirement scope is in progress")
         return {
             "operation_token": operation_token,
             "status": str(payload.get("status")),
+            "already_running": True,
+        }
+    if (
+        payload
+        and operation == "Apply"
+        and str(payload.get("status")) == "Completed"
+        and str(payload.get("requested_by")) == requested_by
+        and str(payload.get("confirm_scope_fingerprint"))
+        == confirm_scope_fingerprint
+    ):
+        return {
+            "operation_token": operation_token,
+            "status": "Completed",
+            "idempotent": True,
         }
     return None
+
+
+def _applied_registration_cancellation(
+    registration: Any, fingerprint: str
+) -> dict[str, Any] | None:
+    """Recognize an exact, previously committed cancellation after a retry."""
+    if int(registration.docstatus or 0) != 2 or len(fingerprint) != 64:
+        return None
+    retirement_key = hashlib.sha256(
+        f"source-retirement\x1f{fingerprint}".encode()
+    ).hexdigest()
+    row = frappe.db.get_value(
+        RETIREMENT_DOCTYPE,
+        {"retirement_key": retirement_key, "status": "Applied"},
+        ["name", "result_json"],
+        as_dict=True,
+    )
+    if not row:
+        return None
+    result = json.loads(row.result_json or "{}")
+    if str(result.get("source_name")) != registration_source_key(registration):
+        return None
+    return {
+        **result,
+        "retirement_run": row.name,
+        "registration": registration.name,
+        "registration_status": "Cancelled",
+        "idempotent": True,
+    }
 
 
 def _queue_registration_operation(
@@ -2137,17 +2250,51 @@ def _queue_registration_operation(
     timeout: int,
     kwargs: dict[str, Any] | None = None,
 ) -> dict[str, str]:
+    fingerprint = str((kwargs or {}).get("confirm_scope_fingerprint") or "")
+    if operation == "Apply":
+        # Serialize concurrent clicks across all managers. This lock is held
+        # until the queued operation and its token have been committed.
+        locked = frappe.db.sql(
+            "SELECT docstatus FROM `tabCCD Registration` "
+            "WHERE name = %s FOR UPDATE",
+            (registration_name,),
+        )
+        if not locked:
+            frappe.throw("CCD Registration no longer exists")
     existing = _existing_registration_operation(
-        operation, registration_name, requested_by
+        operation, registration_name, requested_by, fingerprint
     )
     if existing:
         return existing
+    if operation == "Apply" and int(locked[0][0]) != 1:
+        registration = frappe.get_doc("CCD Registration", registration_name)
+        result = _applied_registration_cancellation(registration, fingerprint)
+        if not result:
+            frappe.throw("Only a submitted CCD Registration can be cancelled")
+        operation_token = uuid.uuid4().hex
+        _set_registration_operation(operation_token, {
+            "operation": operation,
+            "operation_token": operation_token,
+            "registration": registration_name,
+            "requested_by": requested_by,
+            "confirm_scope_fingerprint": fingerprint,
+            "status": "Completed",
+            "completed_at": str(frappe.utils.now_datetime()),
+            "result": result,
+        })
+        frappe.db.commit()
+        return {
+            "operation_token": operation_token,
+            "status": "Completed",
+            "idempotent": True,
+        }
     operation_token = uuid.uuid4().hex
     payload = {
         "operation": operation,
         "operation_token": operation_token,
         "registration": registration_name,
         "requested_by": requested_by,
+        "confirm_scope_fingerprint": fingerprint,
         "status": "Queued",
         "queued_at": str(frappe.utils.now_datetime()),
     }
@@ -2268,8 +2415,20 @@ def cancel_registration_with_retirement(
 ) -> dict[str, Any]:
     """Cancel a Registration and retire/delete its source in one transaction."""
     _require_manager()
+    locked = frappe.db.sql(
+        "SELECT docstatus FROM `tabCCD Registration` "
+        "WHERE name = %s FOR UPDATE",
+        (registration_name,),
+    )
+    if not locked:
+        frappe.throw("CCD Registration no longer exists")
     registration = frappe.get_doc("CCD Registration", registration_name)
-    if int(registration.docstatus or 0) != 1:
+    if int(locked[0][0]) != 1:
+        applied = _applied_registration_cancellation(
+            registration, str(confirm_scope_fingerprint or "").strip()
+        )
+        if applied:
+            return applied
         frappe.throw("Only a submitted CCD Registration can be cancelled")
     confirmation = {
         "registration": str(registration.name),
@@ -2302,8 +2461,7 @@ def start_registration_cancellation_with_retirement(
     """Queue confirmed retirement/cancellation outside the web timeout."""
     _require_manager()
     registration = frappe.get_doc("CCD Registration", registration_name)
-    if int(registration.docstatus or 0) != 1:
-        frappe.throw("Only a submitted CCD Registration can be cancelled")
+    registration_source_key(registration)
     fingerprint = str(confirm_scope_fingerprint or "").strip()
     reason_text = str(reason or "").strip()
     if len(fingerprint) != 64:

@@ -21,6 +21,12 @@ frappe.ui.form.on("CCD Matching Policy", {
 					freeze: true,
 					callback(response) {
 						if (response.message?.run) {
+							if (response.message.already_running) {
+								frappe.show_alert({
+									message: __("A recommendation canary is already running; opening it."),
+									indicator: "blue",
+								});
+							}
 							frappe.set_route("Form", "CCD Match Canary Run", response.message.run);
 						}
 					},

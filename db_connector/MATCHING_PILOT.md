@@ -328,6 +328,16 @@ not an identity-link action. A subsequent active canary
 supersedes the prior version while preserving both histories, and a manager can
 reverse one recommendation or the whole canary with a mandatory reason.
 
+The Start Recommendation Canary action is idempotent while a generation is
+Queued or running: a repeated click opens the same run, and an atomic server
+lock prevents concurrent requests from creating a second one. Generation
+writes recommendations, immutable creation events, and exception reviews in
+bounded bulk operations within one final transaction. A failed run commits no
+partial generation and never supersedes the previous one. If a queue job
+terminates before the run reaches Ready, the server checks the job and saved
+row counts before allowing a fresh run. This is a fresh-run retry, not a
+resumption of the failed run.
+
 ## Optional Splink Review Candidate queue
 
 The probabilistic path is deliberately separate from the Tiered High

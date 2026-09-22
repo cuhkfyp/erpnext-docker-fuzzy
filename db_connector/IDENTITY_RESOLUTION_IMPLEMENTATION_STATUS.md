@@ -5,7 +5,7 @@
 | Item | Verified state |
 | --- | --- |
 | Date | 2026-09-16 UTC |
-| Status updated | 2026-09-16 UTC |
+| Status updated | 2026-09-22 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
@@ -17,7 +17,7 @@
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
 | 2026-08-31 historical totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
 | 2026-09-13 integrity restoration | Audited orphan retirement run `6v6b99amn6` applied; the post-repair audit reports zero active issues and zero planned writes while retaining marked historical evidence |
-| Current matching gate | Complete High run `i04u936qii` and threshold run `dh1ml9skc7` are approved; policy `pilot-1.7` is Pilot; Canary `snakh96bf9` is Active; human-only Splink queue `i3uek3cjjd` is Ready and untruncated |
+| Current matching gate | `pilot-1.8` is Pilot with approved High run `7h0kmiecnu` and threshold run `7i6qgudiei`; canary `g69fr9rtdc` failed at the queue timeout with zero committed recommendations, events, or reviews. No replacement canary is Ready; the earlier `pilot-1.7` canary is Stale. |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 | QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
 | Permanent Unified Person numbers | Phase 7 completed: backfill `8srqf32s7o` issued 256,046 numbers for all 256,095 current CCD Masters with zero integrity issues and no CCD Master timestamp change |
@@ -27,6 +27,39 @@ commit `cfef788`. This fresh session recovered that durable artifact, audited
 the application and live data, implemented the specification, deployed it in a
 default-off state, and verified the result. It did not depend on reconstructing
 the predecessor's compacted conversational reasoning.
+
+## Canary generation and cancellation retry repair — 2026-09-22
+
+The `pilot-1.8` canary `g69fr9rtdc` reached Writing Recommendations and its
+long-queue job failed exactly at the 14,400-second limit. The database
+connection closed before its error handler could mark the run Failed. The
+verified RQ job and zero saved recommendations, events, and component reviews
+were used to reconcile that run to Failed; no new canary was started during
+this repair. The 76,904 candidate count remains a historical diagnostic, not
+a usable recommendation generation.
+
+Recommendation and creation-event writes now use bounded multi-row inserts
+inside one transaction, with cached identity fingerprints. Exception reviews
+use bulk creation and a set-based recommendation link. Run-scoped indexes were
+installed for recommendation grouping, events, and component reviews. A failed
+generation still rolls back as a whole and cannot supersede the prior one.
+The failure handler reconnects if the timed-out transaction lost its database
+connection. A later Start checks the queue's terminal state and zero committed
+rows before releasing a stale in-progress guard.
+
+Start Recommendation Canary is now atomic and idempotent while a canary is
+Queued or running: concurrent clicks return the existing run rather than
+enqueueing another one, including across policies. Governed Registration
+cancellation serializes confirmed starts across System Managers; an exact
+retry returns the existing operation or the applied retirement result. Even a
+zero-record cancellation writes an auditable retirement run so a later retry
+can be recognized. Ordinary ERPNext Cancel remains fail-closed.
+
+The verified full `20260922_000110-frontend-*` site backup was retained. A
+current database and site-configuration checkpoint was also taken as
+`20260922_143151-frontend-*` before the live index/status repair. Materialization,
+Automatic Tiered, and Automatic QC remained disabled. The app suite passed
+117 tests after the repair. A fresh canary remains the next governed step.
 
 On 2026-08-24, explicitly bounded Tiered, human-component, and Splink
 development decisions were applied after verified backup checkpoints.

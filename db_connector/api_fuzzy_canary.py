@@ -50,6 +50,7 @@ EVENT_DOCTYPE = "CCD Match Recommendation Event"
 COMPONENT_REVIEW_DOCTYPE = "CCD Match Component Review"
 APPROVED_HIGH_REASON = "exact_name_plus_independent_evidence"
 QC_SAMPLE_SIZE = 100
+CANARY_WRITE_BATCH_SIZE = 250
 COMPONENT_DECISIONS = {"All Same", "Partial Match", "All Different", "Unsure"}
 FINAL_COMPONENT_DECISIONS = COMPONENT_DECISIONS - {"Unsure"}
 FINAL_REVIEW_STATUSES = {"Agreed", "Adjudicated"}
@@ -214,18 +215,33 @@ def install_promote_policy_to_pilot(
 
 
 def _create_canary_run(policy_name: str) -> dict[str, str]:
+    # A locking read is required here: a normal get_all() can see an old
+    # repeatable-read snapshot after another request has already queued a run.
+    frappe.db.sql(
+        "SELECT name FROM `tabDocType` WHERE name = %s FOR UPDATE",
+        (RUN_DOCTYPE,),
+    )
+    running = frappe.db.sql(
+        f"SELECT name, matching_policy, status FROM `tab{RUN_DOCTYPE}` "
+        "WHERE status IN (" + ", ".join(["%s"] * len(RUNNING_STATUSES)) + ") "
+        "ORDER BY creation FOR UPDATE",
+        RUNNING_STATUSES,
+        as_dict=True,
+    )
+    for current in running:
+        if _reconcile_terminated_canary(current):
+            continue
+        if current.matching_policy != policy_name:
+            frappe.throw(
+                f"Canary run {current.name} is already in progress for "
+                f"{current.matching_policy}"
+            )
+        return {"run": current.name, "status": current.status, "already_running": True}
+
     prerequisites = _canary_prerequisites(policy_name)
     policy_doc = prerequisites["policy_doc"]
     if policy_doc.status != "Pilot":
         frappe.throw("The matching policy must be in Pilot status")
-    existing = frappe.get_all(
-        RUN_DOCTYPE,
-        filters={"matching_policy": policy_name, "status": ["in", list(RUNNING_STATUSES)]},
-        pluck="name",
-        limit=1,
-    )
-    if existing:
-        frappe.throw(f"Canary run {existing[0]} is already in progress")
     run = frappe.get_doc(
         {
             "doctype": RUN_DOCTYPE,
@@ -245,10 +261,40 @@ def _create_canary_run(policy_name: str) -> dict[str, str]:
         queue="long",
         timeout=14_400,
         enqueue_after_commit=True,
+        job_id=f"ccd-match-canary-{run.name}",
+        deduplicate=True,
         run_name=run.name,
     )
     frappe.db.commit()
-    return {"run": run.name, "status": "Queued"}
+    return {"run": run.name, "status": "Queued", "already_running": False}
+
+
+def _reconcile_terminated_canary(run: Any) -> bool:
+    """Release a failed RQ job's stale in-progress state, never a live job."""
+    from frappe.utils.background_jobs import get_job_status
+
+    job_status = get_job_status(f"ccd-match-canary-{run.name}")
+    status = str(getattr(job_status, "value", job_status)).lower()
+    if status not in {"failed", "finished", "stopped", "canceled"}:
+        return False
+    if any(
+        frappe.db.count(doctype, {"canary_run": run.name})
+        for doctype in (RECOMMENDATION_DOCTYPE, EVENT_DOCTYPE, COMPONENT_REVIEW_DOCTYPE)
+    ):
+        frappe.throw(
+            f"Canary {run.name} stopped with committed generated rows; "
+            "manual integrity review is required"
+        )
+    frappe.db.set_value(
+        RUN_DOCTYPE,
+        run.name,
+        {
+            "status": "Failed",
+            "error_summary": f"background_job_{status}_before_ready",
+        },
+        update_modified=False,
+    )
+    return True
 
 
 @frappe.whitelist()
@@ -266,9 +312,90 @@ def install_canary_run(
     return _create_canary_run(policy_name)
 
 
+def install_reconcile_failed_canary(run_name: str, rq_job_id: str) -> dict[str, Any]:
+    """Bench-only repair of a timed-out run with a verified failed RQ job.
+
+    Never delete a partial generation or infer failure merely from elapsed time.
+    """
+    from rq.job import Job
+
+    from frappe.utils.background_jobs import get_redis_conn
+
+    _require_manager()
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if run.status == "Failed":
+        return {"run": run.name, "status": "Failed", "idempotent": True}
+    if run.status not in RUNNING_STATUSES:
+        frappe.throw("Only an unfinished canary may be reconciled")
+    job = Job.fetch(rq_job_id, connection=get_redis_conn())
+    if str(job.kwargs.get("kwargs", {}).get("run_name")) != run_name:
+        frappe.throw("The failed queue job does not belong to this canary")
+    job_status = job.get_status()
+    if str(getattr(job_status, "value", job_status)).lower() != "failed":
+        frappe.throw("The canary queue job has not failed")
+    counts = {
+        "recommendations": frappe.db.count(RECOMMENDATION_DOCTYPE, {"canary_run": run_name}),
+        "events": frappe.db.count(EVENT_DOCTYPE, {"canary_run": run_name}),
+        "component_reviews": frappe.db.count(COMPONENT_REVIEW_DOCTYPE, {"canary_run": run_name}),
+    }
+    if any(counts.values()):
+        frappe.throw("The failed canary has committed rows; inspect them before repair")
+    frappe.db.set_value(
+        RUN_DOCTYPE,
+        run_name,
+        {
+            "status": "Failed",
+            "error_summary": f"verified_rq_job_failed:{rq_job_id}"[:140],
+        },
+        update_modified=False,
+    )
+    frappe.db.commit()
+    return {"run": run_name, "status": "Failed", "committed_rows": counts}
+
+
 def _set_run_status(run: Any, status: str) -> None:
     run.db_set("status", status, update_modified=False)
     frappe.db.commit()
+
+
+def _record_failed_canary(run_name: str, exc: Exception) -> None:
+    """Persist failure even when the timed-out transaction lost its connection."""
+    try:
+        frappe.db.rollback()
+    except Exception:
+        try:
+            frappe.db.close()
+        except Exception:
+            pass
+        frappe.db.connect()
+    try:
+        frappe.db.set_value(
+            RUN_DOCTYPE,
+            run_name,
+            {
+                "status": "Failed",
+                "error_summary": f"canary_generation_failed:{type(exc).__name__}",
+            },
+            update_modified=False,
+        )
+        frappe.db.commit()
+    except Exception:
+        # A connection can close after a successful rollback as well.
+        try:
+            frappe.db.close()
+        except Exception:
+            pass
+        frappe.db.connect()
+        frappe.db.set_value(
+            RUN_DOCTYPE,
+            run_name,
+            {
+                "status": "Failed",
+                "error_summary": f"canary_generation_failed:{type(exc).__name__}",
+            },
+            update_modified=False,
+        )
+        frappe.db.commit()
 
 
 def _trusted_id_metadata(record: dict[str, Any], policy: MatchingPolicy) -> dict[str, str]:
@@ -329,6 +456,99 @@ def _append_event(
             "metadata_json": _json(metadata or {}),
         }
     ).insert(ignore_permissions=True)
+
+
+def _write_generated_recommendations(
+    run: Any,
+    high_edges: list[CanaryEdge],
+    decisions: dict[tuple[str, str], Any],
+    record_by_id: dict[str, dict[str, Any]],
+    policy: MatchingPolicy,
+) -> tuple[Counter[str], Counter[str], set[str], int]:
+    """Write one atomic generation using bounded multi-row inserts.
+
+    The caller commits only after reviews and generation replacement succeed.
+    Thus a timeout cannot leave a partly usable canary or retire the old one.
+    Deterministic names and the unique recommendation key also make accidental
+    duplicate writes fail closed rather than create duplicate audit events.
+    """
+    recommendation_fields = [
+        "name", "creation", "modified", "modified_by", "owner", "docstatus",
+        "canary_run", "matching_policy", "policy_version", "recommendation_key",
+        "pair_fingerprint", "left_record", "right_record", "left_source",
+        "right_source", "source_pair", "left_modified_at", "right_modified_at",
+        "left_identity_fingerprint", "right_identity_fingerprint", "model_tier",
+        "blocking_routes", "reason_codes_json", "cluster_fingerprint",
+        "cluster_size", "status", "rollout_state", "safety_reasons_json",
+        "qc_selected", "qc_stale",
+    ]
+    event_fields = [
+        "name", "creation", "modified", "modified_by", "owner", "docstatus",
+        "recommendation", "canary_run", "event_type", "from_status",
+        "to_status", "reason", "event_at", "actor", "metadata_json",
+    ]
+    actor = frappe.session.user or "Administrator"
+    reason_counts: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+    cluster_fingerprints: set[str] = set()
+    largest_cluster = 0
+    identity_fingerprints: dict[str, str] = {}
+    recommendations: list[tuple[Any, ...]] = []
+    events: list[tuple[Any, ...]] = []
+
+    def flush() -> None:
+        if not recommendations:
+            return
+        frappe.db.bulk_insert(
+            RECOMMENDATION_DOCTYPE, recommendation_fields, tuple(recommendations),
+            chunk_size=CANARY_WRITE_BATCH_SIZE,
+        )
+        frappe.db.bulk_insert(
+            EVENT_DOCTYPE, event_fields, tuple(events),
+            chunk_size=CANARY_WRITE_BATCH_SIZE,
+        )
+        recommendations.clear()
+        events.clear()
+
+    for edge in high_edges:
+        decision = decisions[edge.pair_key]
+        reason_counts.update(decision.reasons)
+        status_counts[decision.status] += 1
+        cluster_fingerprints.add(decision.cluster_fingerprint)
+        largest_cluster = max(largest_cluster, decision.cluster_size)
+        left_id, right_id = edge.pair_key
+        left = record_by_id[left_id]
+        right = record_by_id[right_id]
+        for record_id, record in ((left_id, left), (right_id, right)):
+            if record_id not in identity_fingerprints:
+                identity_fingerprints[record_id] = identity_fingerprint(record, policy)
+        key = _recommendation_key(run.name, left_id, right_id)
+        recommendation_name = f"canary-rec-{key}"
+        now = frappe.utils.now_datetime()
+        recommendations.append((
+            recommendation_name, now, now, actor, actor, 0,
+            run.name, run.matching_policy, run.policy_version, key,
+            _pair_fingerprint(run.policy_version, left_id, right_id),
+            left_id, right_id, left["source"], right["source"], edge.source_pair,
+            left["source_modified"], right["source_modified"],
+            identity_fingerprints[left_id], identity_fingerprints[right_id],
+            "High", ", ".join(edge.blocking_routes), _json(edge.reason_codes),
+            decision.cluster_fingerprint, decision.cluster_size,
+            decision.status, "Available", _json(decision.reasons), 0, 0,
+        ))
+        events.append((
+            f"canary-event-{key}", now, now, actor, actor, 0,
+            recommendation_name, run.name,
+            "Created" if decision.status == "Proposed" else "Safety Exception",
+            "", decision.status,
+            "passed_all_canary_safety_gates" if decision.status == "Proposed"
+            else ",".join(decision.reasons),
+            now, actor, _json({}),
+        ))
+        if len(recommendations) >= CANARY_WRITE_BATCH_SIZE:
+            flush()
+    flush()
+    return reason_counts, status_counts, cluster_fingerprints, largest_cluster
 
 
 def _refresh_run_counts(run_name: str) -> dict[str, int]:
@@ -400,29 +620,41 @@ def _initialize_review_workflow(run_name: str) -> dict[str, int]:
             limit_page_length=100_000,
         )
     }
+    now = frappe.utils.now_datetime()
+    actor = frappe.session.user or "Administrator"
+    new_reviews: list[tuple[Any, ...]] = []
     for row in exception_rows:
         fingerprint = str(row.cluster_fingerprint)
         review_key = _component_review_key(run_name, fingerprint)
-        review_name = existing.get(review_key)
-        if not review_name:
-            review = frappe.get_doc(
-                {
-                    "doctype": COMPONENT_REVIEW_DOCTYPE,
-                    "canary_run": run_name,
-                    "review_key": review_key,
-                    "cluster_fingerprint": fingerprint,
-                    "cluster_size": int(row.cluster_size or 0),
-                    "recommendation_count": int(row.recommendation_count or 0),
-                    "review_status": "Unreviewed",
-                }
-            ).insert(ignore_permissions=True)
-            review_name = review.name
+        if review_key not in existing:
+            new_reviews.append((
+                f"canary-review-{review_key}", now, now, actor, actor, 0,
+                run_name, review_key, fingerprint, int(row.cluster_size or 0),
+                int(row.recommendation_count or 0), "Unreviewed", 0, "Not Final",
+            ))
+    if new_reviews:
+        frappe.db.bulk_insert(
+            COMPONENT_REVIEW_DOCTYPE,
+            [
+                "name", "creation", "modified", "modified_by", "owner", "docstatus",
+                "canary_run", "review_key", "cluster_fingerprint", "cluster_size",
+                "recommendation_count", "review_status", "stale",
+                "materialization_status",
+            ],
+            new_reviews,
+            chunk_size=CANARY_WRITE_BATCH_SIZE,
+        )
+    if exception_rows:
         frappe.db.sql(
-            f"""UPDATE `tab{RECOMMENDATION_DOCTYPE}`
-                SET component_review = %s
-                WHERE canary_run = %s AND cluster_fingerprint = %s
-                  AND status = 'Exception'""",
-            (review_name, run_name, fingerprint),
+            f"""UPDATE `tab{RECOMMENDATION_DOCTYPE}` AS recommendation
+                JOIN `tab{COMPONENT_REVIEW_DOCTYPE}` AS review
+                  ON review.canary_run = recommendation.canary_run
+                 AND review.cluster_fingerprint = recommendation.cluster_fingerprint
+                SET recommendation.component_review = review.name
+                WHERE recommendation.canary_run = %s
+                  AND recommendation.status = 'Exception'
+                  AND recommendation.component_review IS NULL""",
+            (run_name,),
         )
 
     already_selected = frappe.db.count(
@@ -579,56 +811,11 @@ def run_canary(run_name: str) -> None:
         )
 
         _set_run_status(run, "Writing Recommendations")
-        reason_counts: Counter[str] = Counter()
-        status_counts: Counter[str] = Counter()
-        cluster_fingerprints = set()
-        largest_cluster = 0
-        for edge in high_edges:
-            decision = decisions[edge.pair_key]
-            reason_counts.update(decision.reasons)
-            status_counts[decision.status] += 1
-            cluster_fingerprints.add(decision.cluster_fingerprint)
-            largest_cluster = max(largest_cluster, decision.cluster_size)
-            left_id, right_id = edge.pair_key
-            left = record_by_id[left_id]
-            right = record_by_id[right_id]
-            recommendation = frappe.get_doc(
-                {
-                    "doctype": RECOMMENDATION_DOCTYPE,
-                    "canary_run": run.name,
-                    "matching_policy": run.matching_policy,
-                    "policy_version": run.policy_version,
-                    "recommendation_key": _recommendation_key(run.name, left_id, right_id),
-                    "pair_fingerprint": _pair_fingerprint(run.policy_version, left_id, right_id),
-                    "left_record": left_id,
-                    "right_record": right_id,
-                    "left_source": left["source"],
-                    "right_source": right["source"],
-                    "source_pair": edge.source_pair,
-                    "left_modified_at": left["source_modified"],
-                    "right_modified_at": right["source_modified"],
-                    "left_identity_fingerprint": identity_fingerprint(left, policy),
-                    "right_identity_fingerprint": identity_fingerprint(right, policy),
-                    "model_tier": "High",
-                    "blocking_routes": ", ".join(edge.blocking_routes),
-                    "reason_codes_json": _json(edge.reason_codes),
-                    "cluster_fingerprint": decision.cluster_fingerprint,
-                    "cluster_size": decision.cluster_size,
-                    "status": decision.status,
-                    "safety_reasons_json": _json(decision.reasons),
-                }
-            ).insert(ignore_permissions=True)
-            _append_event(
-                recommendation,
-                "Created" if decision.status == "Proposed" else "Safety Exception",
-                "",
-                decision.status,
-                (
-                    "passed_all_canary_safety_gates"
-                    if decision.status == "Proposed"
-                    else ",".join(decision.reasons)
-                ),
+        reason_counts, status_counts, cluster_fingerprints, largest_cluster = (
+            _write_generated_recommendations(
+                run, high_edges, decisions, record_by_id, policy
             )
+        )
 
         review_workflow = _initialize_review_workflow(run.name)
         summary = {
@@ -657,16 +844,7 @@ def run_canary(run_name: str) -> None:
         run.db_set("status", "Ready", update_modified=False)
         frappe.db.commit()
     except Exception as exc:
-        frappe.db.rollback()
-        frappe.db.set_value(
-            RUN_DOCTYPE,
-            run_name,
-            {
-                "status": "Failed",
-                "error_summary": f"canary_generation_failed:{type(exc).__name__}",
-            },
-            update_modified=False,
-        )
+        _record_failed_canary(run_name, exc)
         frappe.log_error(traceback.format_exc(), "CCD recommendation canary failed")
         frappe.db.commit()
         raise
