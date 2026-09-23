@@ -19,7 +19,9 @@ from db_connector.api_fuzzy_evaluation import (
     REVIEW_ROLE,
     SENSITIVE_ROLE,
     _bounded_probability_records,
-    _canonical_record,
+    _evaluation_records,
+    _release_unused_memory,
+    _splink_record,
 )
 from db_connector.fuzzy_matching.blocking import (
     BLOCKING_VERSION,
@@ -34,6 +36,7 @@ from db_connector.fuzzy_matching.splink_adapter import (
     RANDOM_MATCH_PRIOR,
     REQUESTED_PAIR_BATCH_SIZE,
     SPLINK_ADAPTER_VERSION,
+    U_RANDOM_SEED,
     available,
     dependency_versions,
     score_requested_pairs,
@@ -56,6 +59,7 @@ OPEN_REVIEW_STATUSES = {
     "Positive Confirmation Required",
 }
 FINAL_REVIEW_STATUSES = {"Agreed", "Adjudicated"}
+PROBABILITY_REPLAY_TOLERANCE = 1e-9
 
 
 def _json(value: Any) -> str:
@@ -108,6 +112,159 @@ def _review_threshold_from_run(evaluation: Any) -> float:
     return float(threshold)
 
 
+def _approved_splink_runtime(evaluation: Any) -> dict[str, int]:
+    """Return the frozen training limits that produced an approved cutoff.
+
+    A probability cutoff is meaningful only for the fitted model that produced
+    it.  The full-population queue therefore fails closed unless the installed
+    adapter, dependencies, prior, and resource limits match the approved
+    evaluation exactly.
+    """
+    versions = json.loads(evaluation.model_versions_json or "{}")
+    if versions.get("splink_adapter") != SPLINK_ADAPTER_VERSION:
+        frappe.throw("The approved cutoff belongs to a different Splink adapter version")
+    if versions.get("splink_status") != "local" or versions.get("splink_warning"):
+        frappe.throw("The approved evaluation did not complete with the pinned local Splink runtime")
+    if versions.get("splink") != dependency_versions():
+        frappe.throw("The installed Splink dependencies differ from the approved evaluation")
+    if abs(float(versions.get("splink_random_match_prior") or 0) - RANDOM_MATCH_PRIOR) > 1e-15:
+        frappe.throw("The approved evaluation used a different Splink random-match prior")
+
+    fields = {
+        "training_record_limit": "splink_training_record_limit",
+        "training_candidate_pair_limit": "splink_training_candidate_pair_limit",
+        "u_random_pair_limit": "splink_u_random_pair_limit",
+        "u_random_seed": "splink_u_random_seed",
+    }
+    runtime: dict[str, int] = {}
+    for output_name, version_name in fields.items():
+        try:
+            value = int(versions.get(version_name))
+        except (TypeError, ValueError):
+            value = 0
+        if value <= 0:
+            frappe.throw(
+                f"The approved evaluation is missing frozen Splink setting {version_name}"
+            )
+        runtime[output_name] = value
+    return runtime
+
+
+def _queue_splink_records(
+    records: list[dict[str, Any]],
+    policy: MatchingPolicy,
+    training_ids: set[str],
+    requested_pairs: set[tuple[str, str]],
+    *,
+    training_record_limit: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build the same normalized model inputs used by threshold evaluation."""
+    training = [
+        _splink_record(record, policy)
+        for record in _bounded_probability_records(
+            records,
+            training_ids,
+            limit=training_record_limit,
+        )
+    ]
+    scoring_ids = {
+        record_id
+        for pair in requested_pairs
+        for record_id in pair
+    }
+    scoring = [
+        _splink_record(record, policy)
+        for record in records
+        if str(record.get("record_id") or "") in scoring_ids
+    ]
+    return training, scoring
+
+
+def _replay_approved_probability_scores(
+    evaluation_name: str,
+    records: list[dict[str, Any]],
+    policy: MatchingPolicy,
+    training_records: list[dict[str, Any]],
+    splink_runtime: dict[str, int],
+    *,
+    enforce: bool = True,
+) -> dict[str, Any]:
+    """Fail closed unless the approved evaluation scores are reproducible."""
+    rows = frappe.get_all(
+        "CCD Match Evaluation Pair",
+        filters={
+            "evaluation_run": evaluation_name,
+            "probabilistic_available": 1,
+        },
+        fields=["left_record", "right_record", "probabilistic_score"],
+        limit_page_length=10_000,
+    )
+    expected = {
+        _ordered_pair(row.left_record, row.right_record): float(
+            row.probabilistic_score
+        )
+        for row in rows
+    }
+    if not expected:
+        frappe.throw("The approved evaluation has no probabilistic scores to replay")
+    scoring_ids = {
+        record_id
+        for pair in expected
+        for record_id in pair
+    }
+    scoring_records = [
+        _splink_record(record, policy)
+        for record in records
+        if str(record.get("record_id") or "") in scoring_ids
+    ]
+    predictions = score_requested_pairs(
+        training_records,
+        scoring_records,
+        set(expected),
+        minimum_probability=-1.0,
+        max_block_size=policy.max_block_size,
+        max_prediction_pairs=min(
+            policy.max_candidate_pairs,
+            splink_runtime["training_candidate_pair_limit"],
+        ),
+        u_random_max_pairs=splink_runtime["u_random_pair_limit"],
+        u_random_seed=splink_runtime["u_random_seed"],
+    )
+    actual = {
+        _ordered_pair(item.left_id, item.right_id): float(item.probability)
+        for item in predictions
+    }
+    if set(actual) != set(expected):
+        frappe.throw(
+            "The approved Splink evaluation replay did not return the same pair set"
+        )
+    differences = sorted(
+        abs(actual[pair] - expected[pair])
+        for pair in expected
+    )
+    max_difference = differences[-1]
+    within_tolerance = sum(
+        difference <= PROBABILITY_REPLAY_TOLERANCE
+        for difference in differences
+    )
+    result = {
+        "pair_count": len(expected),
+        "within_tolerance_count": within_tolerance,
+        "mean_absolute_difference": sum(differences) / len(differences),
+        "median_absolute_difference": differences[len(differences) // 2],
+        "max_absolute_difference": max_difference,
+        "tolerance": PROBABILITY_REPLAY_TOLERANCE,
+        "passed": within_tolerance == len(expected),
+    }
+    if enforce and not result["passed"]:
+        frappe.throw(
+            "The approved Splink evaluation scores are not reproducible; "
+            f"maximum absolute difference {max_difference:.12g}; "
+            "a fresh evaluation is required"
+        )
+    return result
+
+
 def _queue_prerequisites(canary_name: str) -> dict[str, Any]:
     canary = frappe.get_doc(CANARY_DOCTYPE, canary_name)
     if canary.status not in {"Ready", "Active"}:
@@ -124,29 +281,38 @@ def _queue_prerequisites(canary_name: str) -> dict[str, Any]:
     threshold = _review_threshold_from_run(evaluation)
     if abs(threshold - float(canary.splink_review_threshold or 0)) > 1e-12:
         frappe.throw("The canary and approved evaluation use different Review cutoffs")
-    versions = json.loads(evaluation.model_versions_json or "{}")
-    if versions.get("splink_adapter") != SPLINK_ADAPTER_VERSION:
-        frappe.throw("The approved cutoff belongs to a different Splink adapter version")
     if not available():
         frappe.throw("The pinned local Splink dependencies are unavailable")
+    splink_runtime = _approved_splink_runtime(evaluation)
     return {
         "canary": canary,
         "evaluation": evaluation,
         "threshold": threshold,
+        "splink_runtime": splink_runtime,
     }
 
 
-def _create_queue_run(canary_name: str) -> dict[str, str]:
+def _create_queue_run(
+    canary_name: str,
+    *,
+    replacement_for: str = "",
+) -> dict[str, str]:
     prerequisites = _queue_prerequisites(canary_name)
     canary = prerequisites["canary"]
     existing = frappe.get_all(
         RUN_DOCTYPE,
         filters={"canary_run": canary.name, "status": ["in", list(RUNNING_STATUSES) + ["Ready"]]},
         pluck="name",
-        limit=1,
+        limit_page_length=100,
     )
-    if existing:
-        frappe.throw(f"Splink Review queue {existing[0]} already exists for this canary")
+    replacement_for = str(replacement_for or "")
+    if replacement_for:
+        replaced = frappe.get_doc(RUN_DOCTYPE, replacement_for)
+        if replaced.canary_run != canary.name or replaced.status != "Ready":
+            frappe.throw("Only a Ready queue for this canary may be replaced")
+    blocking = [name for name in existing if str(name) != replacement_for]
+    if blocking:
+        frappe.throw(f"Splink Review queue {blocking[0]} already exists for this canary")
     run = frappe.get_doc(
         {
             "doctype": RUN_DOCTYPE,
@@ -183,6 +349,244 @@ def enqueue_review_queue(canary_name: str) -> dict[str, str]:
 def install_review_queue(canary_name: str) -> dict[str, str]:
     """Bench-only launcher for the optional full-population Review queue."""
     return _create_queue_run(canary_name)
+
+
+def install_replacement_review_queue(
+    canary_name: str,
+    replacement_for: str,
+) -> dict[str, str]:
+    """Bench-only atomic replacement; the prior queue remains until success."""
+    return _create_queue_run(canary_name, replacement_for=replacement_for)
+
+
+def retire_defective_review_queue(
+    run_name: str,
+    reason: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Bench-only retirement of invalid unhandled work; history is preserved."""
+    if not frappe.utils.cint(confirm):
+        frappe.throw("Explicit confirm=True is required")
+    reason = str(reason or "").strip()
+    if not reason or len(reason) > 240:
+        frappe.throw("A bounded non-empty defect reason is required")
+    frappe.db.sql(
+        f"SELECT name FROM `tab{RUN_DOCTYPE}` WHERE name = %s FOR UPDATE",
+        (run_name,),
+    )
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if run.status == "Stale":
+        return {
+            "run": run.name,
+            "status": "Stale",
+            "already_retired": True,
+            "retired_unhandled_candidates": 0,
+        }
+    if run.status != "Ready":
+        frappe.throw("Only a Ready defective queue may be retired")
+    if run.splink_adapter_version == SPLINK_ADAPTER_VERSION:
+        frappe.throw("The queue already uses the current Splink adapter")
+    historical_states = ("Applied", "Reversed", "Superseded")
+    placeholders = ", ".join(["%s"] * len(historical_states))
+    retired_count = int(
+        frappe.db.sql(
+            f"""SELECT COUNT(*) FROM `tab{CANDIDATE_DOCTYPE}`
+                 WHERE queue_run = %s
+                   AND materialization_status NOT IN ({placeholders})""",
+            (run.name, *historical_states),
+        )[0][0]
+    )
+    preserved_history_count = int(
+        frappe.db.sql(
+            f"""SELECT COUNT(*) FROM `tab{CANDIDATE_DOCTYPE}`
+                 WHERE queue_run = %s
+                   AND materialization_status IN ({placeholders})""",
+            (run.name, *historical_states),
+        )[0][0]
+    )
+    frappe.db.sql(
+        f"""UPDATE `tab{CANDIDATE_DOCTYPE}`
+               SET stale = 1,
+                   review_status = CASE
+                       WHEN review_status IN ('Agreed', 'Adjudicated')
+                       THEN review_status ELSE 'Stale' END,
+                   materialization_status = 'Superseded'
+             WHERE queue_run = %s
+               AND materialization_status NOT IN ({placeholders})""",
+        (run.name, *historical_states),
+    )
+    summary = json.loads(run.summary_json or "{}")
+    summary["defect_retirement"] = {
+        "retired_at": frappe.utils.now_datetime(),
+        "reason": reason,
+        "retired_unhandled_candidates": retired_count,
+        "preserved_historical_candidates": preserved_history_count,
+        "replacement_required": True,
+    }
+    run.db_set(
+        {
+            "status": "Stale",
+            "summary_json": _json(summary),
+            "error_summary": reason,
+        },
+        update_modified=False,
+    )
+    frappe.db.commit()
+    return {
+        "run": run.name,
+        "status": "Stale",
+        "already_retired": False,
+        "retired_unhandled_candidates": retired_count,
+        "preserved_historical_candidates": preserved_history_count,
+    }
+
+
+def validate_review_queue_model_replay(
+    canary_name: str,
+    diagnose_only: bool = False,
+) -> dict[str, Any]:
+    """Read-only validation that an approved cutoff model is reproducible."""
+    prerequisites = _queue_prerequisites(canary_name)
+    canary = prerequisites["canary"]
+    evaluation = prerequisites["evaluation"]
+    splink_runtime = prerequisites["splink_runtime"]
+    policy = MatchingPolicy.from_dict(json.loads(canary.policy_snapshot_json))
+    records = _evaluation_records(policy, canary.snapshot_at)
+    if len(records) != int(canary.record_count or 0):
+        frappe.throw("The frozen canary record population is no longer reproducible")
+    record_by_id = {
+        str(record["record_id"]): record
+        for record in records
+        if record.get("record_id")
+    }
+    training_ids, stale_training = _threshold_training_context(
+        evaluation.name,
+        record_by_id,
+    )
+    if stale_training:
+        frappe.throw("The approved Splink training cohort changed; recalibration is required")
+    training_records, _scoring_records = _queue_splink_records(
+        records,
+        policy,
+        training_ids,
+        set(),
+        training_record_limit=splink_runtime["training_record_limit"],
+    )
+    replay = _replay_approved_probability_scores(
+        evaluation.name,
+        records,
+        policy,
+        training_records,
+        splink_runtime,
+        enforce=not bool(diagnose_only),
+    )
+    return {
+        "canary": canary.name,
+        "evaluation": evaluation.name,
+        "record_count": len(records),
+        "training_record_count": len(training_records),
+        "probability_replay": replay,
+        "production_records_modified": False,
+    }
+
+
+def validate_current_splink_runtime_repeatability(
+    evaluation_name: str,
+) -> dict[str, Any]:
+    """Read-only two-pass proof for the currently installed adapter."""
+    evaluation = frappe.get_doc("CCD Match Evaluation Run", evaluation_name)
+    if evaluation.status != "Completed" or evaluation.approval_status != "Approved":
+        frappe.throw("Repeatability validation requires an approved completed evaluation")
+    policy = MatchingPolicy.from_dict(json.loads(evaluation.policy_snapshot_json))
+    records = _evaluation_records(policy, evaluation.snapshot_at)
+    if len(records) != int(evaluation.record_count or 0):
+        frappe.throw("The frozen evaluation record population is no longer reproducible")
+    record_by_id = {
+        str(record["record_id"]): record
+        for record in records
+        if record.get("record_id")
+    }
+    training_ids, stale_training = _threshold_training_context(
+        evaluation.name,
+        record_by_id,
+    )
+    if stale_training:
+        frappe.throw("The approved Splink training cohort changed; recalibration is required")
+    versions = json.loads(evaluation.model_versions_json or "{}")
+    runtime = {
+        "training_record_limit": int(
+            versions.get("splink_training_record_limit") or 0
+        ),
+        "training_candidate_pair_limit": int(
+            versions.get("splink_training_candidate_pair_limit") or 0
+        ),
+        "u_random_pair_limit": int(
+            versions.get("splink_u_random_pair_limit") or 0
+        ),
+        "u_random_seed": U_RANDOM_SEED,
+    }
+    if any(value <= 0 for value in runtime.values()):
+        frappe.throw("The historical evaluation is missing its bounded Splink settings")
+    rows = frappe.get_all(
+        "CCD Match Evaluation Pair",
+        filters={"evaluation_run": evaluation.name, "stale": 0},
+        fields=["left_record", "right_record"],
+        limit_page_length=10_000,
+    )
+    requested = {
+        _ordered_pair(row.left_record, row.right_record)
+        for row in rows
+    }
+    training_records, scoring_records = _queue_splink_records(
+        records,
+        policy,
+        training_ids,
+        requested,
+        training_record_limit=runtime["training_record_limit"],
+    )
+
+    def score() -> dict[tuple[str, str], float]:
+        predictions = score_requested_pairs(
+            training_records,
+            scoring_records,
+            requested,
+            minimum_probability=-1.0,
+            max_block_size=policy.max_block_size,
+            max_prediction_pairs=min(
+                policy.max_candidate_pairs,
+                runtime["training_candidate_pair_limit"],
+            ),
+            u_random_max_pairs=runtime["u_random_pair_limit"],
+            u_random_seed=runtime["u_random_seed"],
+        )
+        return {
+            _ordered_pair(item.left_id, item.right_id): float(item.probability)
+            for item in predictions
+        }
+
+    first = score()
+    _release_unused_memory()
+    second = score()
+    if set(first) != requested or set(second) != requested:
+        frappe.throw("Repeatability validation did not score the complete pair set")
+    differences = sorted(abs(first[pair] - second[pair]) for pair in requested)
+    return {
+        "evaluation": evaluation.name,
+        "current_splink_adapter": SPLINK_ADAPTER_VERSION,
+        "u_random_seed": runtime["u_random_seed"],
+        "pair_count": len(requested),
+        "within_tolerance_count": sum(
+            difference <= PROBABILITY_REPLAY_TOLERANCE
+            for difference in differences
+        ),
+        "max_absolute_difference": differences[-1] if differences else 0,
+        "tolerance": PROBABILITY_REPLAY_TOLERANCE,
+        "passed": all(
+            difference <= PROBABILITY_REPLAY_TOLERANCE
+            for difference in differences
+        ),
+        "production_records_modified": False,
+    }
 
 
 def _human_used_pair_keys() -> set[tuple[str, str]]:
@@ -346,16 +750,20 @@ def run_review_queue(run_name: str) -> None:
     _set_status(run, "Profiling")
     try:
         policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
-        canary = frappe.get_doc(CANARY_DOCTYPE, run.canary_run)
+        prerequisites = _queue_prerequisites(run.canary_run)
+        canary = prerequisites["canary"]
+        evaluation = prerequisites["evaluation"]
+        splink_runtime = prerequisites["splink_runtime"]
+        if (
+            evaluation.name != run.threshold_evaluation_run
+            or abs(float(prerequisites["threshold"]) - float(run.review_threshold))
+            > 1e-12
+            or canary.policy_snapshot_sha256 != run.policy_snapshot_sha256
+        ):
+            frappe.throw("The queued run no longer matches its approved canary provenance")
         sources = policy.sources()
         placeholders = ", ".join(["%s"] * len(sources))
-        raw_rows = frappe.db.sql(
-            f"""SELECT * FROM `tabCCD Master`
-                 WHERE modified <= %s AND ccd_reg_source IN ({placeholders})""",
-            (run.snapshot_at, *sources),
-            as_dict=True,
-        )
-        records = [_canonical_record(dict(row), policy) for row in raw_rows]
+        records = _evaluation_records(policy, run.snapshot_at)
         stale_snapshot_records = int(
             frappe.db.sql(
                 f"""SELECT COUNT(*)
@@ -429,18 +837,38 @@ def run_review_queue(run_name: str) -> None:
             frappe.throw(
                 "The approved Splink training cohort changed; recalibration is required"
             )
-        training_records = _bounded_probability_records(records, training_ids)
+        training_records, scoring_records = _queue_splink_records(
+            records,
+            policy,
+            training_ids,
+            requested,
+            training_record_limit=splink_runtime["training_record_limit"],
+        )
         run.db_set(
             "training_record_count", len(training_records), update_modified=False
         )
+        _release_unused_memory()
         _set_status(run, "Training and Scoring Splink")
+        probability_replay = _replay_approved_probability_scores(
+            evaluation.name,
+            records,
+            policy,
+            training_records,
+            splink_runtime,
+        )
+        _release_unused_memory()
         predictions = score_requested_pairs(
             training_records,
-            records,
+            scoring_records,
             requested,
             minimum_probability=float(run.review_threshold),
             max_block_size=policy.max_block_size,
-            max_prediction_pairs=policy.max_candidate_pairs,
+            max_prediction_pairs=min(
+                policy.max_candidate_pairs,
+                splink_runtime["training_candidate_pair_limit"],
+            ),
+            u_random_max_pairs=splink_runtime["u_random_pair_limit"],
+            u_random_seed=splink_runtime["u_random_seed"],
         )
         # The batch adapter checks that every requested pair receives exactly
         # one score before filtering. Therefore this count is valid even though
@@ -481,6 +909,20 @@ def run_review_queue(run_name: str) -> None:
             "threshold": float(run.review_threshold),
             "threshold_objective": "maximum_calibration_f1",
             "requested_pair_batch_size": REQUESTED_PAIR_BATCH_SIZE,
+            "approved_evaluation_run": evaluation.name,
+            "frozen_training_record_limit": splink_runtime[
+                "training_record_limit"
+            ],
+            "frozen_training_candidate_pair_limit": splink_runtime[
+                "training_candidate_pair_limit"
+            ],
+            "frozen_u_random_pair_limit": splink_runtime[
+                "u_random_pair_limit"
+            ],
+            "frozen_u_random_seed": splink_runtime["u_random_seed"],
+            "evaluation_model_configuration_replayed": True,
+            "evaluation_probability_replay": probability_replay,
+            "normalized_splink_records": True,
             "candidate_count": len(blocked.pairs),
             "snapshot_stale_record_count": stale_snapshot_records,
             "tiered_high_excluded_count": high_excluded,

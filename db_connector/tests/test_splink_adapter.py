@@ -46,10 +46,12 @@ class SplinkAdapterTests(unittest.TestCase):
             [("R1", "R2")],
             minimum_probability=0.5,
             u_random_max_pairs=123_456,
+            u_random_seed=37,
         )
 
         self.assertEqual(len(predictions), 1)
         self.assertEqual(fit_predict.call_args.kwargs["u_random_max_pairs"], 123_456)
+        self.assertEqual(fit_predict.call_args.kwargs["u_random_seed"], 37)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@
 | Item | Verified state |
 | --- | --- |
 | Date | 2026-09-16 UTC |
-| Status updated | 2026-09-22 UTC |
+| Status updated | 2026-09-23 UTC |
 | Site | `frontend` |
 | Takeover basis | Recovered local predecessor session and its committed specification |
 | Specification | `IDENTITY_RESOLUTION_WORKFLOW_PLAN.md` |
@@ -17,7 +17,7 @@
 | 2026-08-25 identity-write snapshot | Development testing: 33 Decisions (27 active / 6 superseded), 30 Groups (25 active / 5 ended), 68 Memberships (58 active / 10 ended), and 9 active Exclusions |
 | 2026-08-31 historical totals | 66 Decisions (44 Active / 22 Superseded), 62 Groups (40 Active / 22 Ended), 148 Memberships (96 Active / 52 Ended), 33 Exclusions (22 Active / 11 Superseded), 429 Events, 15 Activation Batches (14 Applied / 1 Reviewed), and 1 resolved QC Investigation |
 | 2026-09-13 integrity restoration | Audited orphan retirement run `6v6b99amn6` applied; the post-repair audit reports zero active issues and zero planned writes while retaining marked historical evidence |
-| Current matching gate | `pilot-1.8` is Pilot with approved High run `7h0kmiecnu` and threshold run `7i6qgudiei`; canary `g69fr9rtdc` failed at the queue timeout with zero committed recommendations, events, or reviews. No replacement canary is Ready; the earlier `pilot-1.7` canary is Stale. |
+| Current matching gate | `pilot-1.8` remains Pilot and deterministic High run `7h0kmiecnu` remains Completed/Approved. Threshold run `7i6qgudiei` and Splink queue `e593qei498` are Stale after the 2026-09-23 reproducibility repair. Canary `2kscbb4ldr` remains Active for its separately governed Tiered work, but its historical Splink cutoff cannot authorize another queue. Fresh threshold evaluation `36vfsulqbc` was queued under adapter `pilot-splink-1.3`. |
 | Overlap acceptance | Completed on the development site; all six route combinations, all result modes, stale safety, active-Different override, two-group bridging, and two applied-overlap corrections passed |
 | QC / automation acceptance | Completed on the development site; masking, independent review, bounded automatic writes, QC Different recovery, replenishment/cadence, overdue safety, staleness/revalidation, scheduler execution, and idempotency passed |
 | Permanent Unified Person numbers | Phase 7 completed: backfill `8srqf32s7o` issued 256,046 numbers for all 256,095 current CCD Masters with zero integrity issues and no CCD Master timestamp change |
@@ -60,6 +60,52 @@ current database and site-configuration checkpoint was also taken as
 `20260922_143151-frontend-*` before the live index/status repair. Materialization,
 Automatic Tiered, and Automatic QC remained disabled. The app suite passed
 117 tests after the repair. A fresh canary remains the next governed step.
+
+## Splink queue reproducibility repair — 2026-09-23
+
+The `pilot-1.8` Splink queue `e593qei498` was diagnosed before any further
+review assignment. Its scoring path used canonical records directly after the
+bounded-memory refactor, so the derived Chinese/English full-name comparison
+columns were absent. It also retrained with the policy's 1,000,000-pair budget
+instead of the threshold evaluation's frozen 250,000-pair training and random-u
+budgets. This explains the queue's two-value score distribution and prevents
+its `0.298707177` cutoff from being interpreted as comparable to earlier runs.
+
+An exact read-only replay exposed a second defect: adapter `pilot-splink-1.2`
+passed seed `0` to Splink 4.0.16, whose DuckDB sampling implementation treats
+zero as an unseeded sample. Only 1 of the 500 stored evaluation scores matched
+within `1e-9`; mean absolute difference was `0.022554193` and maximum absolute
+difference was `0.267189590`. Threshold evaluation `7i6qgudiei` was therefore
+changed to Stale while preserving all 500 finalized human labels and historical
+metrics.
+
+Adapter `pilot-splink-1.3` now uses an explicit frozen non-zero random-u seed,
+records that seed in evaluation provenance, and forwards the exact frozen
+training-record, training-pair, and random-u limits into queue scoring. Both
+evaluation and queue paths use the same normalized Splink record builder and
+bounded CCD Master projection. A production-scale two-pass validation scored
+the same 500 frozen pairs twice: all 500 matched within the `1e-9` gate and the
+maximum absolute difference was `1.4454e-12`.
+
+New canaries and queues fail closed unless the approved threshold evaluation
+uses the current adapter, dependencies, non-zero frozen seed, prior, and
+resource limits. Queue generation also replays all approved evaluation scores
+before full-population scoring. The replacement path leaves the prior queue in
+place until the new queue reaches Ready.
+
+Defective queue `e593qei498` is Stale. Its 474 unreviewed candidates are
+Stale/Superseded. The one independently double-reviewed and applied candidate
+remains Agreed/Applied, and its active Decision and two-member Group were not
+changed. Live Materialization, Automatic Tiered, and Automatic QC are all off.
+A fresh 500-pair Threshold Evaluation and human review are required before a
+new canary can authorize a replacement Splink queue; the deterministic High
+validation does not need to be repeated solely for this probabilistic adapter
+repair.
+
+Fresh Threshold Evaluation `36vfsulqbc` was then queued for `pilot-1.8` with
+500 representative pairs and 100 randomized double reviews. It is the only run
+that may establish the next Splink Review cutoff after human completion,
+finalization, and management approval.
 
 On 2026-08-24, explicitly bounded Tiered, human-component, and Splink
 development decisions were applied after verified backup checkpoints.

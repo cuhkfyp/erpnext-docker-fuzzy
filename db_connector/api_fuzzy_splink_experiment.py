@@ -20,11 +20,13 @@ from db_connector.api_fuzzy_evaluation import (
     THRESHOLD_EVALUATION,
     _bounded_probability_records,
     _calibrate_scores,
-    _canonical_record,
+    _evaluation_records,
+    _splink_record,
 )
 from db_connector.fuzzy_matching.policy import MatchingPolicy
 from db_connector.fuzzy_matching.splink_adapter import (
     SPLINK_ADAPTER_VERSION,
+    U_RANDOM_SEED,
     dependency_versions,
     score_requested_pairs,
 )
@@ -88,13 +90,7 @@ def _approved_threshold_evaluation(evaluation_name: str | None = None) -> Any:
 def _frozen_records(run: Any, policy: MatchingPolicy) -> list[dict[str, Any]]:
     sources = policy.sources()
     placeholders = ", ".join(["%s"] * len(sources))
-    raw_rows = frappe.db.sql(
-        f"""SELECT * FROM `tabCCD Master`
-              WHERE modified <= %s
-                AND ccd_reg_source IN ({placeholders})""",
-        (run.snapshot_at, *sources),
-        as_dict=True,
-    )
+    records = _evaluation_records(policy, run.snapshot_at)
     stale_snapshot_records = int(
         frappe.db.sql(
             f"""SELECT COUNT(*) FROM `tabCCD Master`
@@ -104,9 +100,9 @@ def _frozen_records(run: Any, policy: MatchingPolicy) -> list[dict[str, Any]]:
             (run.snapshot_at, run.snapshot_at, *sources),
         )[0][0]
     )
-    if stale_snapshot_records or len(raw_rows) != int(run.record_count or 0):
+    if stale_snapshot_records or len(records) != int(run.record_count or 0):
         frappe.throw("The approved evaluation snapshot is no longer reproducible")
-    return [_canonical_record(dict(row), policy) for row in raw_rows]
+    return records
 
 
 def _finalized_pairs(run_name: str) -> list[Any]:
@@ -307,7 +303,10 @@ def run_training_size_experiment(
     requested_pairs = {
         _ordered_pair(pair.left_record, pair.right_record) for pair in pairs
     }
-    scoring_records = [record_by_id[record_id] for record_id in sorted(required_ids)]
+    scoring_records = [
+        _splink_record(record_by_id[record_id], policy)
+        for record_id in sorted(required_ids)
+    ]
 
     existing_scores = {
         _ordered_pair(pair.left_record, pair.right_record): float(
@@ -338,6 +337,7 @@ def run_training_size_experiment(
         "dependencies": dependency_versions(),
         "experimental_training_pair_budget": training_pair_budget,
         "experimental_u_pair_budget": u_pair_budget,
+        "u_random_seed": U_RANDOM_SEED,
         "approved_v1_1_baseline": {
             "ranking": _ranking_metrics(pairs, existing_scores),
             "thresholds": _threshold_metrics(existing_calibration),
@@ -347,11 +347,14 @@ def run_training_size_experiment(
 
     for size in sizes:
         started = time.monotonic()
-        training_records = _bounded_probability_records(
-            records,
-            required_ids,
-            limit=size,
-        )
+        training_records = [
+            _splink_record(record, policy)
+            for record in _bounded_probability_records(
+                records,
+                required_ids,
+                limit=size,
+            )
+        ]
         predictions = score_requested_pairs(
             training_records,
             scoring_records,
@@ -363,6 +366,7 @@ def run_training_size_experiment(
                 training_pair_budget,
             ),
             u_random_max_pairs=u_pair_budget,
+            u_random_seed=U_RANDOM_SEED,
         )
         score_by_pair = {
             _ordered_pair(prediction.left_id, prediction.right_id): float(

@@ -627,7 +627,15 @@ The training cohort is a **deterministic background sample** from the governed r
 
 ```python
 MAX_SPLINK_TRAINING_RECORDS = 5_000
+MAX_SPLINK_TRAINING_CANDIDATE_PAIRS = 250_000
+MAX_SPLINK_U_RANDOM_PAIRS = 250_000
+U_RANDOM_SEED = 1
 ```
+
+The non-zero seed is a governed model parameter. Splink 4.0.16's DuckDB
+sampler treats seed `0` as unseeded, so zero is explicitly rejected. The seed,
+training-record limit, training-pair limit, and random-u limit are frozen in
+the evaluation provenance and replayed exactly by the Review queue.
 
 ### 15.3 What the 5,000-record limit does and does not mean
 
@@ -654,7 +662,11 @@ These are distinct steps performed on different data:
 
 The calibration labels are human-reviewed pairs with `Same`, `Different`, or `Unsure` outcomes. The calibration step selects the cutoff that maximizes F1 on the calibration split. The held-out split is never used during threshold selection.
 
-**The current cutoff `0.938995074` was selected on the calibration split and confirmed on the held-out split of the `pilot-1.6` 500-pair representative recalibration.**
+Historical cutoffs are model-specific and are not comparable across fitted
+models. The `pilot-1.8` cutoff `0.298707177` was invalidated for queue
+authorization on 2026-09-23 after its adapter's seed `0` was proven
+non-reproducible. A fresh cutoff under `pilot-splink-1.3` is pending a new
+500-pair representative evaluation and human review.
 
 ---
 
@@ -827,6 +839,14 @@ if stale_training:
     frappe.throw(
         "The approved Splink training cohort changed; recalibration is required"
     )
+
+# Check 5: Exact approved model provenance
+# Adapter, dependency versions, prior, non-zero seed, and all resource limits
+# must match the approved evaluation.
+
+# Check 6: Probability replay
+# All stored evaluation-pair scores must reproduce within 1e-9 before the
+# full-population queue is scored.
 ```
 
 These checks are **code-level** fail-closed gates. They abort the queue run if any reproducibility condition is not met. There is no UI equivalent: the system refuses to produce a partial or inconsistent queue.
@@ -1070,14 +1090,15 @@ The snapshot-specific cutoff `0.938995074` is tied to a specific set of conditio
 **Process for recalibration:**
 
 1. Freeze a new training cohort with the same 5,000-record limit
-2. Fit a new Splink model (assign a new adapter version, e.g., `pilot-splink-1.2`)
+2. Fit a new Splink model under the current versioned adapter
 3. Score the locked labeled calibration pairs with the new model
 4. Select the new maximum-F1 cutoff on the calibration split
 5. Validate on the held-out split
 6. Record the new cutoff, adapter version, and cohort snapshot
 7. Submit for management approval before activating a new Review queue
 
-The old cutoff `0.938995074` must not be reused with a new model version, even if the numeric value happens to seem similar.
+No historical cutoff may be reused with a new model version, even if the
+numeric value happens to seem similar.
 
 ---
 
@@ -1278,6 +1299,6 @@ the Daily QC monitor.
 ---
 
 *This guide reflects the management-approved post-POC baseline with verified
-implementation updates through 2026-09-16. Statements are grounded in the
+implementation updates through 2026-09-23. Statements are grounded in the
 current repository code and operating documentation. No raw client identity
 values are included.*

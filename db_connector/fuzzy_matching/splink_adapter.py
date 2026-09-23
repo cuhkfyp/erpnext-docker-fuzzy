@@ -22,7 +22,8 @@ RANDOM_MATCH_PRIOR = 0.0001
 MAX_DIRECT_SCORING_PAIRS = 5_000
 REQUESTED_PAIR_BATCH_SIZE = 20_000
 U_RANDOM_MAX_PAIRS = 1_000_000
-SPLINK_ADAPTER_VERSION = "pilot-splink-1.2"
+U_RANDOM_SEED = 1
+SPLINK_ADAPTER_VERSION = "pilot-splink-1.3"
 COMPARISON_FIELDS = ("chi_full", "eng_full", "birthday", "phone", "email")
 
 
@@ -136,6 +137,7 @@ def fit_predict(
     batch_requested_pairs: bool = False,
     requested_min_probability: float | None = None,
     u_random_max_pairs: int = U_RANDOM_MAX_PAIRS,
+    u_random_seed: int = U_RANDOM_SEED,
 ) -> list[ProbabilityPrediction]:
     """Train an unsupervised link-only model and return local predictions.
 
@@ -269,9 +271,14 @@ def fit_predict(
         db_api=DuckDBAPI(),
         input_table_aliases=source_aliases,
     )
+    if not int(u_random_seed):
+        # Splink 4.0.16's DuckDB dialect checks ``if seed`` and silently turns
+        # zero into an unseeded sample.  A non-zero seed is therefore required
+        # for a cutoff model that can be replayed by the Review queue.
+        raise ValueError("Splink u-probability sampling requires a non-zero seed")
     linker.training.estimate_u_using_random_sampling(
         max_pairs=max(1, int(u_random_max_pairs)),
-        seed=0,
+        seed=int(u_random_seed),
     )
     for rule in blocking_rules[:3]:
         try:
@@ -557,6 +564,7 @@ def score_requested_pairs(
     max_block_size: int = 10_000,
     max_prediction_pairs: int = 500_000,
     u_random_max_pairs: int = U_RANDOM_MAX_PAIRS,
+    u_random_seed: int = U_RANDOM_SEED,
 ) -> list[ProbabilityPrediction]:
     """Train once and return only requested pairs at/above a governed cutoff."""
     requested = {
@@ -575,6 +583,7 @@ def score_requested_pairs(
         batch_requested_pairs=True,
         requested_min_probability=float(minimum_probability),
         u_random_max_pairs=u_random_max_pairs,
+        u_random_seed=u_random_seed,
     )
     output = {}
     for prediction in predictions:

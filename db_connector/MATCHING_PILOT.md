@@ -360,7 +360,9 @@ blocking policy after excluding:
 2. every pair already used by a human in an evaluation or earlier Splink queue.
 
 The approved evaluation's endpoint records must be unchanged, and its bounded
-5,000-record training cohort is reproduced. The same trained model scores the
+5,000-record training cohort is reproduced with the frozen non-zero random-u
+seed and pair budgets. Before population scoring, the adapter must reproduce
+every stored evaluation score within `1e-9`. The same model configuration scores the
 exact eligible pair set in bounded batches; an opaque pair sequence prevents a
 Cartesian join. Every eligible pair must produce exactly one score before
 cutoff filtering. The regenerated record population must equal the frozen

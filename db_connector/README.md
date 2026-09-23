@@ -318,7 +318,10 @@ bench --site <site> execute db_connector.api_fuzzy_review_queue.install_review_q
 ```
 
 The queue reuses the canary's frozen data and policy and the approved threshold
-evaluation's `pilot-splink-1.1` model/cutoff. Eligible pairs are complete
+evaluation's versioned model/cutoff. The installed adapter, dependencies,
+random-match prior, non-zero random-u seed, and bounded training limits must
+match the frozen evaluation provenance. The queue replays every stored
+evaluation score within `1e-9` before population scoring. Eligible pairs are complete
 governed candidates after excluding every Tiered High recommendation and every
 pair already used by human evaluation or an earlier queue. Each eligible pair
 must receive exactly one score; a changed/unreproducible frozen canary,

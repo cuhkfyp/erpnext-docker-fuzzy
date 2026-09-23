@@ -41,6 +41,11 @@ from db_connector.fuzzy_matching.identity import identity_fingerprint
 from db_connector.fuzzy_matching.generation import supersede_prior_canary_generations
 from db_connector.fuzzy_matching.models import build_evidence, tiered_result
 from db_connector.fuzzy_matching.policy import MatchingPolicy
+from db_connector.fuzzy_matching.splink_adapter import (
+    SPLINK_ADAPTER_VERSION,
+    U_RANDOM_SEED,
+    dependency_versions,
+)
 from db_connector.fuzzy_matching.security import mask_identifier
 from db_connector.fuzzy_matching.types import MatchTier
 
@@ -121,6 +126,7 @@ def _approved_run(
             "name",
             "policy_snapshot_json",
             "metrics_json",
+            "model_versions_json",
             "candidate_truncated",
             "skipped_blocks_json",
             "modified",
@@ -165,6 +171,19 @@ def _canary_prerequisites(policy_name: str) -> dict[str, Any]:
     review_threshold = splink.get("review_threshold")
     if not splink.get("validation_ready") or review_threshold is None:
         frappe.throw("The approved threshold evaluation has no valid Review threshold")
+    splink_versions = json.loads(threshold_run.model_versions_json or "{}")
+    if (
+        splink_versions.get("splink_adapter") != SPLINK_ADAPTER_VERSION
+        or int(splink_versions.get("splink_u_random_seed") or 0)
+        != U_RANDOM_SEED
+        or splink_versions.get("splink") != dependency_versions()
+        or splink_versions.get("splink_status") != "local"
+        or splink_versions.get("splink_warning")
+    ):
+        frappe.throw(
+            "The approved threshold evaluation does not use the current reproducible "
+            "Splink runtime; create and approve a fresh Threshold Evaluation"
+        )
 
     validated_source_pairs = set(
         (

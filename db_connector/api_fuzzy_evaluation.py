@@ -49,6 +49,7 @@ from db_connector.fuzzy_matching.splink_adapter import (
     MAX_DIRECT_SCORING_PAIRS,
     RANDOM_MATCH_PRIOR,
     SPLINK_ADAPTER_VERSION,
+    U_RANDOM_SEED,
     SplinkUnavailable,
     available,
     dependency_versions,
@@ -968,6 +969,7 @@ def _probability_map(
             # prediction frame here wastes memory and can OOM the worker.
             batch_requested_pairs=requested_pairs is not None,
             u_random_max_pairs=MAX_SPLINK_U_RANDOM_PAIRS,
+            u_random_seed=U_RANDOM_SEED,
         )
     except (SplinkUnavailable, ValueError) as exc:
         return {}, str(exc), len(training_records)
@@ -1390,6 +1392,78 @@ def install_high_tier_validation_run(
     )
 
 
+def retire_nonreproducible_threshold_evaluation(
+    run_name: str,
+    reason: str,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Bench-only retirement that preserves every human label and metric."""
+    if not frappe.utils.cint(confirm):
+        frappe.throw("Explicit confirm=True is required")
+    reason = str(reason or "").strip()
+    if not reason or len(reason) > 240:
+        frappe.throw("A bounded non-empty reproducibility reason is required")
+    frappe.db.sql(
+        "SELECT name FROM `tabCCD Match Evaluation Run` WHERE name = %s FOR UPDATE",
+        (run_name,),
+    )
+    run = frappe.get_doc("CCD Match Evaluation Run", run_name)
+    if run.status == "Stale":
+        return {
+            "run": run.name,
+            "status": "Stale",
+            "already_retired": True,
+        }
+    if (
+        (run.run_purpose or THRESHOLD_EVALUATION) != THRESHOLD_EVALUATION
+        or run.status != "Completed"
+        or run.approval_status != "Approved"
+    ):
+        frappe.throw("Only an approved completed Threshold Evaluation may be retired")
+    versions = json.loads(run.model_versions_json or "{}")
+    if (
+        versions.get("splink_adapter") == SPLINK_ADAPTER_VERSION
+        and int(versions.get("splink_u_random_seed") or 0) == U_RANDOM_SEED
+    ):
+        frappe.throw("The evaluation already uses the current reproducible adapter")
+    pair_count = frappe.db.count(
+        "CCD Match Evaluation Pair",
+        {"evaluation_run": run.name},
+    )
+    finalized_count = frappe.db.count(
+        "CCD Match Evaluation Pair",
+        {
+            "evaluation_run": run.name,
+            "review_status": ["in", ["Agreed", "Adjudicated"]],
+        },
+    )
+    versions["reproducibility_invalidation"] = {
+        "invalidated_at": frappe.utils.now_datetime(),
+        "reason": reason,
+        "previous_adapter": versions.get("splink_adapter"),
+        "previous_u_random_seed": versions.get("splink_u_random_seed"),
+        "replacement_adapter": SPLINK_ADAPTER_VERSION,
+        "replacement_u_random_seed": U_RANDOM_SEED,
+        "human_labels_preserved": finalized_count,
+    }
+    run.db_set(
+        {
+            "status": "Stale",
+            "model_versions_json": _json(versions),
+            "error_summary": reason,
+        },
+        update_modified=False,
+    )
+    frappe.db.commit()
+    return {
+        "run": run.name,
+        "status": "Stale",
+        "already_retired": False,
+        "pair_count": pair_count,
+        "preserved_finalized_labels": finalized_count,
+    }
+
+
 def run_evaluation(run_name: str) -> None:
     run = frappe.get_doc("CCD Match Evaluation Run", run_name)
     run.db_set("status", "Profiling")
@@ -1679,6 +1753,7 @@ def run_evaluation(run_name: str) -> None:
                         MAX_SPLINK_TRAINING_CANDIDATE_PAIRS
                     ),
                     "splink_u_random_pair_limit": MAX_SPLINK_U_RANDOM_PAIRS,
+                    "splink_u_random_seed": U_RANDOM_SEED,
                     "splink_direct_scoring_pair_limit": MAX_DIRECT_SCORING_PAIRS,
                     "splink_scored_sample_pairs": sum(
                         int(pair in probabilities) for pair in requested_pairs
@@ -1771,6 +1846,7 @@ def repair_run_probabilistic_scores(run_name: str) -> None:
                     MAX_SPLINK_TRAINING_CANDIDATE_PAIRS
                 ),
                 "splink_u_random_pair_limit": MAX_SPLINK_U_RANDOM_PAIRS,
+                "splink_u_random_seed": U_RANDOM_SEED,
                 "splink_direct_scoring_pair_limit": MAX_DIRECT_SCORING_PAIRS,
                 "splink_status": _splink_status(probability_warning),
                 "splink_warning": probability_warning,
@@ -2287,6 +2363,7 @@ def install_complete_high_sample_repair(run_name: str) -> dict[str, Any]:
                     MAX_SPLINK_TRAINING_CANDIDATE_PAIRS
                 ),
                 "splink_u_random_pair_limit": MAX_SPLINK_U_RANDOM_PAIRS,
+                "splink_u_random_seed": U_RANDOM_SEED,
                 "splink_direct_scoring_pair_limit": MAX_DIRECT_SCORING_PAIRS,
                 "splink_status": _splink_status(probability_warning),
                 "splink_warning": probability_warning,
