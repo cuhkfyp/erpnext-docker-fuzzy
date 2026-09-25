@@ -12,9 +12,11 @@ import frappe
 
 from db_connector.api_fuzzy_canary import (
     _change_recommendation_status,
+    _materialized_component_matches,
     _pair_evidence_payload,
     _refresh_run_counts,
     _snapshot_hash,
+    reconcile_materialized_recommendations,
 )
 from db_connector.api_fuzzy_evaluation import SENSITIVE_ROLE
 from db_connector.api_identity_resolution import (
@@ -60,10 +62,26 @@ def _run(run_name: str) -> Any:
     return run
 
 
-def _component_rows(run_name: str) -> dict[str, list[Any]]:
+def _component_rows(
+    run_name: str, component_keys: Iterable[str] | None = None
+) -> dict[str, list[Any]]:
+    filters: dict[str, Any] = {
+        "canary_run": run_name,
+        "status": "Proposed",
+    }
+    if component_keys is not None:
+        requested = tuple(
+            sorted({str(item) for item in component_keys if str(item)})
+        )
+        if not requested:
+            return {}
+        # The composite canary/status/cluster index turns batch revalidation
+        # and Apply into a bounded lookup instead of loading every Proposed
+        # recommendation in a large canary.
+        filters["cluster_fingerprint"] = ["in", requested]
     rows = frappe.get_all(
         RECOMMENDATION_DOCTYPE,
-        filters={"canary_run": run_name, "status": "Proposed"},
+        filters=filters,
         fields=[
             "name",
             "cluster_fingerprint",
@@ -203,11 +221,24 @@ def _selected_components(
     component_keys: Iterable[str] | None = None,
     component_limit: int | None = None,
 ) -> list[tuple[str, list[Any]]]:
-    components = _component_rows(run_name)
+    requested = (
+        tuple(sorted({str(item) for item in component_keys}))
+        if component_keys is not None
+        else None
+    )
+    components = _component_rows(run_name, component_keys=requested)
+    materialized = (
+        _materialized_component_matches(run_name, components)
+        if requested is not None
+        else _materialized_component_matches(run_name)
+    )
+    components = {
+        key: rows for key, rows in components.items() if key not in materialized
+    }
     if component_keys is None:
         selected = [item for item in components.items() if not _held(item[1])]
     else:
-        requested = tuple(sorted({str(item) for item in component_keys}))
+        assert requested is not None
         missing = [key for key in requested if key not in components]
         if missing:
             frappe.throw("Unknown or non-Proposed component selection")
@@ -335,6 +366,13 @@ def _create_activation_batch(
     if selection_method not in allowed_methods:
         frappe.throw("Unsupported Activation Batch selection method")
     run = _run(run_name)
+    reconciliation = reconcile_materialized_recommendations(run.name)
+    if reconciliation["recommendation_count"]:
+        _refresh_run_counts(run.name)
+        # Persist this terminal lifecycle reconciliation even when no new
+        # component remains for the requested batch. Identity state is not
+        # written here: no Decision, Group, or Membership is created.
+        frappe.db.commit()
     if isinstance(component_keys_json, str):
         component_keys = json.loads(component_keys_json or "[]")
     else:
@@ -867,7 +905,12 @@ def revalidate_failed_activation_batch(batch_name: str) -> dict[str, Any]:
     if batch.status != "Failed":
         frappe.throw("Only a failed Activation Batch can be revalidated for retry")
     run = _run(batch.canary_run)
-    components = _component_rows(run.name)
+    component_keys = [
+        str(item.component_fingerprint)
+        for item in batch.items
+        if item.status not in {"Applied", "Already Applied", "Corrected"}
+    ]
+    components = _component_rows(run.name, component_keys=component_keys)
     selected: list[tuple[str, list[Any]]] = []
     for item in batch.items:
         if item.status in {"Applied", "Already Applied", "Corrected"}:
@@ -967,7 +1010,12 @@ def _apply_activation_batch(
     try:
         created_groups = int(batch.created_group_count or 0)
         created_memberships = int(batch.created_membership_count or 0)
-        components = _component_rows(run.name)
+        component_keys = [
+            str(item.component_fingerprint)
+            for item in batch.items
+            if item.status not in {"Applied", "Already Applied", "Corrected"}
+        ]
+        components = _component_rows(run.name, component_keys=component_keys)
         for item in batch.items:
             if item.status in {"Applied", "Already Applied", "Corrected"}:
                 continue

@@ -328,6 +328,19 @@ not an identity-link action. A subsequent active canary
 supersedes the prior version while preserving both histories, and a manager can
 reverse one recommendation or the whole canary with a mandatory reason.
 
+When a replacement canary proposes an exact component that is already the
+current active identity-group partition, the generation reconciles that work
+instead of materializing it again. Every member must have exactly one active
+membership in the same active group, the group may contain no extra active
+member, and the membership fingerprints must equal the canary's frozen
+fingerprints. Matching recommendations are terminally marked `Superseded`,
+linked to the existing canonical decision and group, and receive an immutable
+`already_materialized_current_partition` event. Partial overlap, changed
+fingerprints, and groups needing revalidation remain in the governed safety
+path. Manual pilot selection and Automatic Tiered selection both exclude these
+reconciled components, so neither consumes rollout quota by reaffirming an
+unchanged group.
+
 The Start Recommendation Canary action is idempotent while a generation is
 Queued or running: a repeated click opens the same run, and an atomic server
 lock prevents concurrent requests from creating a second one. Generation

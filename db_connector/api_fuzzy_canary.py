@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import traceback
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Any
 
 import frappe
@@ -589,6 +589,310 @@ def _refresh_run_counts(run_name: str) -> dict[str, int]:
     return values
 
 
+def _chunks(values: list[str], size: int = 500) -> list[list[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def _proposed_component_rows(run_name: str) -> dict[str, list[Any]]:
+    # Only a component touching an Active membership can already be
+    # materialized. Resolve those indexed left/right slices first instead of
+    # sorting every Proposed recommendation in a large generation.
+    active_record_ids = sorted(
+        {
+            str(value)
+            for value in frappe.get_all(
+                "CCD Identity Membership",
+                filters={"status": "Active"},
+                pluck="ccd_master",
+                limit_page_length=1_000_000,
+            )
+        }
+    )
+    if not active_record_ids:
+        return {}
+    component_keys: set[str] = set()
+    for chunk in _chunks(active_record_ids):
+        for side in ("left_record", "right_record"):
+            component_keys.update(
+                str(row.cluster_fingerprint)
+                for row in frappe.get_all(
+                    RECOMMENDATION_DOCTYPE,
+                    filters={
+                        "canary_run": run_name,
+                        "status": "Proposed",
+                        side: ["in", chunk],
+                    },
+                    fields=["cluster_fingerprint"],
+                    limit_page_length=100_000,
+                )
+            )
+    if not component_keys:
+        return {}
+    rows = []
+    for chunk in _chunks(sorted(component_keys)):
+        rows.extend(
+            frappe.get_all(
+                RECOMMENDATION_DOCTYPE,
+                filters={
+                    "canary_run": run_name,
+                    "status": "Proposed",
+                    "cluster_fingerprint": ["in", chunk],
+                },
+                fields=[
+                    "name",
+                    "canary_run",
+                    "cluster_fingerprint",
+                    "left_record",
+                    "right_record",
+                    "left_identity_fingerprint",
+                    "right_identity_fingerprint",
+                ],
+                limit_page_length=100_000,
+            )
+        )
+    components: dict[str, list[Any]] = defaultdict(list)
+    for row in rows:
+        components[str(row.cluster_fingerprint)].append(row)
+    return dict(components)
+
+
+def _materialized_component_matches(
+    run_name: str,
+    components: dict[str, list[Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return exact current-group matches for Proposed canary components.
+
+    A component is redundant only when every proposed member has one Active
+    membership in the same Active group, that group has no additional Active
+    members, and every membership still carries the recommendation's frozen
+    identity fingerprint. Partial overlaps and groups needing revalidation are
+    deliberately left to the existing safety/overlap workflow.
+    """
+    component_rows = components if components is not None else _proposed_component_rows(run_name)
+    if not component_rows:
+        return {}
+
+    component_records: dict[str, set[str]] = {}
+    frozen_fingerprints: dict[str, dict[str, str]] = {}
+    all_record_ids: set[str] = set()
+    for component_key, rows in component_rows.items():
+        records: set[str] = set()
+        fingerprints: dict[str, str] = {}
+        inconsistent = False
+        for row in rows:
+            for record_id, fingerprint in (
+                (str(row.left_record), str(row.left_identity_fingerprint or "")),
+                (str(row.right_record), str(row.right_identity_fingerprint or "")),
+            ):
+                records.add(record_id)
+                previous = fingerprints.setdefault(record_id, fingerprint)
+                if previous != fingerprint or not fingerprint:
+                    inconsistent = True
+        if inconsistent or len(records) < 2:
+            continue
+        component_records[component_key] = records
+        frozen_fingerprints[component_key] = fingerprints
+        all_record_ids.update(records)
+    if not component_records:
+        return {}
+
+    memberships_by_record: dict[str, list[Any]] = defaultdict(list)
+    for chunk in _chunks(sorted(all_record_ids)):
+        for membership in frappe.get_all(
+            "CCD Identity Membership",
+            filters={"ccd_master": ["in", chunk], "status": "Active"},
+            fields=["name", "ccd_master", "identity_group", "identity_fingerprint"],
+            limit_page_length=max(len(chunk) * 2, 1),
+        ):
+            memberships_by_record[str(membership.ccd_master)].append(membership)
+
+    group_names = sorted(
+        {
+            str(membership.identity_group)
+            for memberships in memberships_by_record.values()
+            for membership in memberships
+            if str(membership.identity_group or "")
+        }
+    )
+    if not group_names:
+        return {}
+
+    groups: dict[str, Any] = {}
+    for chunk in _chunks(group_names):
+        for group in frappe.get_all(
+            "CCD Identity Group",
+            filters={"name": ["in", chunk], "status": "Active"},
+            fields=["name", "originating_decision", "status"],
+            limit_page_length=len(chunk),
+        ):
+            groups[str(group.name)] = group
+
+    members_by_group: dict[str, set[str]] = defaultdict(set)
+    for chunk in _chunks(group_names):
+        for membership in frappe.get_all(
+            "CCD Identity Membership",
+            filters={"identity_group": ["in", chunk], "status": "Active"},
+            fields=["ccd_master", "identity_group"],
+            limit_page_length=100_000,
+        ):
+            members_by_group[str(membership.identity_group)].add(
+                str(membership.ccd_master)
+            )
+
+    matches: dict[str, dict[str, Any]] = {}
+    for component_key, desired_records in component_records.items():
+        memberships = []
+        if any(
+            len(memberships_by_record.get(record_id, [])) != 1
+            for record_id in desired_records
+        ):
+            continue
+        for record_id in desired_records:
+            membership = memberships_by_record[record_id][0]
+            if str(membership.identity_fingerprint or "") != frozen_fingerprints[
+                component_key
+            ][record_id]:
+                break
+            memberships.append(membership)
+        else:
+            existing_groups = {str(row.identity_group) for row in memberships}
+            if len(existing_groups) != 1:
+                continue
+            group_name = next(iter(existing_groups))
+            group = groups.get(group_name)
+            if (
+                not group
+                or str(group.status or "") != "Active"
+                or not str(group.originating_decision or "")
+                or members_by_group.get(group_name, set()) != desired_records
+            ):
+                continue
+            matches[component_key] = {
+                "identity_group": group_name,
+                "identity_decision": str(group.originating_decision),
+                "record_count": len(desired_records),
+                "recommendation_count": len(component_rows[component_key]),
+            }
+    return matches
+
+
+def reconcile_materialized_recommendations(
+    run_name: str,
+    components: dict[str, list[Any]] | None = None,
+) -> dict[str, Any]:
+    """Close redundant new-generation work without another identity decision."""
+    component_rows = components if components is not None else _proposed_component_rows(run_name)
+    matches = _materialized_component_matches(run_name, component_rows)
+    if not matches:
+        return {
+            "component_count": 0,
+            "recommendation_count": 0,
+            "identity_group_count": 0,
+            "component_keys": [],
+        }
+
+    now = frappe.utils.now_datetime()
+    actor = frappe.session.user or "Administrator"
+    recommendation_count = 0
+    group_names: set[str] = set()
+    reason = "already_materialized_current_partition"
+    recommendation_updates: list[dict[str, Any]] = []
+    event_rows: list[tuple[Any, ...]] = []
+    event_fields = [
+        "name", "creation", "modified", "modified_by", "owner", "docstatus",
+        "recommendation", "canary_run", "event_type", "from_status",
+        "to_status", "reason", "event_at", "actor", "metadata_json",
+    ]
+    for component_key, match in matches.items():
+        group_names.add(match["identity_group"])
+        for recommendation in component_rows[component_key]:
+            recommendation_updates.append({
+                "name": recommendation.name,
+                "status": "Superseded",
+                "rollout_state": "Superseded",
+                "identity_decision": match["identity_decision"],
+                "identity_group": match["identity_group"],
+                "ended_at": now,
+                "ended_by": actor,
+                "end_reason": reason,
+            })
+            recommendation.status = "Superseded"
+            event_key = hashlib.sha256(
+                f"{recommendation.name}\x1f{reason}".encode()
+            ).hexdigest()
+            event_rows.append((
+                f"canary-event-reconcile-{event_key}",
+                now, now, actor, actor, 0,
+                recommendation.name, recommendation.canary_run,
+                "Superseded", "Proposed", "Superseded", reason, now, actor,
+                _json({
+                    "component_fingerprint": component_key,
+                    "identity_group": match["identity_group"],
+                    "identity_decision": match["identity_decision"],
+                    "reconciliation": "exact_active_membership_partition",
+                }),
+            ))
+            recommendation_count += 1
+    frappe.db.bulk_update(
+        RECOMMENDATION_DOCTYPE,
+        recommendation_updates,
+        chunk_size=CANARY_WRITE_BATCH_SIZE,
+        update_modified=False,
+    )
+    frappe.db.bulk_insert(
+        EVENT_DOCTYPE,
+        event_fields,
+        event_rows,
+        chunk_size=CANARY_WRITE_BATCH_SIZE,
+    )
+    return {
+        "component_count": len(matches),
+        "recommendation_count": recommendation_count,
+        "identity_group_count": len(group_names),
+        "component_keys": sorted(matches),
+    }
+
+
+def preview_materialized_recommendations(run_name: str) -> dict[str, Any]:
+    """Return compact, zero-write counts for existing-partition reconciliation."""
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if run.status not in {"Ready", "Active"}:
+        frappe.throw("Only a Ready or Active canary may be reconciled")
+    component_rows = _proposed_component_rows(run.name)
+    matches = _materialized_component_matches(run.name, component_rows)
+    return {
+        "run": run.name,
+        "zero_write": True,
+        "component_count": len(matches),
+        "recommendation_count": sum(
+            int(match["recommendation_count"]) for match in matches.values()
+        ),
+        "identity_group_count": len(
+            {str(match["identity_group"]) for match in matches.values()}
+        ),
+        "proposed_recommendation_count": frappe.db.count(
+            RECOMMENDATION_DOCTYPE,
+            {"canary_run": run.name, "status": "Proposed"},
+        ),
+    }
+
+
+def install_reconcile_materialized_recommendations(run_name: str) -> dict[str, Any]:
+    """Bench-only idempotent repair for an already generated canary."""
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if run.status not in {"Ready", "Active"}:
+        frappe.throw("Only a Ready or Active canary may be reconciled")
+    result = reconcile_materialized_recommendations(run.name)
+    counts = _refresh_run_counts(run.name)
+    summary = json.loads(run.summary_json or "{}")
+    summary["existing_identity_reconciliation"] = {
+        key: value for key, value in result.items() if key != "component_keys"
+    }
+    run.db_set("summary_json", _json(summary), update_modified=False)
+    frappe.db.commit()
+    return {"run": run.name, **result, **counts}
+
+
 def _component_review_key(run_name: str, cluster_fingerprint: str) -> str:
     return hashlib.sha256(f"{run_name}\x1f{cluster_fingerprint}".encode()).hexdigest()
 
@@ -836,6 +1140,16 @@ def run_canary(run_name: str) -> None:
             )
         )
 
+        existing_identity_reconciliation = reconcile_materialized_recommendations(
+            run.name
+        )
+        reconciled_recommendations = int(
+            existing_identity_reconciliation["recommendation_count"]
+        )
+        if reconciled_recommendations:
+            status_counts["Proposed"] -= reconciled_recommendations
+            status_counts["Superseded"] += reconciled_recommendations
+
         review_workflow = _initialize_review_workflow(run.name)
         summary = {
             "policy_snapshot_sha256": run.policy_snapshot_sha256,
@@ -852,6 +1166,11 @@ def run_canary(run_name: str) -> None:
             "largest_component_size": largest_cluster,
             "model_conflict_candidate_count": len(conflicting_pairs),
             "stale_record_count": len(stale),
+            "existing_identity_reconciliation": {
+                key: value
+                for key, value in existing_identity_reconciliation.items()
+                if key != "component_keys"
+            },
             "exception_component_count": review_workflow["exception_component_count"],
             "random_qc_sample_count": review_workflow["qc_sample_count"],
             "production_records_modified": False,

@@ -99,6 +99,133 @@ class CanaryGenerationSafetyTests(unittest.TestCase):
         database.count.assert_not_called()
         database.set_value.assert_not_called()
 
+    def test_exact_active_partition_is_detected_as_already_materialized(self):
+        components = {
+            "component1": [
+                SimpleNamespace(
+                    name="rec1",
+                    canary_run="run1",
+                    cluster_fingerprint="component1",
+                    left_record="A",
+                    right_record="B",
+                    left_identity_fingerprint="fp-a",
+                    right_identity_fingerprint="fp-b",
+                )
+            ]
+        }
+
+        def get_all(doctype, **kwargs):
+            filters = kwargs.get("filters", {})
+            if doctype == "CCD Identity Group":
+                return [
+                    SimpleNamespace(
+                        name="group1", status="Active", originating_decision="decision1"
+                    )
+                ]
+            if "ccd_master" in filters:
+                return [
+                    SimpleNamespace(
+                        name="member-a", ccd_master="A", identity_group="group1",
+                        identity_fingerprint="fp-a",
+                    ),
+                    SimpleNamespace(
+                        name="member-b", ccd_master="B", identity_group="group1",
+                        identity_fingerprint="fp-b",
+                    ),
+                ]
+            if "identity_group" in filters:
+                return [
+                    SimpleNamespace(ccd_master="A", identity_group="group1"),
+                    SimpleNamespace(ccd_master="B", identity_group="group1"),
+                ]
+            return []
+
+        with patch.object(canary.frappe, "get_all", side_effect=get_all):
+            matches = canary._materialized_component_matches("run1", components)
+        self.assertEqual(matches["component1"]["identity_group"], "group1")
+        self.assertEqual(matches["component1"]["identity_decision"], "decision1")
+
+    def test_partial_existing_group_is_not_reconciled(self):
+        components = {
+            "component1": [
+                SimpleNamespace(
+                    name="rec1", canary_run="run1", cluster_fingerprint="component1",
+                    left_record="A", right_record="B",
+                    left_identity_fingerprint="fp-a", right_identity_fingerprint="fp-b",
+                )
+            ]
+        }
+
+        def get_all(doctype, **kwargs):
+            filters = kwargs.get("filters", {})
+            if doctype == "CCD Identity Group":
+                return [
+                    SimpleNamespace(
+                        name="group1", status="Active", originating_decision="decision1"
+                    )
+                ]
+            if "ccd_master" in filters:
+                return [
+                    SimpleNamespace(
+                        name="member-a", ccd_master="A", identity_group="group1",
+                        identity_fingerprint="fp-a",
+                    ),
+                    SimpleNamespace(
+                        name="member-b", ccd_master="B", identity_group="group1",
+                        identity_fingerprint="fp-b",
+                    ),
+                ]
+            if "identity_group" in filters:
+                return [
+                    SimpleNamespace(ccd_master="A", identity_group="group1"),
+                    SimpleNamespace(ccd_master="B", identity_group="group1"),
+                    SimpleNamespace(ccd_master="C", identity_group="group1"),
+                ]
+            return []
+
+        with patch.object(canary.frappe, "get_all", side_effect=get_all):
+            matches = canary._materialized_component_matches("run1", components)
+        self.assertEqual(matches, {})
+
+    def test_reconciliation_closes_redundant_work_without_new_decision(self):
+        recommendation = SimpleNamespace(
+            name="rec1", canary_run="run1", status="Proposed"
+        )
+        components = {"component1": [recommendation]}
+        database = MagicMock()
+        with patch.object(
+            canary, "_materialized_component_matches",
+            return_value={
+                "component1": {
+                    "identity_group": "group1",
+                    "identity_decision": "decision1",
+                    "record_count": 2,
+                    "recommendation_count": 1,
+                }
+            },
+        ), patch.object(canary.frappe, "db", database), patch.object(
+            canary.frappe, "session", SimpleNamespace(user="Administrator")
+        ), patch.object(
+            canary.frappe.utils, "now_datetime", return_value="2026-09-25 00:00:00"
+        ), patch.object(canary.frappe, "get_doc") as get_doc:
+            result = canary.reconcile_materialized_recommendations("run1", components)
+        self.assertEqual(result["component_count"], 1)
+        self.assertEqual(result["recommendation_count"], 1)
+        database.bulk_update.assert_called_once()
+        values = database.bulk_update.call_args.args[1][0]
+        self.assertEqual(values["status"], "Superseded")
+        self.assertEqual(values["rollout_state"], "Superseded")
+        self.assertEqual(values["identity_group"], "group1")
+        self.assertEqual(values["identity_decision"], "decision1")
+        database.bulk_insert.assert_called_once()
+        event_fields = database.bulk_insert.call_args.args[1]
+        event_values = database.bulk_insert.call_args.args[2][0]
+        event = dict(zip(event_fields, event_values))
+        self.assertEqual(event["recommendation"], "rec1")
+        self.assertEqual(event["event_type"], "Superseded")
+        self.assertEqual(event["reason"], "already_materialized_current_partition")
+        get_doc.assert_not_called()
+
 
 class RegistrationRetirementRetryTests(unittest.TestCase):
     def test_apply_active_key_is_shared_across_managers(self):

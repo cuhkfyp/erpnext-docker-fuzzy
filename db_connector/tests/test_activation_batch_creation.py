@@ -128,6 +128,41 @@ class ActivationBatchCreationOperationTests(unittest.TestCase):
         self.assertEqual(result["status"], "Unknown")
         self.assertIn("Check existing batches", result["error"])
 
+    def test_component_lookup_is_bounded_to_frozen_batch_keys(self):
+        with patch.object(activation.frappe, "get_all", return_value=[]) as get_all:
+            result = activation._component_rows(
+                "canary1", component_keys=["component-b", "component-a", "component-a"]
+            )
+        self.assertEqual(result, {})
+        self.assertEqual(
+            get_all.call_args.kwargs["filters"],
+            {
+                "canary_run": "canary1",
+                "status": "Proposed",
+                "cluster_fingerprint": [
+                    "in", ("component-a", "component-b")
+                ],
+            },
+        )
+
+    def test_empty_frozen_component_lookup_skips_database(self):
+        with patch.object(activation.frappe, "get_all") as get_all:
+            result = activation._component_rows("canary1", component_keys=[])
+        self.assertEqual(result, {})
+        get_all.assert_not_called()
+
+    def test_already_materialized_component_is_not_selectable(self):
+        row = SimpleNamespace(cluster_fingerprint="component-a", rollout_state="Available")
+        with patch.object(
+            activation, "_component_rows", return_value={"component-a": [row]}
+        ), patch.object(
+            activation, "_materialized_component_matches",
+            return_value={"component-a": {"identity_group": "group1"}},
+        ) as materialized_matches:
+            selected = activation._selected_components("canary1")
+        self.assertEqual(selected, [])
+        materialized_matches.assert_called_once_with("canary1")
+
 
 if __name__ == "__main__":
     unittest.main()
