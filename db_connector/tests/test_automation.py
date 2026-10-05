@@ -9,7 +9,9 @@ from fuzzy_matching.automation import (
 )
 from notification_utils import (
     invalid_notification_recipients,
+    is_orphaned_scheduler_job,
     parse_notification_recipients,
+    should_hold_email_backlog,
 )
 
 
@@ -80,6 +82,68 @@ class AutomationHelperTests(unittest.TestCase):
                 "valid@example.com, display name <wrong@example.com>, no-domain@example"
             ),
             ("display", "name", "<wrong@example.com>", "no-domain@example"),
+        )
+
+    def test_old_unregistered_queued_job_is_orphaned(self):
+        self.assertTrue(
+            is_orphaned_scheduler_job(
+                "queued",
+                registered_in_queue=False,
+                age_seconds=3600,
+                minimum_age_seconds=300,
+            )
+        )
+
+    def test_live_or_recent_job_is_never_treated_as_orphaned(self):
+        self.assertFalse(
+            is_orphaned_scheduler_job(
+                "queued",
+                registered_in_queue=True,
+                age_seconds=3600,
+                minimum_age_seconds=300,
+            )
+        )
+        self.assertFalse(
+            is_orphaned_scheduler_job(
+                "started",
+                registered_in_queue=False,
+                age_seconds=299,
+                minimum_age_seconds=300,
+            )
+        )
+        self.assertFalse(
+            is_orphaned_scheduler_job(
+                "finished",
+                registered_in_queue=False,
+                age_seconds=3600,
+                minimum_age_seconds=300,
+            )
+        )
+
+    def test_old_or_large_email_backlog_is_held_for_review(self):
+        self.assertTrue(
+            should_hold_email_backlog(
+                46,
+                60,
+                maximum_count=10,
+                maximum_age_seconds=86400,
+            )
+        )
+        self.assertTrue(
+            should_hold_email_backlog(
+                1,
+                86401,
+                maximum_count=10,
+                maximum_age_seconds=86400,
+            )
+        )
+        self.assertFalse(
+            should_hold_email_backlog(
+                2,
+                3600,
+                maximum_count=10,
+                maximum_age_seconds=86400,
+            )
         )
 
 

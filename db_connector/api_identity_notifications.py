@@ -8,15 +8,20 @@ changes the outcome of the governed work.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from functools import wraps
 from html import escape
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote
 
 import frappe
-from frappe.utils import cint, get_url, now_datetime
+from frappe.utils import cint, get_datetime, get_url, now_datetime
 
-from db_connector.notification_utils import parse_notification_recipients
+from db_connector.notification_utils import (
+    is_orphaned_scheduler_job,
+    parse_notification_recipients,
+    should_hold_email_backlog,
+)
 
 
 SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
@@ -25,6 +30,196 @@ RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 BATCH_DOCTYPE = "CCD Identity Activation Batch"
 INVESTIGATION_DOCTYPE = "CCD Identity QC Investigation"
 MAX_DETAIL_RECORDS = 100
+EMAIL_FLUSH_METHOD = "frappe.email.queue.flush"
+EMAIL_FLUSH_JOB_ID = f"scheduled_job::{EMAIL_FLUSH_METHOD}"
+EMAIL_FLUSH_ORPHAN_MINIMUM_AGE_SECONDS = 300
+EMAIL_FLUSH_HEALTH_LOCK = "db_connector:email-flush-health"
+EMAIL_FLUSH_AUTOMATIC_BACKLOG_LIMIT = 10
+EMAIL_FLUSH_AUTOMATIC_BACKLOG_MAX_AGE_SECONDS = 24 * 60 * 60
+EMAIL_FLUSH_BACKLOG_HOLD_DEFAULT = "db_connector_email_backlog_hold"
+
+
+def _rq_job_age_seconds(job: Any) -> float:
+    timestamp = job.started_at or job.enqueued_at or job.created_at
+    if not timestamp:
+        return 0.0
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return max(0.0, (datetime.now(UTC) - timestamp).total_seconds())
+
+
+def _rq_job_is_registered(job: Any, connection: Any) -> bool:
+    """Fail closed unless the RQ job is absent from every live location."""
+    from rq import Queue, Worker
+    from rq.registry import StartedJobRegistry
+
+    origin = str(job.origin or "")
+    if not origin:
+        return True
+    queue = Queue(origin, connection=connection)
+    if job.id in set(queue.get_job_ids()):
+        return True
+    started = StartedJobRegistry(queue=queue)
+    if job.id in set(started.get_job_ids()):
+        return True
+    for worker in Worker.all(queue=queue):
+        current_job = worker.get_current_job()
+        if current_job and current_job.id == job.id:
+            return True
+    return False
+
+
+def _pending_email_count() -> int:
+    return int(
+        frappe.db.count(
+            "Email Queue", filters={"status": ["in", ["Not Sent", "Partially Sent"]]}
+        )
+        or 0
+    )
+
+
+def _pending_email_state() -> dict[str, Any]:
+    row = frappe.db.sql(
+        """
+        SELECT COUNT(*) AS pending_count, MIN(creation) AS oldest_creation
+        FROM `tabEmail Queue`
+        WHERE status IN ('Not Sent', 'Partially Sent')
+        """,
+        as_dict=True,
+    )[0]
+    count = int(row.pending_count or 0)
+    oldest_age_seconds = 0.0
+    if count and row.oldest_creation:
+        oldest_age_seconds = max(
+            0.0,
+            (now_datetime() - get_datetime(row.oldest_creation)).total_seconds(),
+        )
+    return {
+        "pending": count,
+        "oldest_age_seconds": oldest_age_seconds,
+    }
+
+
+def _enqueue_email_flush() -> bool:
+    job_type_name = frappe.db.get_value(
+        "Scheduled Job Type", {"method": EMAIL_FLUSH_METHOD}, "name"
+    )
+    if not job_type_name:
+        raise RuntimeError("Email flush Scheduled Job Type is missing")
+    return bool(frappe.get_doc("Scheduled Job Type", job_type_name).enqueue(force=True))
+
+
+def _set_automatic_backlog_hold(hold: bool) -> bool:
+    """Own and release the global mail suspension only when this guard set it."""
+    owned = bool(cint(frappe.db.get_default(EMAIL_FLUSH_BACKLOG_HOLD_DEFAULT)))
+    suspended = bool(cint(frappe.db.get_default("suspend_email_queue")))
+    changed = False
+    if hold and not suspended:
+        frappe.db.set_default("suspend_email_queue", 1)
+        frappe.db.set_default(EMAIL_FLUSH_BACKLOG_HOLD_DEFAULT, 1)
+        owned = True
+        changed = True
+    elif not hold and owned:
+        frappe.db.set_default("suspend_email_queue", 0)
+        frappe.db.set_default(EMAIL_FLUSH_BACKLOG_HOLD_DEFAULT, 0)
+        owned = False
+        changed = True
+    if changed:
+        frappe.db.commit()
+    return owned
+
+
+def ensure_email_flush_scheduler_health() -> dict[str, Any]:
+    """Repair only a proven orphaned email-flush marker and queue pending mail."""
+    from frappe.utils.background_jobs import get_job, get_redis_conn
+
+    connection = get_redis_conn()
+    lock = connection.lock(
+        EMAIL_FLUSH_HEALTH_LOCK,
+        timeout=30,
+        blocking_timeout=1,
+    )
+    if not lock.acquire(blocking=True):
+        return {"status": "Busy", "pending": _pending_email_count()}
+
+    repaired = False
+    try:
+        pending_state = _pending_email_state()
+        pending = pending_state["pending"]
+        if should_hold_email_backlog(
+            pending,
+            pending_state["oldest_age_seconds"],
+            maximum_count=EMAIL_FLUSH_AUTOMATIC_BACKLOG_LIMIT,
+            maximum_age_seconds=EMAIL_FLUSH_AUTOMATIC_BACKLOG_MAX_AGE_SECONDS,
+        ):
+            hold_owned = _set_automatic_backlog_hold(True)
+            frappe.logger("identity_notifications").error(
+                "Holding email backlog before scheduler repair "
+                "(pending=%s oldest_age_seconds=%s)",
+                pending,
+                int(pending_state["oldest_age_seconds"]),
+            )
+            return {
+                "status": "Backlog Held",
+                "pending": pending,
+                "oldest_age_seconds": int(pending_state["oldest_age_seconds"]),
+                "queue_suspended_by_guard": hold_owned,
+                "enqueued": False,
+            }
+        _set_automatic_backlog_hold(False)
+
+        job = get_job(EMAIL_FLUSH_JOB_ID)
+        if job:
+            status = job.get_status()
+            registered = _rq_job_is_registered(job, connection)
+            age_seconds = _rq_job_age_seconds(job)
+            if is_orphaned_scheduler_job(
+                status,
+                registered_in_queue=registered,
+                age_seconds=age_seconds,
+                minimum_age_seconds=EMAIL_FLUSH_ORPHAN_MINIMUM_AGE_SECONDS,
+            ):
+                job.delete()
+                repaired = True
+                frappe.logger("identity_notifications").warning(
+                    "Removed orphaned RQ marker %s (status=%s age_seconds=%s)",
+                    job.id,
+                    status,
+                    int(age_seconds),
+                )
+            elif str(getattr(status, "value", status) or "").casefold() in {
+                "queued",
+                "started",
+            }:
+                return {
+                    "status": "Healthy" if registered else "Grace Period",
+                    "pending": pending,
+                    "job_status": str(getattr(status, "value", status)),
+                }
+
+        enqueued = _enqueue_email_flush() if pending else False
+        return {
+            "status": "Repaired" if repaired else ("Enqueued" if enqueued else "Idle"),
+            "pending": pending,
+            "enqueued": enqueued,
+        }
+    finally:
+        lock.release()
+
+
+def run_email_flush_health_check() -> dict[str, Any]:
+    """Scheduled fail-safe; errors are logged without affecting identity work."""
+    try:
+        return ensure_email_flush_scheduler_health()
+    except Exception as exc:
+        frappe.log_error(
+            title="Email flush scheduler health check failed",
+            message=frappe.get_traceback(),
+        )
+        return {
+            "status": "Failed",
+            "error": f"{type(exc).__name__}:{str(exc)[:180]}",
+        }
 
 
 def _require_manager() -> None:
@@ -110,7 +305,6 @@ def _queue_email(subject: str, body: str) -> dict[str, Any]:
             reference_name=SETTINGS_DOCTYPE,
         )
         frappe.db.commit()
-        return {"status": "Queued", "recipient_count": len(recipients)}
     except Exception as exc:
         # All callers invoke notification only after committing governed work.
         # Rolling back here can therefore affect only this failed queue attempt.
@@ -124,6 +318,12 @@ def _queue_email(subject: str, body: str) -> dict[str, Any]:
             "recipient_count": len(recipients),
             "error": f"{type(exc).__name__}:{str(exc)[:180]}",
         }
+    health = run_email_flush_health_check()
+    return {
+        "status": "Queued",
+        "recipient_count": len(recipients),
+        "email_flush_health": health,
+    }
 
 
 def _best_effort_notification(function):

@@ -39,3 +39,36 @@ def invalid_notification_recipients(value: Any) -> tuple[str, ...]:
         for address in parse_notification_recipients(value)
         if not _EMAIL_ADDRESS_RE.fullmatch(address)
     )
+
+
+def is_orphaned_scheduler_job(
+    status: Any,
+    *,
+    registered_in_queue: bool,
+    age_seconds: float,
+    minimum_age_seconds: float,
+) -> bool:
+    """Return whether RQ metadata claims a job that no live queue owns.
+
+    The age gate makes the check fail closed while a newly queued job may be
+    moving from its queue into a worker registry.
+    """
+    normalized_status = getattr(status, "value", status)
+    return (
+        str(normalized_status or "").casefold() in {"queued", "started"}
+        and not registered_in_queue
+        and age_seconds >= minimum_age_seconds
+    )
+
+
+def should_hold_email_backlog(
+    pending_count: int,
+    oldest_age_seconds: float,
+    *,
+    maximum_count: int,
+    maximum_age_seconds: float,
+) -> bool:
+    """Fail closed before an automatic repair can release an old mail flood."""
+    return pending_count > maximum_count or (
+        pending_count > 0 and oldest_age_seconds > maximum_age_seconds
+    )

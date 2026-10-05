@@ -38,6 +38,11 @@ doc_events = {
 }
 
 scheduler_events = {
+    "cron": {
+        "*/10 * * * *": [
+            "db_connector.api_identity_notifications.run_email_flush_health_check",
+        ],
+    },
     "daily": [
         "db_connector.api_identity_qc.run_qc_monitor",
         "db_connector.api_identity_retirement.run_scheduled_orphan_integrity_audit",
