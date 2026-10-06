@@ -29,6 +29,10 @@
 !identity_snapshot_backfill.py
 !identity_resolution_setup.py
 !notification_utils.py
+!qc_schema.py
+!ccd_dashboard_snapshot.py
+!dashboard_snapshot/
+!dashboard_snapshot/**
 !synthetic_overlap_fixture.py
 !synthetic_qc_automation_fixture.py
 !hooks.py

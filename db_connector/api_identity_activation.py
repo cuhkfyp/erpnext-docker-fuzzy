@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from collections import defaultdict
-from typing import Any, Iterable
+from collections import Counter, defaultdict
+from typing import Any, Callable, Iterable
 
 import frappe
 
@@ -20,11 +20,21 @@ from db_connector.api_fuzzy_canary import (
 )
 from db_connector.api_fuzzy_evaluation import SENSITIVE_ROLE
 from db_connector.api_identity_resolution import (
+    CURRENT_MEMBERSHIP_STATUSES,
+    EXCLUSION_DOCTYPE,
+    MEMBERSHIP_DOCTYPE,
+    _record_rows,
     materialize_identity,
-    preview_materialization,
 )
-from db_connector.fuzzy_matching.identity import expected_identity_fingerprints
+from db_connector.fuzzy_matching.identity import (
+    complete_hkid_conflicts,
+    expected_identity_fingerprints,
+    fingerprint_scoped_exclusion_conflicts,
+    identity_fingerprint,
+    snapshot_modified_conflicts,
+)
 from db_connector.fuzzy_matching.overlap import structural_overlap_only
+from db_connector.fuzzy_matching.policy import MatchingPolicy
 
 RUN_DOCTYPE = "CCD Match Canary Run"
 RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
@@ -33,6 +43,12 @@ EVENT_DOCTYPE = "CCD Match Recommendation Event"
 SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
 CREATION_OPERATION_TTL_SECONDS = 21_600
 CREATION_OPERATION_TIMEOUT_SECONDS = 7_200
+AUTOMATIC_COMPONENT_PAGE_SIZE = 200
+RUN_COUNT_RECONCILIATION_TIMEOUT_SECONDS = 1_800
+PREVIEW_COMPONENT_PAGE_SIZE = 250
+PREVIEW_OPERATION_TTL_SECONDS = 21_600
+PREVIEW_OPERATION_TIMEOUT_SECONDS = 7_200
+PREVIEW_UNSAFE_DETAIL_LIMIT = 100
 
 
 def _json(value: Any) -> str:
@@ -253,35 +269,228 @@ def _selected_components(
     return selected
 
 
-def _preview_components(run: Any, selected: list[tuple[str, list[Any]]]) -> dict[str, Any]:
-    conflict_counts: dict[str, int] = defaultdict(int)
-    safe = stale = planned_memberships = 0
-    component_summaries = []
-    for component_key, rows in selected:
-        context = _component_context(rows)
-        preview = preview_materialization(
-            origin="Tiered Evidence",
-            origin_doctype=BATCH_DOCTYPE,
-            origin_document=f"preview:{run.name}:{component_key}",
-            policy_snapshot_json=run.policy_snapshot_json,
-            record_ids=context["record_ids"],
-            groups=[context["record_ids"]],
-            expected_fingerprints=context["expected_fingerprints"] or None,
-            expected_modified=context["expected_modified"],
+def _automatic_component_key_page(
+    run_name: str, *, after_key: str | None, page_size: int
+) -> tuple[str, ...]:
+    """Return one indexed, deterministic page of Proposed component keys."""
+    limit = max(1, min(int(page_size), 1_000))
+    cursor_clause = ""
+    values: list[Any] = [run_name]
+    if after_key is not None:
+        cursor_clause = " AND cluster_fingerprint > %s"
+        values.append(str(after_key))
+    # LIMIT is an internally bounded integer. Keeping it literal also avoids
+    # driver-specific handling of a parameter in the LIMIT position.
+    rows = frappe.db.sql(
+        f"""
+        SELECT cluster_fingerprint
+          FROM `tabCCD Match Recommendation`
+         WHERE canary_run = %s
+           AND status = 'Proposed'
+           AND cluster_fingerprint IS NOT NULL
+           AND cluster_fingerprint != ''
+           {cursor_clause}
+         GROUP BY cluster_fingerprint
+         ORDER BY cluster_fingerprint
+         LIMIT {limit}
+        """,
+        tuple(values),
+        as_dict=True,
+    )
+    return tuple(str(row.cluster_fingerprint) for row in rows)
+
+
+def _automatic_component_pages(
+    run_name: str, *, page_size: int = AUTOMATIC_COMPONENT_PAGE_SIZE
+) -> Iterable[tuple[tuple[str, list[Any]], ...]]:
+    """Load only the recommendation rows needed by each candidate-key page."""
+    cursor: str | None = None
+    while True:
+        keys = _automatic_component_key_page(
+            run_name, after_key=cursor, page_size=page_size
         )
-        conflicts = set(preview["conflicts"])
-        for reason in conflicts:
-            conflict_counts[reason] += 1
-        if conflicts:
-            stale += int(
-                "source_modified_after_canary_snapshot" in conflicts
-                or "source_modified_after_snapshot" in conflicts
-                or "identity_fingerprint_changed" in conflicts
+        if not keys:
+            return
+        components = _component_rows(run_name, component_keys=keys)
+        materialized = _materialized_component_matches(run_name, components)
+        yield tuple(
+            (key, components[key])
+            for key in keys
+            if key in components
+            and key not in materialized
+            and not _held(components[key])
+        )
+        cursor = keys[-1]
+        if len(keys) < page_size:
+            return
+
+
+def _matching_policy(snapshot_json: str | dict[str, Any]) -> MatchingPolicy:
+    value = json.loads(snapshot_json) if isinstance(snapshot_json, str) else snapshot_json
+    return MatchingPolicy.from_dict(value)
+
+
+def _preview_component_page(
+    run: Any,
+    selected: list[tuple[str, list[Any]]],
+    *,
+    policy: MatchingPolicy,
+) -> list[dict[str, Any]]:
+    """Evaluate one component page with a bounded number of database reads.
+
+    This deliberately mirrors ``preview_materialization`` safety rules for the
+    Tiered Evidence path.  The scalar materializer remains authoritative when
+    Apply runs; this is a zero-write planning acceleration only.
+    """
+    contexts = [
+        (component_key, rows, _component_context(rows))
+        for component_key, rows in selected
+    ]
+    record_ids = tuple(
+        sorted(
+            {
+                record_id
+                for _component_key, _rows, context in contexts
+                for record_id in context["record_ids"]
+            }
+        )
+    )
+    records = _record_rows(record_ids)
+    for row in records.values():
+        row["source"] = str(row.get("ccd_reg_source") or row.get("source") or "")
+    fingerprints = {
+        record_id: identity_fingerprint(row, policy)
+        for record_id, row in records.items()
+    }
+
+    memberships = frappe.get_all(
+        MEMBERSHIP_DOCTYPE,
+        filters={
+            "ccd_master": ["in", record_ids],
+            "status": ["in", CURRENT_MEMBERSHIP_STATUSES],
+        },
+        fields=["ccd_master", "identity_group"],
+        limit_page_length=max(len(record_ids) * 2, 1),
+    ) if record_ids else []
+    memberships_by_record: dict[str, set[str]] = defaultdict(set)
+    current_group_names: set[str] = set()
+    for membership in memberships:
+        record_id = str(membership.ccd_master)
+        group_name = str(membership.identity_group)
+        memberships_by_record[record_id].add(group_name)
+        current_group_names.add(group_name)
+
+    group_members: dict[str, set[str]] = defaultdict(set)
+    if current_group_names:
+        for membership in frappe.get_all(
+            MEMBERSHIP_DOCTYPE,
+            filters={
+                "identity_group": ["in", tuple(sorted(current_group_names))],
+                "status": ["in", CURRENT_MEMBERSHIP_STATUSES],
+            },
+            fields=["ccd_master", "identity_group"],
+            limit_page_length=100_000,
+        ):
+            group_members[str(membership.identity_group)].add(
+                str(membership.ccd_master)
             )
-        else:
-            safe += 1
-            planned_memberships += int(preview["membership_count"])
-        component_summaries.append(
+
+    exclusion_rows: list[tuple[str, str, str, str]] = []
+    if len(record_ids) > 1:
+        exclusion_rows = [
+            (
+                str(row.left_record),
+                str(row.right_record),
+                str(row.left_fingerprint),
+                str(row.right_fingerprint),
+            )
+            for row in frappe.get_all(
+                EXCLUSION_DOCTYPE,
+                filters={
+                    "left_record": ["in", record_ids],
+                    "right_record": ["in", record_ids],
+                    "status": "Active",
+                },
+                fields=[
+                    "left_record",
+                    "right_record",
+                    "left_fingerprint",
+                    "right_fingerprint",
+                ],
+                limit_page_length=100_000,
+            )
+        ]
+
+    summaries: list[dict[str, Any]] = []
+    for component_key, rows, context in contexts:
+        desired = set(context["record_ids"])
+        component_records = {
+            record_id: records[record_id] for record_id in context["record_ids"]
+        }
+        component_fingerprints = {
+            record_id: fingerprints[record_id]
+            for record_id in context["record_ids"]
+        }
+        frozen_fingerprints = context["expected_fingerprints"]
+        fingerprint_stale_records = sorted(
+            record_id
+            for record_id, expected in frozen_fingerprints.items()
+            if component_fingerprints.get(record_id) != str(expected)
+        )
+        current_modified = {
+            record_id: str(row.get("modified") or "")
+            for record_id, row in component_records.items()
+        }
+        modified_stale_records = snapshot_modified_conflicts(
+            context["expected_modified"], current_modified
+        )
+        missing_fingerprint_records = desired - set(frozen_fingerprints)
+        missing_modified_records = desired - set(context["expected_modified"])
+
+        conflicts: set[str] = set()
+        if missing_fingerprint_records or missing_modified_records:
+            conflicts.add("frozen_identity_snapshot_incomplete")
+        if fingerprint_stale_records:
+            conflicts.add("identity_fingerprint_changed")
+        if modified_stale_records:
+            conflicts.add("source_modified_after_snapshot")
+        if complete_hkid_conflicts(
+            (tuple(context["record_ids"]),), component_records, policy
+        ):
+            conflicts.add("complete_hkid_conflict")
+
+        existing_groups = {
+            group_name
+            for record_id in desired
+            for group_name in memberships_by_record.get(record_id, set())
+        }
+        if len(existing_groups) > 1:
+            conflicts.add("conflicting_active_identity_groups")
+        elif existing_groups:
+            existing_group = next(iter(existing_groups))
+            if not group_members.get(existing_group, set()).issubset(desired):
+                conflicts.add("partial_existing_identity_group")
+
+        component_exclusions = [
+            row
+            for row in exclusion_rows
+            if row[0] in desired and row[1] in desired
+        ]
+        if fingerprint_scoped_exclusion_conflicts(
+            (tuple(context["record_ids"]),),
+            component_fingerprints,
+            component_exclusions,
+        ):
+            conflicts.add("active_human_exclusion")
+
+        source_counts = Counter(
+            str(component_records[record_id].get("source") or "")
+            for record_id in context["record_ids"]
+        )
+        if any(count > 1 for source, count in source_counts.items() if source):
+            conflicts.add("same_source_duplicates_require_human_decision")
+
+        summaries.append(
             {
                 "component_fingerprint": component_key,
                 "recommendation_names": [str(row.name) for row in rows],
@@ -291,6 +500,48 @@ def _preview_components(run: Any, selected: list[tuple[str, list[Any]]]) -> dict
                 "conflicts": sorted(conflicts),
             }
         )
+    return summaries
+
+
+def _preview_components(
+    run: Any,
+    selected: list[tuple[str, list[Any]]],
+    *,
+    include_safe_components: bool = True,
+    component_detail_limit: int | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
+    conflict_counts: dict[str, int] = defaultdict(int)
+    safe = stale = planned_memberships = 0
+    component_summaries: list[dict[str, Any]] = []
+    omitted_component_detail_count = 0
+    total = len(selected)
+    policy = _matching_policy(run.policy_snapshot_json)
+    for start in range(0, total, PREVIEW_COMPONENT_PAGE_SIZE):
+        page = selected[start : start + PREVIEW_COMPONENT_PAGE_SIZE]
+        for summary in _preview_component_page(run, page, policy=policy):
+            conflicts = set(summary["conflicts"])
+            for reason in conflicts:
+                conflict_counts[reason] += 1
+            if conflicts:
+                stale += int(
+                    "source_modified_after_canary_snapshot" in conflicts
+                    or "source_modified_after_snapshot" in conflicts
+                    or "identity_fingerprint_changed" in conflicts
+                )
+            else:
+                safe += 1
+                planned_memberships += int(summary["record_count"])
+            include_detail = include_safe_components or bool(conflicts)
+            if include_detail and (
+                component_detail_limit is None
+                or len(component_summaries) < component_detail_limit
+            ):
+                component_summaries.append(summary)
+            elif include_detail:
+                omitted_component_detail_count += 1
+        if progress_callback:
+            progress_callback(min(start + len(page), total), total)
     return {
         "run": run.name,
         "zero_write": True,
@@ -303,16 +554,218 @@ def _preview_components(run: Any, selected: list[tuple[str, list[Any]]]) -> dict
         "planned_membership_count": planned_memberships,
         "conflict_counts": dict(sorted(conflict_counts.items())),
         "components": component_summaries,
+        "omitted_component_detail_count": omitted_component_detail_count,
     }
 
 
 @frappe.whitelist()
 def preview_approve_all(run_name: str) -> dict[str, Any]:
-    """Evaluate the exact current all-eligible selector with zero writes."""
+    """Reject the legacy synchronous path before a web worker can time out."""
     _require_manager()
-    run = _run(run_name)
-    selected = _selected_components(run.name)
-    return _preview_components(run, selected)
+    _run(run_name)
+    frappe.throw(
+        "Approve-all preview now runs in the background. Reload this form and use Preview Approve All again."
+    )
+
+
+def _preview_operation_key(operation_token: str) -> str:
+    return f"ccd_approve_all_preview:{operation_token}"
+
+
+def _preview_active_key(run_name: str) -> str:
+    return f"ccd_approve_all_preview_active:{str(run_name)}"
+
+
+def _approve_all_preview_operation(operation_token: str) -> dict[str, Any] | None:
+    raw = frappe.cache.get_value(_preview_operation_key(operation_token), expires=True)
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        payload = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _set_approve_all_preview_operation(
+    operation_token: str, payload: dict[str, Any]
+) -> None:
+    frappe.cache.set_value(
+        _preview_operation_key(operation_token),
+        _json(payload),
+        expires_in_sec=PREVIEW_OPERATION_TTL_SECONDS,
+    )
+
+
+@frappe.whitelist(methods=["POST"])
+def start_approve_all_preview(run_name: str) -> dict[str, Any]:
+    """Return promptly and evaluate the zero-write approve-all preview on long."""
+    _require_manager()
+    run = _run(str(run_name))
+    locked = frappe.db.sql(
+        "SELECT name FROM `tabCCD Match Canary Run` WHERE name=%s FOR UPDATE",
+        (run.name,),
+    )
+    if not locked:
+        frappe.throw("CCD Match Canary Run no longer exists")
+    active_key = _preview_active_key(run.name)
+    active_token = frappe.cache.get_value(active_key)
+    if isinstance(active_token, bytes):
+        active_token = active_token.decode("utf-8", "replace")
+    existing = (
+        _approve_all_preview_operation(str(active_token)) if active_token else None
+    )
+    if existing and existing.get("status") in {"Queued", "Running"}:
+        if existing.get("requested_by") != frappe.session.user:
+            frappe.throw("Another System Manager is previewing this canary")
+        return {
+            "operation_token": str(active_token),
+            "status": existing["status"],
+            "already_running": True,
+        }
+
+    operation_token = uuid.uuid4().hex
+    requested_by = str(frappe.session.user)
+    payload = {
+        "operation_token": operation_token,
+        "run_name": run.name,
+        "requested_by": requested_by,
+        "status": "Queued",
+        "stage": "queued",
+        "processed_components": 0,
+        "total_components": 0,
+        "queued_at": str(frappe.utils.now_datetime()),
+    }
+    _set_approve_all_preview_operation(operation_token, payload)
+    frappe.cache.set_value(
+        active_key,
+        operation_token,
+        expires_in_sec=PREVIEW_OPERATION_TTL_SECONDS,
+    )
+    try:
+        frappe.enqueue(
+            "db_connector.api_identity_activation.run_approve_all_preview",
+            queue="long",
+            timeout=PREVIEW_OPERATION_TIMEOUT_SECONDS,
+            enqueue_after_commit=True,
+            job_id=f"ccd-approve-all-preview-{operation_token}",
+            operation_token=operation_token,
+            run_name=run.name,
+            requested_by=requested_by,
+        )
+        frappe.db.commit()
+    except Exception:
+        frappe.cache.delete_value(active_key)
+        frappe.cache.delete_value(_preview_operation_key(operation_token))
+        raise
+    return {"operation_token": operation_token, "status": "Queued"}
+
+
+def run_approve_all_preview(
+    operation_token: str, run_name: str, requested_by: str
+) -> dict[str, Any]:
+    """Run the exact approve-all selector without creating or applying a batch."""
+    if "System Manager" not in set(frappe.get_roles(requested_by)):
+        raise frappe.PermissionError("System Manager role is required")
+    frappe.set_user(requested_by)
+    payload = _approve_all_preview_operation(operation_token)
+    if not payload or payload.get("requested_by") != requested_by:
+        raise frappe.PermissionError("Approve-all preview operation is unavailable")
+    payload.update(
+        {
+            "status": "Running",
+            "stage": "selecting_components",
+            "started_at": str(frappe.utils.now_datetime()),
+        }
+    )
+    _set_approve_all_preview_operation(operation_token, payload)
+    try:
+        run = _run(run_name)
+        selected = _selected_components(run.name)
+        payload.update(
+            {
+                "stage": "checking_safety",
+                "processed_components": 0,
+                "total_components": len(selected),
+            }
+        )
+        _set_approve_all_preview_operation(operation_token, payload)
+
+        def publish_progress(processed: int, total: int) -> None:
+            payload.update(
+                {
+                    "stage": "checking_safety",
+                    "processed_components": int(processed),
+                    "total_components": int(total),
+                }
+            )
+            _set_approve_all_preview_operation(operation_token, payload)
+
+        result = _preview_components(
+            run,
+            selected,
+            include_safe_components=False,
+            component_detail_limit=PREVIEW_UNSAFE_DETAIL_LIMIT,
+            progress_callback=publish_progress,
+        )
+    except Exception as exc:
+        frappe.db.rollback()
+        payload.update(
+            {
+                "status": "Failed",
+                "stage": "failed",
+                "completed_at": str(frappe.utils.now_datetime()),
+                "error": f"{type(exc).__name__}: {str(exc)}"[:1000],
+            }
+        )
+        _set_approve_all_preview_operation(operation_token, payload)
+        frappe.log_error(frappe.get_traceback(), "CCD approve-all preview failed")
+        raise
+    payload.update(
+        {
+            "status": "Completed",
+            "stage": "completed",
+            "processed_components": len(selected),
+            "total_components": len(selected),
+            "completed_at": str(frappe.utils.now_datetime()),
+            "result": result,
+        }
+    )
+    _set_approve_all_preview_operation(operation_token, payload)
+    return result
+
+
+@frappe.whitelist()
+def get_approve_all_preview(operation_token: str) -> dict[str, Any]:
+    """Return one manager's preview status without restarting its scan."""
+    _require_manager()
+    token = str(operation_token or "").strip()
+    if len(token) != 32 or any(
+        character not in "0123456789abcdef" for character in token
+    ):
+        frappe.throw("Invalid approve-all preview operation token")
+    payload = _approve_all_preview_operation(token)
+    if not payload:
+        return {"operation_token": token, "status": "Expired"}
+    if payload.get("requested_by") != frappe.session.user:
+        frappe.throw("This approve-all preview belongs to another user")
+    if payload.get("status") in {"Queued", "Running"}:
+        from frappe.utils.background_jobs import get_job_status
+
+        job_status = get_job_status(f"ccd-approve-all-preview-{token}")
+        if job_status is None or job_status in {
+            "failed",
+            "canceled",
+            "stopped",
+            "finished",
+        }:
+            payload["status"] = "Unknown"
+            payload["error"] = (
+                "The background preview ended without a confirmed result. "
+                "No identity or batch records were written."
+            )
+            _set_approve_all_preview_operation(token, payload)
+    return payload
 
 
 def _selection_fingerprint(
@@ -351,6 +804,7 @@ def _create_activation_batch(
     is_automatic: bool = False,
     automation_control_revision: int = 0,
     automation_authorization_event: str = "",
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, Any]:
     _require_manager()
     allowed_methods = {
@@ -385,7 +839,19 @@ def _create_activation_batch(
     )
     if not selected:
         frappe.throw("No available Proposed components were selected")
-    preview = _preview_components(run, selected)
+    if progress_callback:
+        progress_callback("checking_safety", 0, len(selected))
+    preview = _preview_components(
+        run,
+        selected,
+        progress_callback=(
+            (lambda processed, total: progress_callback(
+                "checking_safety", processed, total
+            ))
+            if progress_callback
+            else None
+        ),
+    )
     if preview["unsafe_component_count"]:
         if not allow_structural_overlap:
             frappe.throw("Activation Batch selection contains stale or unsafe components")
@@ -417,6 +883,8 @@ def _create_activation_batch(
         f"activation-batch-v1\x1f{selection_fingerprint}".encode()
     ).hexdigest()
     now = frappe.utils.now_datetime()
+    if progress_callback:
+        progress_callback("writing_batch", len(selected), len(selected))
     batch = frappe.get_doc(
         {
             "doctype": BATCH_DOCTYPE,
@@ -474,21 +942,27 @@ def _create_activation_batch(
 def preview_automatic_component_selection(
     run_name: str, component_limit: int
 ) -> dict[str, Any]:
-    """Select the first bounded safe components while reporting skipped conflicts."""
+    """Select the first safe components from bounded, indexed candidate pages."""
     run = _run(run_name)
     limit = int(component_limit or 0)
     if limit < 1 or limit > 100:
         frappe.throw("Automatic component limit must be between 1 and 100")
     selected: list[tuple[str, list[Any]]] = []
     skipped = []
-    for component_key, rows in _selected_components(run.name):
-        summary = _preview_components(run, [(component_key, rows)])["components"][0]
-        if summary["safe"]:
-            selected.append((component_key, rows))
-            if len(selected) >= limit:
-                break
-        else:
-            skipped.append(summary)
+    for page in _automatic_component_pages(run.name):
+        page_items = list(page)
+        page_summaries = _preview_components(run, page_items)["components"]
+        for (component_key, rows), summary in zip(
+            page_items, page_summaries, strict=True
+        ):
+            if summary["safe"]:
+                selected.append((component_key, rows))
+                if len(selected) >= limit:
+                    break
+            else:
+                skipped.append(summary)
+        if len(selected) >= limit:
+            break
     preview = _preview_components(run, selected) if selected else {
         "run": run.name,
         "zero_write": True,
@@ -650,6 +1124,9 @@ def start_activation_batch_creation(
         "run_name": run.name,
         "requested_by": requested_by,
         "status": "Queued",
+        "stage": "queued",
+        "processed_components": 0,
+        "total_components": 0,
         "queued_at": str(frappe.utils.now_datetime()),
     })
     frappe.cache.set_value(
@@ -697,9 +1174,22 @@ def run_activation_batch_creation(
     if not payload or payload.get("requested_by") != requested_by:
         raise frappe.PermissionError("Activation Batch creation operation is unavailable")
     payload["status"] = "Running"
+    payload["stage"] = "selecting_components"
+    payload["processed_components"] = 0
+    payload["total_components"] = 0
     payload["started_at"] = str(frappe.utils.now_datetime())
     _set_creation_operation(operation_token, payload)
     try:
+        def publish_progress(stage: str, processed: int, total: int) -> None:
+            payload.update(
+                {
+                    "stage": stage,
+                    "processed_components": int(processed),
+                    "total_components": int(total),
+                }
+            )
+            _set_creation_operation(operation_token, payload)
+
         result = _create_activation_batch(
             run_name,
             selection_method,
@@ -707,6 +1197,7 @@ def run_activation_batch_creation(
             None,
             is_pilot_wave,
             is_demonstration,
+            progress_callback=publish_progress,
         )
     except Exception as exc:
         frappe.db.rollback()
@@ -722,6 +1213,7 @@ def run_activation_batch_creation(
     # result fails, the outcome is unknown to the UI, never a false failure.
     payload.update({
         "status": "Completed",
+        "stage": "completed",
         "completed_at": str(frappe.utils.now_datetime()),
         "batch": result["batch"],
         "batch_status": result["status"],
@@ -971,6 +1463,92 @@ def _automatic_batch_authorization_blockers(batch: Any) -> list[str]:
     return sorted(set(blockers))
 
 
+def _apply_approved_recommendation_delta(
+    run_name: str, approved_count: int
+) -> dict[str, int]:
+    """Update exact Canary counters without rescanning the recommendation run.
+
+    Every caller-provided transition is part of the same transaction as its
+    recommendation update. The single SQL statement therefore serializes
+    concurrent batches on the Canary row and rolls back with materialization.
+    A separately queued full recount remains the drift-detection safety net.
+    """
+    transition_count = int(approved_count or 0)
+    if transition_count < 0:
+        frappe.throw("Approved recommendation delta cannot be negative")
+    if transition_count:
+        frappe.db.sql(
+            """
+            UPDATE `tabCCD Match Canary Run`
+               SET proposed_count=GREATEST(COALESCE(proposed_count,0)-%s,0),
+                   active_count=COALESCE(active_count,0)+%s
+             WHERE name=%s
+            """,
+            (transition_count, transition_count, run_name),
+        )
+    values = frappe.db.get_value(
+        RUN_DOCTYPE,
+        run_name,
+        [
+            "proposed_count",
+            "exception_count",
+            "active_count",
+            "reversed_count",
+            "superseded_count",
+        ],
+        as_dict=True,
+    )
+    if not values:
+        frappe.throw("CCD Match Canary Run no longer exists")
+    return {
+        fieldname: int(values.get(fieldname) or 0)
+        for fieldname in (
+            "proposed_count",
+            "exception_count",
+            "active_count",
+            "reversed_count",
+            "superseded_count",
+        )
+    }
+
+
+def reconcile_activation_run_counts(
+    run_name: str, batch_name: str = ""
+) -> dict[str, Any]:
+    """Recount a committed activation asynchronously as a safety check."""
+    counts = _refresh_run_counts(run_name)
+    frappe.db.commit()
+    return {"run": run_name, "batch": batch_name, "counts": counts}
+
+
+def _enqueue_activation_run_count_reconciliation(
+    run_name: str, batch_name: str
+) -> str | None:
+    """Queue the expensive exact recount after Apply is already committed."""
+    job_id = f"ccd-canary-count-reconcile-{batch_name}"
+    try:
+        frappe.enqueue(
+            "db_connector.api_identity_activation.reconcile_activation_run_counts",
+            queue="long",
+            timeout=RUN_COUNT_RECONCILIATION_TIMEOUT_SECONDS,
+            enqueue_after_commit=False,
+            job_id=job_id,
+            deduplicate=True,
+            run_name=run_name,
+            batch_name=batch_name,
+        )
+        return job_id
+    except Exception:
+        # The transaction already committed exact deltas. A failed safety-job
+        # enqueue must not turn a successful governed activation into a false
+        # failure or invite an operator to apply it twice.
+        frappe.log_error(
+            frappe.get_traceback(),
+            "CCD Canary count reconciliation enqueue failed",
+        )
+        return None
+
+
 def _apply_activation_batch(
     batch_name: str, *, allow_automatic: bool = False
 ) -> dict[str, Any]:
@@ -1010,6 +1588,7 @@ def _apply_activation_batch(
     try:
         created_groups = int(batch.created_group_count or 0)
         created_memberships = int(batch.created_membership_count or 0)
+        approved_recommendation_delta = 0
         component_keys = [
             str(item.component_fingerprint)
             for item in batch.items
@@ -1070,6 +1649,7 @@ def _apply_activation_batch(
                     },
                     update_modified=False,
                 )
+                approved_recommendation_delta += 1
             item.db_set(
                 {
                     "status": "Applied" if result["status"] == "Applied" else "Already Applied",
@@ -1078,7 +1658,9 @@ def _apply_activation_batch(
                 },
                 update_modified=False,
             )
-        counts = _refresh_run_counts(run.name)
+        counts = _apply_approved_recommendation_delta(
+            run.name, approved_recommendation_delta
+        )
         now = frappe.utils.now_datetime()
         frappe.db.set_value(
             RUN_DOCTYPE,
@@ -1109,13 +1691,24 @@ def _apply_activation_batch(
             },
             update_modified=False,
         )
+        # Batch/Item planning records intentionally do not trigger dashboard
+        # refreshes. Register one marker only after the complete activation is
+        # ready to commit; lifecycle hooks raised by the materializer coalesce
+        # into this same callback.
+        from db_connector.ccd_dashboard_snapshot import mark_dirty_after_commit
+
+        mark_dirty_after_commit(reason="identity-activation-applied")
         frappe.db.commit()
+        reconciliation_job = _enqueue_activation_run_count_reconciliation(
+            run.name, batch.name
+        )
         return {
             "batch": batch.name,
             "status": "Applied",
             "created_groups": created_groups,
             "created_memberships": created_memberships,
             "approved_recommendations": counts["active_count"],
+            "run_count_reconciliation_job": reconciliation_job,
         }
     except Exception as exc:
         frappe.db.rollback()

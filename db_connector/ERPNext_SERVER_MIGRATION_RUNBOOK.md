@@ -1098,6 +1098,20 @@ confirmed, inspect existing Activation Batches for the canary before retrying.
 The batch-creation worker only plans and reviews the frozen selection; it never
 approves or applies identity links.
 
+**Preview Approve All** is also an idempotent long-queue operation. It pages the
+same frozen fingerprint, modification, HKID, exclusion, active-group, and
+same-source safety checks in bounded component groups and reports progress in
+Desk. Closing the dialog does not cancel the scan, and clicking the action
+again while it is running reuses the active operation. The completed preview
+stores only a bounded set of unsafe details; it remains zero-write.
+
+**Create Approve-All Batch** uses the same background operation and bounded
+safety checker, then writes the reviewed planning batch. Neither Preview nor
+batch creation marks the optimized dashboard snapshot dirty, because neither
+changes identity state. The later successful **Apply Approved Batch** action is
+the operation that registers `identity-activation-applied` after commit and
+queues the next reporting snapshot.
+
 The component limit is counted *after* held components are excluded. Therefore:
 
 - hold `0`, enter `5` → 5 pilot components and no deliberate holdout;
