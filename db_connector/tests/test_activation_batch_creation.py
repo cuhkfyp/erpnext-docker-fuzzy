@@ -407,6 +407,7 @@ class ActivationBatchCreationOperationTests(unittest.TestCase):
 
         database = MagicMock()
         database.count.side_effect = [202, 404]
+        progress = MagicMock()
         with patch.object(activation, "_require_manager"), patch.object(
             activation, "_run", return_value=run
         ), patch.object(activation, "_component_rows", return_value=rows), patch.object(
@@ -461,12 +462,21 @@ class ActivationBatchCreationOperationTests(unittest.TestCase):
         ), patch(
             "db_connector.ccd_dashboard_snapshot.mark_dirty_after_commit"
         ):
-            result = activation._apply_activation_batch("batch-all")
+            result = activation._apply_activation_batch(
+                "batch-all", progress_callback=progress
+            )
 
         apply_delta.assert_called_once_with("canary1", 5)
         full_recount.assert_not_called()
         enqueue_recount.assert_called_once_with("canary1", "batch-all")
+        self.assertTrue(
+            any("FOR UPDATE" in call.args[0] for call in database.sql.call_args_list)
+        )
         database.commit.assert_called_once()
+        self.assertIn(
+            ("committing", 2, 2),
+            [call.args for call in progress.call_args_list],
+        )
         self.assertEqual(result["approved_recommendations"], 97)
         self.assertEqual(result["run_count_reconciliation_job"], "reconcile-job")
 
@@ -480,6 +490,154 @@ class ActivationBatchCreationOperationTests(unittest.TestCase):
         self.assertFalse(enqueue.call_args.kwargs["enqueue_after_commit"])
         self.assertEqual(enqueue.call_args.kwargs["run_name"], "canary1")
         self.assertEqual(enqueue.call_args.kwargs["batch_name"], "batch-all")
+
+
+class ActivationBatchApplyOperationTests(unittest.TestCase):
+    def setUp(self):
+        flags = patch.object(
+            activation.frappe.local,
+            "flags",
+            SimpleNamespace(in_test=True),
+            create=True,
+        )
+        flags.start()
+        self.addCleanup(flags.stop)
+        clock = patch.object(
+            activation.frappe.utils, "now_datetime", return_value="2026-10-07 00:00:00"
+        )
+        clock.start()
+        self.addCleanup(clock.stop)
+
+    @staticmethod
+    def approved_batch_row():
+        return SimpleNamespace(
+            name="batch-large",
+            status="Approved",
+            is_automatic=0,
+            selected_component_count=3000,
+        )
+
+    def test_repeated_apply_reuses_running_operation_without_second_job(self):
+        database = MagicMock()
+        database.sql.return_value = [self.approved_batch_row()]
+        cache = MagicMock()
+        cache.get_value.return_value = "c" * 32
+        with patch.object(activation, "_require_manager"), patch.object(
+            activation.frappe, "db", database
+        ), patch.object(activation.frappe, "cache", cache), patch.object(
+            activation.frappe,
+            "session",
+            SimpleNamespace(user="manager@example.com"),
+        ), patch.object(
+            activation,
+            "_apply_operation",
+            return_value={"status": "Running", "requested_by": "manager@example.com"},
+        ), patch.object(activation.frappe, "enqueue") as enqueue:
+            result = activation.start_activation_batch_apply("batch-large")
+        self.assertEqual(result["operation_token"], "c" * 32)
+        self.assertTrue(result["already_running"])
+        self.assertIn("FOR UPDATE", database.sql.call_args.args[0])
+        enqueue.assert_not_called()
+
+    def test_new_apply_queues_long_worker_and_returns_promptly(self):
+        database = MagicMock()
+        database.sql.return_value = [self.approved_batch_row()]
+        cache = MagicMock()
+        cache.get_value.return_value = None
+        with patch.object(activation, "_require_manager"), patch.object(
+            activation.frappe, "db", database
+        ), patch.object(activation.frappe, "cache", cache), patch.object(
+            activation.frappe,
+            "session",
+            SimpleNamespace(user="manager@example.com"),
+        ), patch.object(activation.frappe, "enqueue") as enqueue:
+            result = activation.start_activation_batch_apply("batch-large")
+        self.assertEqual(result["status"], "Queued")
+        self.assertEqual(len(result["operation_token"]), 32)
+        self.assertEqual(enqueue.call_args.kwargs["queue"], "long")
+        self.assertTrue(enqueue.call_args.kwargs["enqueue_after_commit"])
+        self.assertEqual(
+            enqueue.call_args.kwargs["timeout"],
+            activation.APPLY_OPERATION_TIMEOUT_SECONDS,
+        )
+        database.commit.assert_called_once()
+
+    def test_apply_worker_publishes_progress_and_committed_result(self):
+        payload = {
+            "requested_by": "manager@example.com",
+            "status": "Queued",
+            "total_components": 3000,
+        }
+
+        def apply(_batch_name, **kwargs):
+            kwargs["progress_callback"]("materializing_components", 10, 3000)
+            kwargs["progress_callback"]("committing", 3000, 3000)
+            return {
+                "batch": "batch-large",
+                "status": "Applied",
+                "created_groups": 2998,
+                "created_memberships": 6120,
+            }
+
+        with patch.object(
+            activation.frappe, "get_roles", return_value=["System Manager"]
+        ), patch.object(activation.frappe, "set_user"), patch.object(
+            activation, "_apply_operation", return_value=payload
+        ), patch.object(
+            activation, "_set_apply_operation"
+        ) as set_status, patch.object(
+            activation, "_apply_activation_batch", side_effect=apply
+        ), patch.object(
+            activation.frappe, "cache", MagicMock()
+        ):
+            result = activation.run_activation_batch_apply(
+                "c" * 32, "batch-large", "manager@example.com"
+            )
+        self.assertEqual(result["status"], "Applied")
+        final_payload = set_status.call_args.args[1]
+        self.assertEqual(final_payload["status"], "Completed")
+        self.assertEqual(final_payload["processed_components"], 3000)
+        self.assertEqual(final_payload["result"]["created_memberships"], 6120)
+
+    def test_status_reconciles_applied_database_if_final_cache_write_was_lost(self):
+        payload = {
+            "operation_token": "c" * 32,
+            "batch": "batch-large",
+            "requested_by": "manager@example.com",
+            "status": "Running",
+        }
+        committed = {
+            "batch": "batch-large",
+            "status": "Applied",
+            "created_groups": 2998,
+            "created_memberships": 6120,
+        }
+        with patch.object(activation, "_require_manager"), patch.object(
+            activation, "_apply_operation", return_value=payload
+        ), patch.object(
+            activation, "_applied_batch_operation_result", return_value=committed
+        ), patch.object(
+            activation, "_set_apply_operation"
+        ) as set_status, patch.object(
+            activation.frappe,
+            "session",
+            SimpleNamespace(user="manager@example.com"),
+        ):
+            result = activation.get_activation_batch_apply("c" * 32)
+        self.assertEqual(result["status"], "Completed")
+        self.assertEqual(result["result"]["created_groups"], 2998)
+        self.assertEqual(set_status.call_args.args[1]["stage"], "completed")
+
+    def test_legacy_manual_apply_endpoint_queues_instead_of_materializing_in_http(self):
+        with patch.object(
+            activation,
+            "start_activation_batch_apply",
+            return_value={"operation_token": "c" * 32, "status": "Queued"},
+        ) as start, patch.object(activation, "_apply_activation_batch") as synchronous:
+            result = activation.apply_activation_batch("batch-large")
+        self.assertEqual(result["status"], "Queued")
+        start.assert_called_once_with("batch-large")
+        synchronous.assert_not_called()
 
 
 if __name__ == "__main__":

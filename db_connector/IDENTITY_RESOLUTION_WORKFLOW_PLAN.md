@@ -419,9 +419,14 @@ Holdout does not replace full-path testing:
 4. after the demonstration, **Approve All Remaining** processes the released
    holdout through the same service.
 
-All selection modes call the same `apply_activation_batch` service. A retry
-must be idempotent and must never create duplicate Decisions, Groups,
-Memberships, or events.
+All selection modes call the same `_apply_activation_batch` materializer.
+Manual **Apply Approved Batch** queues an idempotent operation on the long
+worker and reports component progress in Desk, so an HTTP timeout cannot be
+mistaken for a failed or safe-to-repeat write. The materializer still uses one
+governed transaction: the complete batch commits or all identity writes roll
+back. A retry must never create duplicate Decisions, Groups, Memberships, or
+events. Automatic Tiered cycles call the same materializer from their governed
+worker.
 
 Reversing genuine links merely to stage a demonstration is prohibited. It
 pollutes correction metrics and creates a misleading audit trail.

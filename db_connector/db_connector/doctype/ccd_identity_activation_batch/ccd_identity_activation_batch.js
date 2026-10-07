@@ -27,13 +27,8 @@ frappe.ui.form.on("CCD Identity Activation Batch", {
 		if (frm.doc.status === "Approved" && !hasStructuralOverlap && !frm.doc.is_automatic) {
 			frm.add_custom_button(__("Apply Approved Batch"), () => {
 				frappe.confirm(
-					__("Run fresh safety checks and create reversible Identity Decisions, Groups, and Memberships? This is blocked while Live Identity Materialization is disabled or paused."),
-					() => frappe.call({
-						method: "db_connector.api_identity_activation.apply_activation_batch",
-						args: { batch_name: frm.doc.name },
-						freeze: true,
-						callback: () => frm.reload_doc(),
-					}),
+					__("Queue fresh safety checks and create reversible Identity Decisions, Groups, and Memberships? Apply remains one governed transaction and is blocked while Live Identity Materialization is disabled or paused."),
+					() => start_activation_batch_apply(frm),
 				);
 			});
 		}
@@ -52,6 +47,106 @@ frappe.ui.form.on("CCD Identity Activation Batch", {
 		}
 	},
 });
+
+function start_activation_batch_apply(frm) {
+	if (frm.__ccd_batch_apply_starting) return;
+	frm.__ccd_batch_apply_starting = true;
+	const progress = new frappe.ui.Dialog({
+		title: __("Applying Activation Batch"),
+		fields: [{ fieldname: "operation_status_html", fieldtype: "HTML" }],
+	});
+	progress.show();
+	update_activation_apply_progress(progress, __("Queueing the governed Apply…"));
+	frappe.call({
+		method: "db_connector.api_identity_activation.start_activation_batch_apply",
+		args: { batch_name: frm.doc.name },
+		callback(response) {
+			frm.__ccd_batch_apply_starting = false;
+			const operation = response.message || {};
+			if (operation.status === "Completed" && operation.already_applied) {
+				progress.hide();
+				frappe.show_alert({ message: __("Activation Batch is already Applied."), indicator: "green" });
+				frm.reload_doc();
+				return;
+			}
+			if (!operation.operation_token) {
+				progress.hide();
+				frappe.msgprint(__("No operation token was returned. Inspect this batch before retrying."));
+				return;
+			}
+			poll_activation_batch_apply(operation.operation_token, progress, frm);
+		},
+		error() {
+			frm.__ccd_batch_apply_starting = false;
+			progress.hide();
+		},
+	});
+}
+
+function update_activation_apply_progress(dialog, message, operation = {}) {
+	const field = dialog.get_field("operation_status_html");
+	if (!field?.$wrapper) return;
+	const processed = Number(operation.processed_components || 0);
+	const total = Number(operation.total_components || 0);
+	const detail = total
+		? `<p>${__("Components materialized")}: ${processed} / ${total}</p>`
+		: "";
+	field.$wrapper.html(
+		`<p>${frappe.utils.escape_html(message)}</p>`
+		+ detail
+		+ `<p class="text-muted small">${__("Apply continues on the long queue if you close this dialog. No partial identity state is committed: the entire governed transaction succeeds or rolls back.")}</p>`,
+	);
+}
+
+function poll_activation_batch_apply(operationToken, dialog, frm) {
+	frappe.call({
+		method: "db_connector.api_identity_activation.get_activation_batch_apply",
+		args: { operation_token: operationToken },
+		callback(response) {
+			const operation = response.message || {};
+			if (["Queued", "Running"].includes(operation.status)) {
+				let message = operation.status === "Queued"
+					? __("Waiting for the long-queue worker…")
+					: __("Loading and checking the frozen components…");
+				if (operation.stage === "materializing_components") {
+					message = __("Creating governed identity decisions, groups, and memberships…");
+				} else if (operation.stage === "finalizing") {
+					message = __("Finalizing recommendation and canary counters…");
+				} else if (operation.stage === "committing") {
+					message = __("Committing the complete Activation Batch…");
+				}
+				update_activation_apply_progress(dialog, message, operation);
+				setTimeout(() => poll_activation_batch_apply(operationToken, dialog, frm), 4000);
+				return;
+			}
+			dialog.hide();
+			if (operation.status === "Completed") {
+				const result = operation.result || {};
+				frappe.show_alert({
+					message: __("Activation Batch applied: {0} groups and {1} memberships.", [
+						Number(result.created_groups || 0),
+						Number(result.created_memberships || 0),
+					]),
+					indicator: "green",
+				}, 10);
+				frm.reload_doc();
+				return;
+			}
+			frappe.msgprint({
+				title: operation.status === "Failed" ? __("Activation Batch Apply failed") : __("Activation Batch Apply result unavailable"),
+				indicator: operation.status === "Failed" ? "red" : "orange",
+				message: frappe.utils.escape_html(
+					operation.error || __("The result could not be confirmed. Inspect this batch before retrying."),
+				),
+			});
+			frm.reload_doc();
+		},
+		error() {
+			update_activation_apply_progress(dialog, __("The status check was interrupted. Retrying…"));
+			setTimeout(() => poll_activation_batch_apply(operationToken, dialog, frm), 4000);
+		},
+	});
+}
 
 frappe.ui.form.on("CCD Identity Activation Item", {
 	review_component(frm, cdt, cdn) {

@@ -49,6 +49,9 @@ PREVIEW_COMPONENT_PAGE_SIZE = 250
 PREVIEW_OPERATION_TTL_SECONDS = 21_600
 PREVIEW_OPERATION_TIMEOUT_SECONDS = 7_200
 PREVIEW_UNSAFE_DETAIL_LIMIT = 100
+APPLY_OPERATION_TTL_SECONDS = 86_400
+APPLY_OPERATION_TIMEOUT_SECONDS = 21_600
+APPLY_PROGRESS_INTERVAL = 10
 
 
 def _json(value: Any) -> str:
@@ -1550,9 +1553,18 @@ def _enqueue_activation_run_count_reconciliation(
 
 
 def _apply_activation_batch(
-    batch_name: str, *, allow_automatic: bool = False
+    batch_name: str,
+    *,
+    allow_automatic: bool = False,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, Any]:
     _require_manager()
+    locked = frappe.db.sql(
+        f"SELECT name FROM `tab{BATCH_DOCTYPE}` WHERE name=%s FOR UPDATE",
+        (batch_name,),
+    )
+    if not locked:
+        frappe.throw("CCD Identity Activation Batch no longer exists")
     batch = frappe.get_doc(BATCH_DOCTYPE, batch_name)
     if batch.is_automatic:
         if not allow_automatic:
@@ -1594,7 +1606,29 @@ def _apply_activation_batch(
             for item in batch.items
             if item.status not in {"Applied", "Already Applied", "Corrected"}
         ]
+        total_components = len(component_keys)
+
+        def report_progress(stage: str, processed: int) -> None:
+            if not progress_callback:
+                return
+            try:
+                progress_callback(stage, int(processed), total_components)
+            except Exception:
+                # Progress is operational telemetry, not governed identity
+                # state. A Redis/status publication failure must never abort
+                # or roll back an otherwise valid materialization.
+                try:
+                    frappe.log_error(
+                        frappe.get_traceback(),
+                        "CCD Activation Batch apply progress publication failed",
+                    )
+                except Exception:
+                    pass
+
+        report_progress("loading_components", 0)
         components = _component_rows(run.name, component_keys=component_keys)
+        report_progress("materializing_components", 0)
+        processed_components = 0
         for item in batch.items:
             if item.status in {"Applied", "Already Applied", "Corrected"}:
                 continue
@@ -1658,6 +1692,13 @@ def _apply_activation_batch(
                 },
                 update_modified=False,
             )
+            processed_components += 1
+            if (
+                processed_components == total_components
+                or processed_components % APPLY_PROGRESS_INTERVAL == 0
+            ):
+                report_progress("materializing_components", processed_components)
+        report_progress("finalizing", processed_components)
         counts = _apply_approved_recommendation_delta(
             run.name, approved_recommendation_delta
         )
@@ -1698,6 +1739,7 @@ def _apply_activation_batch(
         from db_connector.ccd_dashboard_snapshot import mark_dirty_after_commit
 
         mark_dirty_after_commit(reason="identity-activation-applied")
+        report_progress("committing", processed_components)
         frappe.db.commit()
         reconciliation_job = _enqueue_activation_run_count_reconciliation(
             run.name, batch.name
@@ -1722,10 +1764,272 @@ def _apply_activation_batch(
         raise
 
 
+def _apply_operation_key(operation_token: str) -> str:
+    return f"ccd_activation_batch_apply:{operation_token}"
+
+
+def _apply_active_key(batch_name: str) -> str:
+    digest = hashlib.sha256(str(batch_name).encode()).hexdigest()
+    return f"ccd_activation_batch_apply_active:{digest}"
+
+
+def _apply_operation(operation_token: str) -> dict[str, Any] | None:
+    raw = frappe.cache.get_value(_apply_operation_key(operation_token), expires=True)
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        payload = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _set_apply_operation(operation_token: str, payload: dict[str, Any]) -> None:
+    frappe.cache.set_value(
+        _apply_operation_key(operation_token),
+        _json(payload),
+        expires_in_sec=APPLY_OPERATION_TTL_SECONDS,
+    )
+
+
+def _applied_batch_operation_result(batch_name: str) -> dict[str, Any]:
+    values = frappe.db.get_value(
+        BATCH_DOCTYPE,
+        batch_name,
+        [
+            "status",
+            "created_group_count",
+            "created_membership_count",
+            "applied_at",
+            "applied_by",
+            "error_summary",
+        ],
+        as_dict=True,
+    )
+    if not values:
+        return {"batch": batch_name, "status": "Missing"}
+    return {
+        "batch": batch_name,
+        "status": str(values.status or ""),
+        "created_groups": int(values.created_group_count or 0),
+        "created_memberships": int(values.created_membership_count or 0),
+        "applied_at": str(values.applied_at or ""),
+        "applied_by": str(values.applied_by or ""),
+        "error": str(values.error_summary or ""),
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def start_activation_batch_apply(batch_name: str) -> dict[str, Any]:
+    """Queue one manual Apply and return before the HTTP request can time out."""
+    _require_manager()
+    batch_name = str(batch_name or "").strip()
+    locked = frappe.db.sql(
+        f"""
+        SELECT name, status, is_automatic, selected_component_count
+          FROM `tab{BATCH_DOCTYPE}`
+         WHERE name=%s
+         FOR UPDATE
+        """,
+        (batch_name,),
+        as_dict=True,
+    )
+    if not locked:
+        frappe.throw("CCD Identity Activation Batch no longer exists")
+    batch = locked[0]
+    if int(batch.is_automatic or 0):
+        frappe.throw(
+            "Automatic Tiered batches can be applied only by the governed automation worker"
+        )
+    if batch.status == "Applied":
+        result = _applied_batch_operation_result(batch_name)
+        return {"status": "Completed", "already_applied": True, "result": result}
+    if batch.status != "Approved":
+        frappe.throw("Only an approved Activation Batch may be applied")
+
+    active_key = _apply_active_key(batch_name)
+    active_token = frappe.cache.get_value(active_key)
+    if isinstance(active_token, bytes):
+        active_token = active_token.decode("utf-8", "replace")
+    existing = _apply_operation(str(active_token)) if active_token else None
+    if existing and existing.get("status") in {"Queued", "Running"}:
+        if existing.get("requested_by") != frappe.session.user:
+            frappe.throw("Another System Manager is applying this Activation Batch")
+        return {
+            "operation_token": str(active_token),
+            "status": existing["status"],
+            "already_running": True,
+        }
+
+    operation_token = uuid.uuid4().hex
+    requested_by = str(frappe.session.user)
+    total_components = int(batch.selected_component_count or 0)
+    _set_apply_operation(
+        operation_token,
+        {
+            "operation_token": operation_token,
+            "batch": batch_name,
+            "requested_by": requested_by,
+            "status": "Queued",
+            "stage": "queued",
+            "processed_components": 0,
+            "total_components": total_components,
+            "queued_at": str(frappe.utils.now_datetime()),
+        },
+    )
+    frappe.cache.set_value(
+        active_key,
+        operation_token,
+        expires_in_sec=APPLY_OPERATION_TTL_SECONDS,
+    )
+    try:
+        frappe.enqueue(
+            "db_connector.api_identity_activation.run_activation_batch_apply",
+            queue="long",
+            timeout=APPLY_OPERATION_TIMEOUT_SECONDS,
+            enqueue_after_commit=True,
+            job_id=f"ccd-activation-apply-{operation_token}",
+            operation_token=operation_token,
+            batch_name=batch_name,
+            requested_by=requested_by,
+        )
+        frappe.db.commit()
+    except Exception:
+        frappe.cache.delete_value(active_key)
+        frappe.cache.delete_value(_apply_operation_key(operation_token))
+        raise
+    return {"operation_token": operation_token, "status": "Queued"}
+
+
+def run_activation_batch_apply(
+    operation_token: str, batch_name: str, requested_by: str
+) -> dict[str, Any]:
+    """Apply one approved manual batch on long without weakening atomicity."""
+    if "System Manager" not in set(frappe.get_roles(requested_by)):
+        raise frappe.PermissionError("System Manager role is required")
+    frappe.set_user(requested_by)
+    payload = _apply_operation(operation_token)
+    if not payload or payload.get("requested_by") != requested_by:
+        raise frappe.PermissionError("Activation Batch Apply operation is unavailable")
+    payload.update(
+        {
+            "status": "Running",
+            "stage": "loading_components",
+            "started_at": str(frappe.utils.now_datetime()),
+        }
+    )
+    _set_apply_operation(operation_token, payload)
+    try:
+        def publish_progress(stage: str, processed: int, total: int) -> None:
+            payload.update(
+                {
+                    "stage": stage,
+                    "processed_components": int(processed),
+                    "total_components": int(total),
+                }
+            )
+            _set_apply_operation(operation_token, payload)
+
+        result = _apply_activation_batch(
+            batch_name,
+            allow_automatic=False,
+            progress_callback=publish_progress,
+        )
+    except Exception as exc:
+        frappe.db.rollback()
+        payload.update(
+            {
+                "status": "Failed",
+                "stage": "failed",
+                "completed_at": str(frappe.utils.now_datetime()),
+                "error": f"{type(exc).__name__}: {str(exc)}"[:1000],
+            }
+        )
+        _set_apply_operation(operation_token, payload)
+        frappe.cache.delete_value(_apply_active_key(batch_name))
+        frappe.log_error(frappe.get_traceback(), "CCD Activation Batch Apply failed")
+        raise
+    # _apply_activation_batch committed before returning. If this status
+    # publication fails, the getter reconciles the committed Applied batch.
+    payload.update(
+        {
+            "status": "Completed",
+            "stage": "completed",
+            "processed_components": int(payload.get("total_components") or 0),
+            "completed_at": str(frappe.utils.now_datetime()),
+            "result": result,
+        }
+    )
+    _set_apply_operation(operation_token, payload)
+    frappe.cache.delete_value(_apply_active_key(batch_name))
+    return result
+
+
 @frappe.whitelist()
+def get_activation_batch_apply(operation_token: str) -> dict[str, Any]:
+    """Read one manager's Apply status without repeating materialization."""
+    _require_manager()
+    token = str(operation_token or "").strip()
+    if len(token) != 32 or any(
+        character not in "0123456789abcdef" for character in token
+    ):
+        frappe.throw("Invalid Activation Batch Apply operation token")
+    payload = _apply_operation(token)
+    if not payload:
+        return {"operation_token": token, "status": "Expired"}
+    if payload.get("requested_by") != frappe.session.user:
+        frappe.throw("This Activation Batch Apply operation belongs to another user")
+
+    result = _applied_batch_operation_result(str(payload.get("batch") or ""))
+    if result["status"] == "Applied":
+        payload.update(
+            {
+                "status": "Completed",
+                "stage": "completed",
+                "result": result,
+            }
+        )
+        _set_apply_operation(token, payload)
+        return payload
+    if result["status"] == "Failed":
+        payload.update(
+            {
+                "status": "Failed",
+                "stage": "failed",
+                "error": result.get("error") or "Activation Batch Apply failed",
+            }
+        )
+        _set_apply_operation(token, payload)
+        return payload
+    if payload.get("status") in {"Queued", "Running"}:
+        from frappe.utils.background_jobs import get_job_status
+
+        job_status = get_job_status(f"ccd-activation-apply-{token}")
+        if job_status is None or job_status in {
+            "failed",
+            "canceled",
+            "stopped",
+            "finished",
+        }:
+            payload.update(
+                {
+                    "status": "Unknown",
+                    "stage": "unknown",
+                    "error": (
+                        "The background worker ended without a confirmed result. "
+                        "The batch is not Applied; inspect its status before retrying."
+                    ),
+                    "batch_status": result["status"],
+                }
+            )
+            _set_apply_operation(token, payload)
+    return payload
+
+
+@frappe.whitelist(methods=["POST"])
 def apply_activation_batch(batch_name: str) -> dict[str, Any]:
-    """Apply a manager-controlled manual batch; automatic batches are private."""
-    return _apply_activation_batch(batch_name, allow_automatic=False)
+    """Compatibility endpoint: manual Apply now always queues on long."""
+    return start_activation_batch_apply(batch_name)
 
 
 def _set_component_hold(recommendation_name: str, *, held: bool, reason: str = "") -> dict[str, Any]:
