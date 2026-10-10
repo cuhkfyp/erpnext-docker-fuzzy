@@ -30,7 +30,7 @@
   {"fieldname": "priority_rank", "fieldtype": "Int", "in_list_view": 1, "label": "Priority Rank", "read_only": 1},
   {"fieldname": "automation_section", "fieldtype": "Section Break", "label": "Guarded Splink Automation Provenance"},
   {"fieldname": "automation_validation_run", "fieldtype": "Link", "label": "Automatic Validation Run", "options": "CCD Match Evaluation Run", "permlevel": 2, "read_only": 1},
-  {"fieldname": "automation_cohort", "fieldtype": "Select", "label": "Reserved Cohort", "options": "\nValidation\nBlinded Rollout Holdout", "permlevel": 2, "read_only": 1},
+  {"fieldname": "automation_cohort", "fieldtype": "Select", "label": "Reserved Cohort", "options": "\nValidation\nBlinded Rollout Holdout\nScheduled Splink", "permlevel": 2, "read_only": 1},
   {"default": "0", "fieldname": "automation_reserved", "fieldtype": "Check", "label": "Reserved from Optional Review", "permlevel": 2, "read_only": 1},
   {"fieldname": "automation_component_fingerprint", "fieldtype": "Data", "label": "Automatic Component Fingerprint", "permlevel": 2, "read_only": 1},
   {"fieldname": "automation_component_size", "fieldtype": "Int", "label": "Automatic Component Size", "permlevel": 2, "read_only": 1},

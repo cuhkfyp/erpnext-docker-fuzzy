@@ -879,3 +879,10 @@ been fabricated during deployment. A second fresh full Development backup is
 still mandatory immediately before the first live validation-label or holdout
 materialization. UAT remains out of scope until explicit approval and its own
 verified full backup.
+
+Scheduled candidates are reserved atomically with their batch, validation
+authorization, component fingerprint, and `Scheduled Splink` cohort so they
+cannot also enter optional human assignment. Previously reviewed candidates
+are excluded. A replacement Ready queue preserves the reserved 165/50 cohort
+and may inherit ongoing authorization only when it replays the exact fitted
+evaluation and all frozen policy/source/runtime provenance.

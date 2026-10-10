@@ -205,6 +205,44 @@ def _provenance_values(queue: Any, *, cutoff: float) -> dict[str, Any]:
     }
 
 
+def _matching_ready_queue(run: Any, frozen_queue: Any) -> Any | None:
+    """Find a replacement queue that replays the exact frozen fitted model."""
+    candidates = frappe.get_all(
+        QUEUE_DOCTYPE,
+        filters={
+            "status": "Ready",
+            "policy_snapshot_sha256": frozen_queue.policy_snapshot_sha256,
+            "threshold_evaluation_run": frozen_queue.threshold_evaluation_run,
+            "splink_adapter_version": frozen_queue.splink_adapter_version,
+        },
+        fields=["name"],
+        order_by="modified desc, name desc",
+        limit_page_length=100,
+    )
+    frozen_runtime = _runtime_versions(frozen_queue)
+    frozen_scope = _source_scope(frozen_queue)
+    for row in candidates:
+        candidate = frappe.get_doc(QUEUE_DOCTYPE, row.name)
+        if (
+            _runtime_versions(candidate) == frozen_runtime
+            and _source_scope(candidate) == frozen_scope
+        ):
+            return candidate
+    return None
+
+
+def _active_queue_for_run(run: Any) -> Any:
+    """Use the frozen queue, or an exact-model Ready replacement if superseded."""
+    frozen_queue = frappe.get_doc(QUEUE_DOCTYPE, run.validation_queue_run)
+    if frozen_queue.status == "Ready":
+        return frozen_queue
+    if frozen_queue.status == "Superseded":
+        replacement = _matching_ready_queue(run, frozen_queue)
+        if replacement:
+            return replacement
+    return frozen_queue
+
+
 def _authorization_current(run: Any) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     if run.run_purpose != "Splink Automatic Validation":
@@ -214,9 +252,13 @@ def _authorization_current(run: Any) -> tuple[bool, list[str]]:
         reasons.append("validation_queue_missing")
         return False, reasons
     queue = frappe.get_doc(QUEUE_DOCTYPE, run.validation_queue_run)
-    if queue.status != "Ready":
-        reasons.append(f"queue_not_ready:{queue.status}")
-    current = _provenance_values(queue, cutoff=float(run.frozen_automatic_cutoff or 0))
+    if queue.status not in {"Ready", "Superseded"}:
+        reasons.append(f"frozen_queue_unavailable:{queue.status}")
+    elif queue.status == "Superseded" and not _matching_ready_queue(run, queue):
+        reasons.append("no_provenance_identical_ready_replacement_queue")
+    current = _provenance_values(
+        queue, cutoff=float(run.frozen_automatic_cutoff or 0)
+    )
     current_fingerprint = provenance_fingerprint(current)
     if current_fingerprint != str(run.authorization_fingerprint or ""):
         reasons.append("frozen_provenance_changed")
@@ -741,7 +783,11 @@ def _batch_fingerprint(batch_type: str, run: Any, names: Iterable[str]) -> str:
 
 
 def _create_batch(
-    *, batch_type: str, run: Any, planned: list[dict[str, Any]]
+    *,
+    batch_type: str,
+    run: Any,
+    planned: list[dict[str, Any]],
+    queue_run: str | None = None,
 ) -> Any:
     names = [name for item in planned for name in item["candidate_names"]]
     selection = _batch_fingerprint(batch_type, run, names)
@@ -753,7 +799,7 @@ def _create_batch(
             "doctype": BATCH_DOCTYPE,
             "batch_type": batch_type,
             "validation_run": run.name,
-            "queue_run": run.validation_queue_run,
+            "queue_run": queue_run or run.validation_queue_run,
             "matching_policy": run.matching_policy,
             "frozen_cutoff": run.frozen_automatic_cutoff,
             "authorization_fingerprint": run.authorization_fingerprint,
@@ -785,18 +831,30 @@ def _create_batch(
     batch.insert(ignore_permissions=True)
     for item in planned:
         for name in item["candidate_names"]:
+            candidate_values = {
+                "automation_batch": batch.name,
+                "automation_reserved": 1,
+                "automation_component_fingerprint": item["component_fingerprint"],
+                "automation_component_size": item["component_size"],
+                "automation_complete_clique": int(item["complete_clique"]),
+                "automation_status": (
+                    "Rollout Planned" if item["eligible"] else "Ineligible"
+                ),
+                "automation_ineligibility_reason": (
+                    None if item["eligible"] else item.get("error", "")[:140]
+                ),
+            }
+            if batch_type == "Scheduled Splink":
+                candidate_values.update(
+                    {
+                        "automation_validation_run": run.name,
+                        "automation_cohort": "Scheduled Splink",
+                    }
+                )
             frappe.db.set_value(
                 CANDIDATE_DOCTYPE,
                 name,
-                {
-                    "automation_batch": batch.name,
-                    "automation_status": (
-                        "Rollout Planned" if item["eligible"] else "Ineligible"
-                    ),
-                    "automation_ineligibility_reason": (
-                        None if item["eligible"] else item.get("error", "")[:140]
-                    ),
-                },
+                candidate_values,
                 update_modified=False,
             )
     return batch
@@ -1835,14 +1893,18 @@ def resume_splink_automation(reason: str, confirm_phrase: str) -> dict[str, Any]
     return {"status": "Monitoring", "event": event, "revision": revision}
 
 
-def _scheduled_candidates(run: Any, maximum_size: int) -> list[dict[str, Any]]:
-    rows = _queue_rows(run.validation_queue_run, minimum_score=float(run.frozen_automatic_cutoff))
+def _scheduled_candidates(run: Any, queue_run: str) -> list[dict[str, Any]]:
+    rows = _queue_rows(
+        queue_run, minimum_score=float(run.frozen_automatic_cutoff)
+    )
+    previously_reviewed = _reviewed_candidate_names(rows)
     return [
         row
         for row in rows
         if not row.get("stale")
         and not row.get("automation_reserved")
         and not row.get("automation_batch")
+        and str(row["name"]) not in previously_reviewed
         and row.get("automation_status") in {None, "", "Optional Review"}
     ]
 
@@ -1865,7 +1927,8 @@ def run_automatic_splink_cycle() -> dict[str, Any]:
         return {"status": "Paused", "selected_components": 0, "blockers": blockers, **pause}
     maximum_size = max(2, int(settings.maximum_splink_component_size or 2))
     component_limit = min(max(int(settings.automatic_splink_components_per_run or 10), 1), 100)
-    rows = _scheduled_candidates(run, maximum_size)
+    active_queue = _active_queue_for_run(run)
+    rows = _scheduled_candidates(run, str(active_queue.name))
     components = automatic_components(rows, maximum_size=maximum_size)[:component_limit]
     if not components:
         return {"status": "No Eligible Work", "selected_components": 0}
@@ -1886,7 +1949,12 @@ def run_automatic_splink_cycle() -> dict[str, Any]:
                 "error": "",
             }
         )
-    batch = _create_batch(batch_type="Scheduled Splink", run=run, planned=planned)
+    batch = _create_batch(
+        batch_type="Scheduled Splink",
+        run=run,
+        planned=planned,
+        queue_run=str(active_queue.name),
+    )
     batch.db_set(
         {"status": "Queued", "approved_at": now_datetime(), "approved_by": "Administrator"},
         update_modified=False,

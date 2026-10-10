@@ -151,6 +151,7 @@ def supersede_prior_queue_generations(current: Any) -> dict[str, int]:
                 "CCD Match Review Candidate",
                 filters={
                     "queue_run": ["in", chunk],
+                    "automation_reserved": 0,
                     "materialization_status": [
                         "not in",
                         sorted(HISTORICAL_CANDIDATE_STATES),

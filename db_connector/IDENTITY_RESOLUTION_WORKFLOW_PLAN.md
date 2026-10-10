@@ -1316,6 +1316,12 @@ upward; incomplete multi-record components always remain review/exception
 work. Recommendation automation runs first. The Splink worker then uses the
 refreshed identity state and a separate pause state.
 
+A successful replacement Ready queue supersedes only untouched optional work.
+It does not stale the reserved validation/holdout cohort. Ongoing authorization
+may follow the replacement only when the fitted threshold evaluation, policy
+snapshot, source scope, adapter, and runtime provenance are identical; any
+other replacement pauses Splink and requires new authorization evidence.
+
 Review capacity is one hard 20-pair weekly pool. Mandatory Recommendation and
 Splink QC receive at least two cases per active channel, with the remainder
 allocated in proportion to recent unattended volume; only unused capacity

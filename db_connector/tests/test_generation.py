@@ -18,8 +18,10 @@ class _FakeFrappe:
     def __init__(self, rows):
         self.rows = rows
         self.db = _FakeDB()
+        self.calls = []
 
     def get_all(self, doctype, **kwargs):
+        self.calls.append((doctype, kwargs))
         return list(self.rows.get(doctype, ()))
 
 
@@ -155,6 +157,12 @@ class GenerationReplacementTests(unittest.TestCase):
         )
         self.assertIn("B1", rendered)
         self.assertIn("prior", rendered)
+        candidate_call = next(
+            kwargs
+            for doctype, kwargs in fake.calls
+            if doctype == "CCD Match Review Candidate"
+        )
+        self.assertEqual(candidate_call["filters"]["automation_reserved"], 0)
 
 
 if __name__ == "__main__":

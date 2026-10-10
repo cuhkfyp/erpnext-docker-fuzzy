@@ -1357,6 +1357,13 @@ disabled, inspect its item/error state and Identity Decisions, correct the
 cause, and use **Retry Background Apply** on the same frozen batch rather than
 constructing an unrecorded selection.
 
+When a replacement Review Queue becomes Ready, confirm that reserved
+validation/holdout candidates remain intact. Scheduled automation may follow
+the replacement without repeating validation only when it replays the exact
+same fitted threshold evaluation, policy snapshot, source scope, adapter, and
+runtime. A queue with any other provenance must pause Splink and be authorized
+through a new prospective cohort.
+
 A Splink QC Different sets only the affected Group/Memberships to Needs
 Revalidation and opens a Splink-channel Investigation. It does not pause
 deterministic Recommendation automation. Correct or explicitly revalidate the
