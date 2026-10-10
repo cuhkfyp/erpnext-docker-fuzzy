@@ -1320,6 +1320,56 @@ it does not re-enable Automatic Tiered.
 Use `SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md` for the development acceptance
 matrix. Never transfer its synthetic records as production identity truth.
 
+### 11.8 Guarded Splink validation, holdout, and recovery
+
+Keep **Automatic Splink Materialization Enabled** off during migration and
+restore. A restored Settings row is never sufficient authorization. The
+development sequence is:
+
+1. take and verify a fresh full backup containing the compressed database,
+   site configuration, public files, and private files;
+2. migrate/build/restart with Live Materialization, Automatic QC, Automatic
+   Tiered, and Automatic Splink disabled;
+3. on the exact Ready queue, first use **Preview Validation Inventory** and
+   verify the read-only 402/223/8/215 counts plus the 177/26/11/1 available
+   source strata; then use **Create Splink Automatic Validation**, record the
+   deterministic seed, and verify the frozen 165/50 source allocations;
+4. complete two masked reviews per validation pair and adjudicate every
+   disagreement/Unsure; finalize and inspect the global and subgroup metrics;
+5. record the first management approval only when the displayed Wilson lower
+   bound is at least 0.95 and authorization is current;
+6. use **Preview Human-Label Activation** with Materialization off, inspect all
+   safe/exception items, then take another fresh verified full backup
+   immediately before approving the first identity-writing activation batch;
+7. create and inspect **Create Capped Splink Rollout**; require at least 45
+   eligible blinded pairs, then approve its background batch;
+8. finish two-reviewer QC for every applied holdout pair, resolve every Splink
+   Investigation through correction/revalidation, and record the second
+   management decision; and
+9. only then enable Automatic QC, Live Materialization, and finally Automatic
+   Splink using the exact confirmation phrase and a recorded reason.
+
+The background batch is restart-safe and component-atomic. `Applied` and
+`Already Applied` items must not be replayed as new identity decisions.
+Exceptions remain linked to their candidates and batch; candidates are never
+deleted merely because they were automated. If a batch fails, leave Splink
+disabled, inspect its item/error state and Identity Decisions, correct the
+cause, and use **Retry Background Apply** on the same frozen batch rather than
+constructing an unrecorded selection.
+
+A Splink QC Different sets only the affected Group/Memberships to Needs
+Revalidation and opens a Splink-channel Investigation. It does not pause
+deterministic Recommendation automation. Correct or explicitly revalidate the
+complete Group, resolve the Investigation with manager notes, disable
+Automatic Splink, then use the governed Splink Resume action. Restore the
+pre-write full backup only for a failed migration or unrecoverable systemic
+write; ordinary false matches use immutable governance correction, not a
+database rewind.
+
+Before UAT, wait for explicit approval. The UAT code-only deployment must
+create and validate its own fresh full backup, must not copy Development data,
+and must leave Materialization plus every automatic control disabled.
+
 ## 12. Sign-off checklist
 
 Before declaring transfer complete, record:
@@ -1338,6 +1388,7 @@ Before declaring transfer complete, record:
 - [ ] combined-overlap API/DocType/asset and non-manager denial checks;
 - [ ] materialization disabled;
 - [ ] Automatic QC and Automatic Tiered disabled;
+- [ ] Automatic Splink disabled and Splink circuit-breaker state reviewed;
 - [ ] automatic zero-write preview reports no possible write;
 - [ ] zero-write preview result, when a canary exists;
 - [ ] rollback owner/window; and
@@ -1358,6 +1409,7 @@ Before declaring transfer complete, record:
 | Pending/active overlap expansion and atomic resolution | `api_identity_overlap.py`, `fuzzy_matching/overlap.py`, and `public/js/identity_overlap_resolution.js` |
 | Continuous QC, breaker, and governed recovery | `api_identity_qc.py` and `fuzzy_matching/automation.py` |
 | Default-off bounded unattended Tiered | `api_identity_automation.py` and `api_identity_activation.py` |
+| Default-off prospective and unattended Splink | `api_splink_automation.py`, `fuzzy_matching/splink_automation.py`, and `CCD Splink Automation Batch` |
 | Development QC/automation acceptance | `SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md` and `synthetic_qc_automation_fixture.py` |
 | Exact versioned component | Git commit recorded in Document control |
 

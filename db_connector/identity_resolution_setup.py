@@ -46,12 +46,33 @@ def _backfill_fail_closed_automation_defaults() -> dict[str, int]:
         "automatic_tiered_components_per_run": 10,
         "automatic_tiered_schedule": "Daily",
         "qc_assignment_interval_days": 7,
+        "automatic_splink_enabled": 0,
+        "splink_automation_paused": 0,
+        "splink_control_revision": 0,
+        "maximum_splink_component_size": 2,
+        "automatic_splink_components_per_run": 10,
+        "operational_provenance_allowlist": (
+            "Human Confirmed\n"
+            "Validated Deterministic Automation\n"
+            "Validated Probabilistic Automation\n"
+            "Governance Correction/Override"
+        ),
     }
     initialized = 0
     for fieldname, value in defaults.items():
         if frappe.db.get_single_value(SETTINGS_DOCTYPE, fieldname) in (None, ""):
             frappe.db.set_single_value(SETTINGS_DOCTYPE, fieldname, value)
             initialized += 1
+    for fieldname, value in {
+        "maximum_splink_component_size": 2,
+        "automatic_splink_components_per_run": 10,
+    }.items():
+        if int(frappe.db.get_single_value(SETTINGS_DOCTYPE, fieldname) or 0) <= 0:
+            frappe.db.set_single_value(SETTINGS_DOCTYPE, fieldname, value)
+            initialized += 1
+    if int(frappe.db.get_single_value(SETTINGS_DOCTYPE, "qc_cases_per_week") or 0) != 20:
+        frappe.db.set_single_value(SETTINGS_DOCTYPE, "qc_cases_per_week", 20)
+        initialized += 1
     return {"initialized": initialized}
 
 
@@ -232,6 +253,10 @@ def _add_indexes() -> None:
         ("CCD Match Evaluation Pair", ["right_record", "stale"], "ccd_evaluation_right_lifecycle"),
         ("CCD Match Review Candidate", ["left_record", "stale"], "ccd_candidate_left_lifecycle"),
         ("CCD Match Review Candidate", ["right_record", "stale"], "ccd_candidate_right_lifecycle"),
+        ("CCD Match Review Candidate", ["automation_validation_run", "automation_cohort", "automation_status"], "ccd_candidate_splink_lifecycle"),
+        ("CCD Match Review Candidate", ["automated_qc_assigned_at", "automated_qc_review_status"], "ccd_candidate_splink_qc"),
+        ("CCD Match Evaluation Run", ["run_purpose", "validation_queue_run"], "ccd_evaluation_splink_validation"),
+        ("CCD Splink Automation Batch", ["validation_run", "batch_type", "status"], "ccd_splink_batch_lifecycle"),
         ("CCD Master", ["ccd_reg_source", "ccd_source_key"], "ccd_master_source_lifecycle"),
         ("CCD Unified Person Membership", ["ccd_master", "status"], "ccd_unified_member_current"),
         ("CCD Unified Person Membership", ["unified_person", "status"], "ccd_unified_person_current"),
@@ -320,6 +345,47 @@ def _migrate_recommendation_terms() -> dict[str, int]:
     }
 
 
+def _backfill_identity_provenance_classes() -> dict[str, int]:
+    """Classify existing immutable origins without changing identity state."""
+    if not frappe.db.table_exists("CCD Identity Decision"):
+        return {"decisions": 0, "groups": 0}
+    mapping = {
+        "Splink Human Review": "Human Confirmed",
+        "Splink Validation": "Human Confirmed",
+        "Component Review": "Human Confirmed",
+        "Tiered Evidence": "Validated Deterministic Automation",
+        "Splink Automated": "Validated Probabilistic Automation",
+        "Governance Override": "Governance Correction/Override",
+    }
+    decisions = 0
+    for origin, provenance_class in mapping.items():
+        count = frappe.db.count(
+            "CCD Identity Decision",
+            {"origin": origin, "provenance_class": ["is", "not set"]},
+        )
+        if count:
+            frappe.db.sql(
+                "UPDATE `tabCCD Identity Decision` SET provenance_class = %s "
+                "WHERE origin = %s AND COALESCE(provenance_class, '') = ''",
+                (provenance_class, origin),
+            )
+            decisions += int(count)
+    groups = 0
+    if frappe.db.table_exists("CCD Identity Group"):
+        groups = frappe.db.count(
+            "CCD Identity Group", {"provenance_class": ["is", "not set"]}
+        )
+        if groups:
+            frappe.db.sql(
+                "UPDATE `tabCCD Identity Group` AS g "
+                "INNER JOIN `tabCCD Identity Decision` AS d "
+                "ON d.name = g.originating_decision "
+                "SET g.provenance_class = d.provenance_class "
+                "WHERE COALESCE(g.provenance_class, '') = ''"
+            )
+    return {"decisions": decisions, "groups": int(groups)}
+
+
 def install_identity_resolution() -> dict[str, object]:
     from db_connector.api_identity_activation import (
         backfill_activation_item_source_pairs,
@@ -331,6 +397,7 @@ def install_identity_resolution() -> dict[str, object]:
     _add_indexes()
     unified_person_register = _configure_unified_person_register()
     migration = _migrate_recommendation_terms()
+    provenance_backfill = _backfill_identity_provenance_classes()
     automation_defaults = _backfill_fail_closed_automation_defaults()
     registration_sources = _backfill_registration_source_keys()
     legacy_cancel_script = _disable_legacy_registration_cancel_script()
@@ -355,6 +422,7 @@ def install_identity_resolution() -> dict[str, object]:
         "registration_sources": registration_sources,
         "legacy_cancel_script": legacy_cancel_script,
         "recommendation_term_migration": migration,
+        "identity_provenance_backfill": provenance_backfill,
         "activation_item_source_backfill": activation_item_source_backfill,
         "unified_person_sequence": unified_person_sequence,
         "unified_person_register": unified_person_register,

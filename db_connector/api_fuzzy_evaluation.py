@@ -2006,7 +2006,12 @@ def submit_review(pair_name: str, label: str, notes: str = "") -> dict[str, str]
         return {"pair": pair.name, "status": pair.review_status}
     ordinary = [row.label for row in pair.review_labels if not row.is_adjudication]
     required = 2 if pair.needs_double_review else 1
-    if "Unsure" in ordinary:
+    if (
+        pair.double_review_reason == "splink_automatic_validation"
+        and len(ordinary) < 2
+    ):
+        pair.review_status = "Partially Reviewed"
+    elif "Unsure" in ordinary:
         pair.review_status = "Needs Adjudication"
     elif len(ordinary) < required:
         pair.review_status = "Partially Reviewed"
@@ -2031,6 +2036,16 @@ def adjudicate_review(pair_name: str, label: str, notes: str = "") -> dict[str, 
         frappe.throw("This pair is stale. Create a new evaluation run before adjudicating it.")
     if pair.review_status != "Needs Adjudication":
         frappe.throw("Only pairs awaiting adjudication may be adjudicated")
+    if pair.double_review_reason == "splink_automatic_validation":
+        ordinary_reviewers = {
+            str(row.reviewer)
+            for row in pair.review_labels
+            if not row.is_adjudication
+        }
+        if len(ordinary_reviewers) < 2:
+            frappe.throw(
+                "Splink automatic validation requires two independent masked reviews before adjudication"
+            )
     pair.append(
         "review_labels",
         {
@@ -2816,12 +2831,21 @@ def get_pair_evidence(pair_name: str) -> dict[str, Any]:
         }
     left = frappe.get_doc("CCD Master", pair.left_record)
     right = frappe.get_doc("CCD Master", pair.right_record)
-    sensitive = "System Manager" in frappe.get_roles() or SENSITIVE_ROLE in frappe.get_roles()
+    run_values = frappe.db.get_value(
+        "CCD Match Evaluation Run",
+        pair.evaluation_run,
+        ["run_purpose", "policy_snapshot_json"],
+        as_dict=True,
+    )
+    validation_masked = bool(
+        run_values and run_values.run_purpose == "Splink Automatic Validation"
+    )
+    sensitive = not validation_masked and (
+        "System Manager" in frappe.get_roles() or SENSITIVE_ROLE in frappe.get_roles()
+    )
     policy = MatchingPolicy.from_dict(
         json.loads(
-            frappe.db.get_value(
-                "CCD Match Evaluation Run", pair.evaluation_run, "policy_snapshot_json"
-            )
+            run_values.policy_snapshot_json
         )
     )
     attributes = {}

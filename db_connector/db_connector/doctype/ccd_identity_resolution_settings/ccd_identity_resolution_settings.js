@@ -4,6 +4,7 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		add_qc_control(frm);
 		add_tiered_control(frm);
 		add_breaker_control(frm);
+		add_splink_control(frm);
 		add_integrity_control(frm);
 		add_unified_person_control(frm);
 		add_notification_control(frm);
@@ -27,6 +28,41 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		}
 	},
 });
+
+function add_splink_control(frm) {
+	const desired = frm.doc.automatic_splink_enabled ? 0 : 1;
+	const action = desired ? __("Enable Automatic Splink") : __("Disable Automatic Splink");
+	const phrase = desired ? "ENABLE AUTOMATIC SPLINK" : "DISABLE AUTOMATIC SPLINK";
+	frm.add_custom_button(action, () => frappe.prompt(
+		[
+			{ fieldname: "reason", fieldtype: "Small Text", label: __("Control-change reason"), reqd: 1 },
+			{ fieldname: "confirm_phrase", fieldtype: "Data", label: __("Type {0} exactly", [phrase]), reqd: 1 },
+		],
+		(values) => frappe.call({
+			method: "db_connector.api_splink_automation.set_automatic_splink",
+			args: { enabled: desired, ...values },
+			callback: () => frm.reload_doc(),
+		}),
+		action,
+	), __("Splink Automation"));
+	const paused = !!frm.doc.splink_automation_paused;
+	const breakerAction = paused ? __("Resume Splink Automation") : __("Pause Splink Automation");
+	const breakerPhrase = paused ? "RESUME SPLINK AUTOMATION" : "PAUSE SPLINK AUTOMATION";
+	frm.add_custom_button(breakerAction, () => frappe.prompt(
+		[
+			{ fieldname: "reason", fieldtype: "Small Text", label: __("Circuit-breaker reason"), reqd: 1 },
+			{ fieldname: "confirm_phrase", fieldtype: "Data", label: __("Type {0} exactly", [breakerPhrase]), reqd: 1 },
+		],
+		(values) => frappe.call({
+			method: paused
+				? "db_connector.api_splink_automation.resume_splink_automation"
+				: "db_connector.api_splink_automation.pause_splink_automation",
+			args: values,
+			callback: () => frm.reload_doc(),
+		}),
+		breakerAction,
+	), __("Splink Automation"));
+}
 
 function add_unified_person_control(frm) {
 	frm.add_custom_button(

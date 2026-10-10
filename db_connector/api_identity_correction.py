@@ -40,6 +40,8 @@ SUPPORTED_SOURCE_ORIGINS = {
     "Tiered Evidence",
     "Component Review",
     "Splink Human Review",
+    "Splink Validation",
+    "Splink Automated",
     "Governance Override",
 }
 
@@ -544,7 +546,7 @@ def _mark_origin_corrected(
                     "materialization_error": None,
                 },
             )
-        elif origin == "Splink Human Review" and frappe.db.exists(
+        elif origin in {"Splink Human Review", "Splink Automated"} and frappe.db.exists(
             CANDIDATE_DOCTYPE, origin_document
         ):
             _set_existing_fields(
@@ -559,6 +561,25 @@ def _mark_origin_corrected(
                     "materialization_error": None,
                 },
             )
+        elif origin == "Splink Validation" and frappe.db.exists(
+            "CCD Match Evaluation Pair", origin_document
+        ):
+            candidate_name = frappe.db.get_value(
+                "CCD Match Evaluation Pair", origin_document, "review_candidate"
+            )
+            if candidate_name:
+                _set_existing_fields(
+                    CANDIDATE_DOCTYPE,
+                    str(candidate_name),
+                    {
+                        "materialization_status": "Reversed",
+                        "correction_decision": replacement_decision,
+                        "reversed_at": now,
+                        "reversed_by": frappe.session.user,
+                        "reversal_reason": reason,
+                        "materialization_error": None,
+                    },
+                )
         elif origin == "Governance Override" and decision.origin_doctype == CORRECTION_DOCTYPE:
             if frappe.db.exists(CORRECTION_DOCTYPE, origin_document):
                 _set_existing_fields(

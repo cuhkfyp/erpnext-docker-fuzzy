@@ -10,6 +10,38 @@ frappe.ui.form.on("CCD Match Review Queue Run", {
 			frappe.set_route("List", "CCD Match Review Batch", { queue_run: frm.doc.name });
 		}, __("Optional Assignment"));
 		if (frm.doc.status === "Ready" && frappe.user.has_role("System Manager")) {
+			frm.add_custom_button(__("Preview Validation Inventory"), () => {
+				frappe.call({
+					method: "db_connector.api_splink_automation.preview_splink_automatic_validation",
+					args: { queue_run: frm.doc.name },
+					freeze: true,
+					callback(response) {
+						const result = response.message || {};
+						frappe.msgprint({
+							title: __("Splink validation inventory"),
+							indicator: result.ready_to_create ? "green" : "orange",
+							message: `<pre>${frappe.utils.escape_html(JSON.stringify(result, null, 2))}</pre>`,
+						});
+					},
+				});
+			}, __("Splink Automation"));
+			frm.add_custom_button(__("Create Splink Automatic Validation"), () => {
+				frappe.prompt(
+					[
+						{ fieldname: "deterministic_seed", fieldtype: "Data", label: __("Deterministic source-stratified seed"), reqd: 1 },
+						{ fieldname: "confirm_queue_run", fieldtype: "Data", label: __("Type the exact Queue ID to confirm"), description: frm.doc.name, reqd: 1 },
+					],
+					(values) => frappe.call({
+						method: "db_connector.api_splink_automation.create_splink_automatic_validation",
+						args: { queue_run: frm.doc.name, ...values },
+						freeze: true,
+						callback(response) {
+							if (response.message?.validation_run) frappe.set_route("Form", "CCD Match Evaluation Run", response.message.validation_run);
+						},
+					}),
+					__("Freeze blinded 165 / 50 cohorts"),
+				);
+			}, __("Splink Automation"));
 			frm.add_custom_button(__("Create Review Batch"), () => {
 				frappe.prompt(
 					[

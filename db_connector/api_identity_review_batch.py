@@ -28,10 +28,11 @@ def _candidate_rows(queue_run: str) -> list[Any]:
         filters={
             "queue_run": queue_run,
             "stale": 0,
+            "automation_reserved": 0,
             "assigned_review_batch": ["is", "not set"],
             "review_status": ["in", sorted(OPEN_STATUSES)],
         },
-        fields=["name", "priority_rank", "source_pair", "review_status"],
+        fields=["name", "priority_rank", "source_pair", "review_status", "automation_reserved"],
         order_by="priority_rank, name",
         limit_page_length=100_000,
     )
@@ -68,6 +69,21 @@ def create_review_batch(
     if size <= 0:
         frappe.throw(
             "A Review Batch must assign at least one candidate. For zero assigned work, create no batch."
+        )
+    from db_connector.api_splink_automation import (
+        _mandatory_unassigned,
+        _weekly_assigned_count,
+    )
+
+    remaining_capacity = max(20 - _weekly_assigned_count(), 0)
+    mandatory_recommendation, mandatory_splink = _mandatory_unassigned()
+    if mandatory_recommendation or mandatory_splink:
+        frappe.throw(
+            "Mandatory Recommendation and Splink QC must be assigned before optional Splink work"
+        )
+    if size > remaining_capacity:
+        frappe.throw(
+            f"Shared weekly review capacity has only {remaining_capacity} pair case(s) remaining"
         )
     run = frappe.get_doc(RUN_DOCTYPE, queue_run)
     if run.status != "Ready":

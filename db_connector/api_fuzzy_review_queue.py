@@ -1032,7 +1032,12 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
     left["source"] = candidate.left_source
     right["source"] = candidate.right_source
     evidence = build_evidence(left, right, policy)
-    sensitive = _has_sensitive_access()
+    # Mandatory unattended-Splink QC remains masked for every reviewer,
+    # including a manager acting as adjudicator.  Managers retain separate
+    # provenance/score visibility but do not receive direct CCD identifiers in
+    # this review payload.
+    automated_qc = bool(candidate.automated_qc_assigned_at)
+    sensitive = _has_sensitive_access() and not automated_qc
     attributes = []
     for attribute in policy.attributes():
         item = evidence.get(attribute)
@@ -1077,6 +1082,7 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
         "priority_rank": candidate.priority_rank,
         "can_submit": bool(
             not stale
+            and not candidate.automation_reserved
             and candidate.review_status in OPEN_REVIEW_STATUSES
             and not submitted
         ),
@@ -1120,7 +1126,7 @@ def _update_candidate_review_state(candidate: Any) -> None:
             for row in candidate.review_labels
             if row.label == adjudication.label
         }
-        if adjudication.label == "Same" and len(supporters) < 2:
+        if len(supporters) < 2:
             candidate.review_status = "Positive Confirmation Required"
             candidate.final_label = ""
         else:
@@ -1132,9 +1138,6 @@ def _update_candidate_review_state(candidate: Any) -> None:
         candidate.review_status = "Needs Adjudication"
     elif not labels:
         candidate.review_status = "Unreviewed"
-    elif labels[0] == "Different" and len(labels) == 1:
-        candidate.review_status = "Agreed"
-        candidate.final_label = "Different"
     elif len(labels) < 2:
         candidate.review_status = "Positive Confirmation Required"
     elif len(set(labels)) == 1:
@@ -1153,6 +1156,8 @@ def submit_candidate_review(
     if label not in {"Same", "Different", "Unsure"}:
         frappe.throw("Label must be Same, Different, or Unsure")
     candidate = frappe.get_doc(CANDIDATE_DOCTYPE, candidate_name)
+    if candidate.automation_reserved:
+        frappe.throw("This candidate is reserved for blinded Splink validation or rollout")
     if _candidate_stale(candidate):
         candidate.db_set(
             {"stale": 1, "review_status": "Stale"}, update_modified=False

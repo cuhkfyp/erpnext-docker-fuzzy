@@ -1,0 +1,24 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": ["component_fingerprint", "component_size", "complete_clique", "candidate_names_json", "record_ids_json", "status", "identity_decisions_json", "identity_groups_json", "error_code"],
+ "fields": [
+  {"fieldname": "component_fingerprint", "fieldtype": "Data", "in_list_view": 1, "label": "Component Fingerprint", "read_only": 1, "reqd": 1},
+  {"fieldname": "component_size", "fieldtype": "Int", "in_list_view": 1, "label": "Records", "read_only": 1, "reqd": 1},
+  {"default": "0", "fieldname": "complete_clique", "fieldtype": "Check", "label": "Complete High-Score Clique", "read_only": 1},
+  {"fieldname": "candidate_names_json", "fieldtype": "Code", "label": "Review Candidates", "options": "JSON", "read_only": 1, "reqd": 1},
+  {"fieldname": "record_ids_json", "fieldtype": "Code", "label": "CCD Records", "options": "JSON", "permlevel": 1, "read_only": 1, "reqd": 1},
+  {"default": "Planned", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Planned\nApplied\nAlready Applied\nException\nStale\nIneligible\nFailed", "read_only": 1},
+  {"fieldname": "identity_decisions_json", "fieldtype": "Code", "label": "Identity Decisions", "options": "JSON", "read_only": 1},
+  {"fieldname": "identity_groups_json", "fieldtype": "Code", "label": "Identity Groups", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "error_code", "fieldtype": "Small Text", "label": "Safety or Error Code", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Splink Automation Batch Item",
+ "permissions": []
+}

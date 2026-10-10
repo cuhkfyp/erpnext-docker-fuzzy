@@ -2,8 +2,37 @@ frappe.ui.form.on("CCD Match Review Candidate", {
 	refresh(frm) {
 		if (frm.is_new()) return;
 		load_candidate_evidence(frm);
+		add_splink_qc_buttons(frm);
 	},
 });
+
+function add_splink_qc_buttons(frm) {
+	if (!frm.doc.automated_qc_assigned_at || !["Unreviewed", "Partially Reviewed", "Needs Adjudication"].includes(frm.doc.automated_qc_review_status)) return;
+	if (["Unreviewed", "Partially Reviewed"].includes(frm.doc.automated_qc_review_status)) {
+		for (const label of ["Same", "Different", "Unsure"]) {
+			frm.add_custom_button(__(label), () => submit_splink_qc(frm, label), __("Automated Splink QC"));
+		}
+	}
+	if (frm.doc.automated_qc_review_status === "Needs Adjudication" && (frappe.user_roles || []).includes("System Manager")) {
+		for (const label of ["Same", "Different"]) {
+			frm.add_custom_button(__(`Adjudicate ${label}`), () => submit_splink_qc(frm, label, true), __("Automated Splink QC"));
+		}
+	}
+}
+
+function submit_splink_qc(frm, label, adjudication = false) {
+	frappe.prompt(
+		[{ fieldname: "notes", fieldtype: "Small Text", label: __("Notes"), reqd: adjudication ? 1 : 0 }],
+		(values) => frappe.call({
+			method: adjudication
+				? "db_connector.api_splink_automation.adjudicate_splink_qc"
+				: "db_connector.api_splink_automation.submit_splink_qc",
+			args: { candidate_name: frm.doc.name, label, notes: values.notes || "" },
+			callback: () => frm.reload_doc(),
+		}),
+		adjudication ? __(`Adjudicate Splink QC as ${label}`) : __(`Submit Splink QC ${label}`),
+	);
+}
 
 function esc(value) {
 	return frappe.utils.escape_html(String(value || ""));

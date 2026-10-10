@@ -4,7 +4,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "decision_key", "decision_version", "decision_type", "origin", "origin_doctype", "origin_document",
+  "decision_key", "decision_version", "decision_type", "origin", "provenance_class", "origin_doctype", "origin_document",
   "matching_policy", "policy_version", "policy_snapshot_sha256", "policy_snapshot_json",
   "participant_records_json", "participant_fingerprints_json", "final_groups_json", "exclusions_json",
   "reason_codes_json", "review_context_json", "safety_outcome", "status", "decided_at", "decided_by",
@@ -14,7 +14,8 @@
   {"fieldname": "decision_key", "fieldtype": "Data", "hidden": 1, "label": "Decision Key", "read_only": 1, "reqd": 1, "unique": 1},
   {"default": "1", "fieldname": "decision_version", "fieldtype": "Int", "label": "Decision Version", "read_only": 1, "reqd": 1},
   {"fieldname": "decision_type", "fieldtype": "Select", "in_list_view": 1, "label": "Decision Type", "options": "Same\nDifferent\nPartition", "read_only": 1, "reqd": 1},
-  {"fieldname": "origin", "fieldtype": "Select", "in_list_view": 1, "label": "Origin", "options": "Tiered Evidence\nSplink Human Review\nComponent Review\nGovernance Override", "read_only": 1, "reqd": 1},
+  {"fieldname": "origin", "fieldtype": "Select", "in_list_view": 1, "label": "Origin", "options": "Tiered Evidence\nSplink Human Review\nSplink Validation\nSplink Automated\nComponent Review\nGovernance Override", "read_only": 1, "reqd": 1},
+  {"fieldname": "provenance_class", "fieldtype": "Select", "in_list_view": 1, "label": "Governed Provenance Class", "options": "Human Confirmed\nValidated Deterministic Automation\nValidated Probabilistic Automation\nGovernance Correction/Override", "read_only": 1, "reqd": 1},
   {"fieldname": "origin_doctype", "fieldtype": "Link", "label": "Origin DocType", "options": "DocType", "read_only": 1, "reqd": 1},
   {"fieldname": "origin_document", "fieldtype": "Dynamic Link", "in_list_view": 1, "label": "Origin Document", "options": "origin_doctype", "read_only": 1, "reqd": 1},
   {"fieldname": "matching_policy", "fieldtype": "Link", "label": "Matching Policy", "options": "CCD Matching Policy", "read_only": 1},

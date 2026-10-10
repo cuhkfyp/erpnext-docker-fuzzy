@@ -828,3 +828,54 @@ Server transfer, clean-target installation, backup/restore, cutover, rollback,
 and new-centre onboarding are covered in
 `ERPNext_SERVER_MIGRATION_RUNBOOK.md`. Identity activation remains a separate
 operation after a successful transfer.
+
+## Guarded Splink automation implementation — 2026-10-10
+
+The application now contains an additive, default-off prospective path for the
+frozen `0.999148140` ultra-high Splink band. It adds exact validation
+provenance, deterministic 165/50 source-stratified cohort reservation, masked
+two-reviewer evaluation, a 150-pair/Wilson authorization gate, human-label
+activation batches, a capped blinded holdout, full holdout QC, second
+management approval, independent Splink controls/breaker, and component-atomic
+background batches. The current optional review pool and incomplete 3–7 record
+components remain review-only.
+
+The shared assignment service enforces a hard 20 pair cases per week across
+mandatory Recommendation QC, mandatory Splink QC, and only then ranked optional
+Splink assignments. One Splink QC Different pauses only Splink, suspends the
+affected shared Group, and opens a governed Investigation. Complete rolling
+precision and overdue controls are channel-specific. Existing dashboards are
+unchanged; Decision/Group provenance is additive and existing immutable origins
+are backfilled to the four governed provenance classes.
+
+The Development migration and code deployment completed after a fresh full
+backup at `20261010_203948`. The compressed database, site configuration,
+public files, and private files were each format-checked and SHA-256 verified.
+The read-only queue inventory then reproduced 402 ultra-high edges, 223
+isolated pairs, eight previously reviewed isolated pairs, and 215 eligible
+pairs. Its governed source strata were exactly 177/26/11/1, matching the
+combined 165-validation plus 50-holdout allocation. The inventory reported
+`ready_to_create = true` and `identity_writes = 0`.
+
+Pure acceptance tests cover exact deterministic cohort sizes/disjointness,
+live-source-to-governance stratum mapping, known-label exclusion,
+two-versus-three Different labels at 165, validation attrition,
+isolated/incomplete/larger-clique classification, shared-capacity
+floor/proportional bounds, and full authorization invalidation. Source
+compilation and DocType JSON validation pass; the complete container suite
+passes 186 tests. The deployed batch and lifecycle indexes are present. Direct
+DocPerm rows grant neither reviewer role access to `CCD Master`; prospective
+validation and automated-QC payloads remain masked even for a manager acting
+in those review flows.
+
+Development remains fail-closed: Live Materialization, Automatic QC,
+Automatic Tiered, and Automatic Splink are all disabled; the initial Splink
+component limit is two, the per-run cap is ten, and the shared weekly capacity
+is twenty. Database checks show zero `Splink Automatic Validation` runs and
+zero Splink Automation Batches, so deployment created no cohort, holdout, or
+identity write. Browser review and real background apply/QC acceptance require
+the prospective human labels and management approvals and therefore have not
+been fabricated during deployment. A second fresh full Development backup is
+still mandatory immediately before the first live validation-label or holdout
+materialization. UAT remains out of scope until explicit approval and its own
+verified full backup.

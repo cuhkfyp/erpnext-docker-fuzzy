@@ -1268,3 +1268,72 @@ remains a resolvable alias. Governed Different/correction paths can split the
 person, restoring original lineage numbers where unambiguous and issuing a new
 sequence otherwise. Source retirement ends assignments before deletion while
 preserving all registry, alias, Membership, and Event history.
+
+### 27.5 Guarded Splink unattended automation — prospective path
+
+The only probabilistic band eligible for prospective authorization is the
+globally frozen Splink probability `0.999148140`, selected from Evaluation Run
+`36vfsulqbc` (9/9 calibration Same and 5/5 held-out Same). That retrospective
+14/14 result selected the research cutoff; it is not authorization evidence.
+The eight already-reviewed live candidates likewise remain historical labels
+and are excluded from the prospective statistics.
+
+Ready queue `gkd75jb71h` must reproduce 402 edges at or above the cutoff, 223
+isolated two-record components, eight prior reviews, and therefore 215 blinded
+eligible pairs. A System Manager Desk action freezes a recorded, deterministic,
+source-stratified permutation into 165 validation pairs and 50 rollout-holdout
+pairs. The allocation is fixed at 136/20/8/1 and 41/6/3/0 for DHCE↔HMSSHP,
+HKSReCCMS↔SHP-UAT, HMSSHP↔SHP-UAT, and PHI-UAT↔SHP-UAT, respectively. Both
+cohorts are reserved from optional work. Reviewers receive masked evidence
+only; every pair needs two distinct ordinary reviews and every disagreement or
+Unsure result needs adjudication.
+
+Validation can reach management review only with at least 150 final non-stale
+pairs, no unresolved pair, exact queue/canary/policy/model/runtime/source-scope
+and cutoff provenance, and a 95% Wilson precision lower bound of at least 0.95.
+At all 165 pairs, two Different labels pass and three fail. A CCD Master change
+stales only pairs containing that record. Policy, source mapping/source scope,
+model/runtime, queue/canary, or cutoff drift invalidates the complete
+authorization. A failed cohort cannot be reused to select and approve a new
+cutoff.
+
+Approval does not write identity state. A separate zero-identity-write batch
+preview converts final validation Same labels to human-confirmed Groups and
+Different labels to fingerprint-scoped exclusions; unsafe and overlapping
+items remain exceptions. A second preview freezes the 50 blinded holdout pairs.
+At least 45 must still be safe isolated pairs with current fingerprints, no
+live exclusion, no same-source concern, no Group overlap, and exact frozen
+provenance. The approved background batch uses origin `Splink Automated` and
+provenance class `Validated Probabilistic Automation`; all applied holdout
+pairs enter mandatory, two-reviewer masked QC.
+
+Scheduled Splink remains separately default-off until all applied holdout QC
+is final, investigations are resolved, the combined prospective+holdout Wilson
+gate passes, and management records a second approval. The initial maximum
+component size is two. The selector and component-atomic batch model also
+support complete larger high-score cliques when that setting is governed
+upward; incomplete multi-record components always remain review/exception
+work. Recommendation automation runs first. The Splink worker then uses the
+refreshed identity state and a separate pause state.
+
+Review capacity is one hard 20-pair weekly pool. Mandatory Recommendation and
+Splink QC receive at least two cases per active channel, with the remainder
+allocated in proportion to recent unattended volume; only unused capacity
+releases ranked optional Splink work. Unassigned optional candidates have no
+SLA. A final Splink QC Different suspends only the shared affected Group,
+pauses only Splink, and opens a manager-resolved QC Investigation. Overdue
+Splink QC or a complete rolling window below the 0.95 Wilson lower bound also
+pauses only Splink.
+
+Identity Decisions and Groups carry one of four governed classes: Human
+Confirmed, Validated Deterministic Automation, Validated Probabilistic
+Automation, or Governance Correction/Override. Existing origins are backfilled
+without changing active identities. Current dashboards continue counting all
+active identities. Future operational consumers must consult the Settings
+allowlist; accepting every analytical identity requires an explicit management
+configuration decision.
+
+The accepted population risk is global: source-pair subgroup precision is
+reported but may be weaker. Successful rollout does not authorize lowering the
+cutoff. The next research question is lower-score Splink combined with strong
+deterministic corroboration.

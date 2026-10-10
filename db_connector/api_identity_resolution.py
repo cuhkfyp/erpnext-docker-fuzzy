@@ -33,7 +33,20 @@ EXCLUSION_DOCTYPE = "CCD Identity Exclusion"
 EVENT_DOCTYPE = "CCD Identity Event"
 SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
 CURRENT_MEMBERSHIP_STATUSES = ("Active", "Needs Revalidation")
-HUMAN_ORIGINS = {"Splink Human Review", "Component Review", "Governance Override"}
+HUMAN_ORIGINS = {
+    "Splink Human Review",
+    "Splink Validation",
+    "Component Review",
+    "Governance Override",
+}
+PROVENANCE_CLASS_BY_ORIGIN = {
+    "Splink Human Review": "Human Confirmed",
+    "Splink Validation": "Human Confirmed",
+    "Component Review": "Human Confirmed",
+    "Tiered Evidence": "Validated Deterministic Automation",
+    "Splink Automated": "Validated Probabilistic Automation",
+    "Governance Override": "Governance Correction/Override",
+}
 
 
 def _json(value: Any) -> str:
@@ -62,11 +75,33 @@ def _settings() -> Any:
     return frappe.get_single(SETTINGS_DOCTYPE)
 
 
-def materialization_enabled(*, automated: bool = True) -> bool:
+def materialization_enabled(*, automated: bool = True, channel: str = "tiered") -> bool:
     settings = _settings()
-    return bool(settings.materialization_enabled) and (
-        not automated or not bool(settings.automation_paused)
+    if not bool(settings.materialization_enabled):
+        return False
+    if not automated:
+        return True
+    if channel == "splink":
+        return not bool(settings.splink_automation_paused)
+    return not bool(settings.automation_paused)
+
+
+def operational_provenance_allowlist() -> frozenset[str]:
+    """Return the configured classes accepted by future operational consumers."""
+    raw = str(_settings().operational_provenance_allowlist or "")
+    return frozenset(
+        line.strip()
+        for line in raw.replace(",", "\n").splitlines()
+        if line.strip()
     )
+
+
+def operational_decision_allowed(decision_name: str) -> bool:
+    provenance_class = str(
+        frappe.db.get_value(DECISION_DOCTYPE, decision_name, "provenance_class")
+        or ""
+    )
+    return provenance_class in operational_provenance_allowlist()
 
 
 def _policy(snapshot_json: str | dict[str, Any]) -> MatchingPolicy:
@@ -309,6 +344,12 @@ def preview_materialization(
         conflicts.add("invalid_governance_override_origin")
     memberships = _current_memberships(plan.record_ids)
     conflicts.update(_existing_group_conflicts(plan.groups, memberships))
+    if (
+        memberships
+        and not existing_decision
+        and origin in {"Splink Validation", "Splink Automated"}
+    ):
+        conflicts.add("existing_group_overlap")
     exclusion_conflicts = fingerprint_scoped_exclusion_conflicts(
         plan.groups,
         fingerprints,
@@ -384,6 +425,59 @@ def _validate_origin(
         ):
             frappe.throw("The Review Candidate has no final human identity decision")
         return dict(values)
+    elif origin == "Splink Validation":
+        if origin_doctype != "CCD Match Evaluation Pair":
+            frappe.throw("Splink Validation must originate from an Evaluation Pair")
+        values = frappe.db.get_value(
+            origin_doctype,
+            origin_document,
+            ["evaluation_run", "review_status", "final_label", "left_record", "right_record"],
+            as_dict=True,
+        )
+        if (
+            not values
+            or values.review_status not in {"Agreed", "Adjudicated"}
+            or values.final_label not in {"Same", "Different"}
+        ):
+            frappe.throw("The validation pair has no final human identity decision")
+        run = frappe.db.get_value(
+            "CCD Match Evaluation Run",
+            values.evaluation_run,
+            ["run_purpose", "status", "approval_status", "authorization_stale"],
+            as_dict=True,
+        )
+        if (
+            not run
+            or run.run_purpose != "Splink Automatic Validation"
+            or run.status != "Completed"
+            or run.approval_status != "Approved"
+            or run.authorization_stale
+        ):
+            frappe.throw("The Splink validation authorization is not current and approved")
+        return dict(values)
+    elif origin == "Splink Automated":
+        if origin_doctype != "CCD Match Review Candidate":
+            frappe.throw("Splink Automated must originate from a Review Candidate")
+        values = frappe.db.get_value(
+            origin_doctype,
+            origin_document,
+            [
+                "left_record",
+                "right_record",
+                "automation_batch",
+                "automation_status",
+                "automation_validation_run",
+            ],
+            as_dict=True,
+        )
+        if not values or not values.automation_batch:
+            frappe.throw("The candidate is not part of an approved Splink automation batch")
+        batch_status = frappe.db.get_value(
+            "CCD Splink Automation Batch", values.automation_batch, "status"
+        )
+        if batch_status not in {"Approved", "Queued", "Applying", "Applied", "Applied with Exceptions"}:
+            frappe.throw("The Splink automation batch is not approved")
+        return dict(values)
     elif origin == "Component Review":
         if origin_doctype != "CCD Match Component Review":
             frappe.throw("Component Review must originate from a Component Review")
@@ -454,6 +548,49 @@ def _validate_origin_plan(
         expected_type = "Same" if provenance.get("final_label") == "Same" else "Different"
         if decision_type != expected_type:
             frappe.throw("The identity plan contradicts the final Review Candidate label")
+    elif origin in {"Splink Validation", "Splink Automated"}:
+        origin_records = {
+            str(provenance.get("left_record")),
+            str(provenance.get("right_record")),
+        }
+        if origin == "Splink Automated":
+            candidate_names = sorted(
+                {
+                    str(name)
+                    for name in (review_context or {}).get("candidate_names", [])
+                    if str(name)
+                }
+            )
+            if not candidate_names or origin_document not in candidate_names:
+                frappe.throw("Splink Automated requires its complete candidate component")
+            candidates = frappe.get_all(
+                "CCD Match Review Candidate",
+                filters={"name": ["in", candidate_names]},
+                fields=["name", "left_record", "right_record", "automation_batch"],
+                limit_page_length=len(candidate_names),
+            )
+            if (
+                len(candidates) != len(candidate_names)
+                or any(
+                    str(row.automation_batch) != str(provenance.get("automation_batch"))
+                    for row in candidates
+                )
+            ):
+                frappe.throw("The automated component does not match its approved batch")
+            origin_records = {
+                str(record)
+                for row in candidates
+                for record in (row.left_record, row.right_record)
+            }
+        if origin_records != set(plan.record_ids):
+            frappe.throw("The identity plan does not match its frozen Splink pair")
+        expected_type = (
+            "Same"
+            if origin == "Splink Automated" or provenance.get("final_label") == "Same"
+            else "Different"
+        )
+        if decision_type != expected_type:
+            frappe.throw("The identity plan contradicts its governed Splink outcome")
     elif origin == "Component Review":
         final_groups = tuple(
             tuple(str(item) for item in group)
@@ -524,8 +661,9 @@ def materialize_identity(
     is_demonstration: bool = False,
     require_enabled: bool = True,
 ) -> dict[str, Any]:
-    is_automated = origin == "Tiered Evidence"
-    if require_enabled and not materialization_enabled(automated=is_automated):
+    is_automated = origin in {"Tiered Evidence", "Splink Automated"}
+    channel = "splink" if origin == "Splink Automated" else "tiered"
+    if require_enabled and not materialization_enabled(automated=is_automated, channel=channel):
         frappe.throw(
             "Live identity materialization is disabled"
             + (" or automatic materialization is paused" if is_automated else "")
@@ -598,6 +736,7 @@ def materialize_identity(
             "decision_version": 1,
             "decision_type": _decision_type(plan.groups, plan.exclusions),
             "origin": origin,
+            "provenance_class": PROVENANCE_CLASS_BY_ORIGIN[origin],
             "origin_doctype": origin_doctype,
             "origin_document": origin_document,
             "matching_policy": matching_policy or None,
@@ -664,6 +803,7 @@ def materialize_identity(
                     "group_version": 1,
                     "status": "Active",
                     "originating_decision": decision.name,
+                    "provenance_class": PROVENANCE_CLASS_BY_ORIGIN[origin],
                     "group_fingerprint": group_fingerprint,
                     "active_member_count": 0,
                     "same_source_duplicate_warning": int(
@@ -851,6 +991,7 @@ def _current_separate_resolution(ccd_master_name: str) -> dict[str, Any] | None:
         fields=[
             "name",
             "origin",
+            "provenance_class",
             "origin_document",
             "decision_type",
             "policy_version",
@@ -861,12 +1002,62 @@ def _current_separate_resolution(ccd_master_name: str) -> dict[str, Any] | None:
     )
     return {
         "active_exclusion_count": len(current_rows),
-        "decisions": [dict(row) for row in decisions],
+        "decisions": [
+            {
+                **dict(row),
+                "operationally_allowed": (
+                    str(row.provenance_class) in operational_provenance_allowlist()
+                ),
+            }
+            for row in decisions
+        ],
     }
 
 
 def handle_ccd_master_update(doc: Any, method: str | None = None) -> None:
     """Mark only governed identity changes for explicit revalidation."""
+    # Prospective validation is pair-scoped for source-record changes.  Do not
+    # invalidate unrelated pairs or the complete authorization here; policy,
+    # runtime, cutoff, and source-scope drift are handled by the authorization
+    # fingerprint instead.
+    if frappe.db.table_exists("CCD Match Evaluation Pair"):
+        for pair in frappe.get_all(
+            "CCD Match Evaluation Pair",
+            filters={"stale": 0},
+            or_filters={"left_record": doc.name, "right_record": doc.name},
+            fields=["name"],
+            limit_page_length=100_000,
+        ):
+            frappe.db.set_value(
+                "CCD Match Evaluation Pair", pair.name, "stale", 1, update_modified=False
+            )
+    if frappe.db.table_exists("CCD Match Review Candidate"):
+        for candidate in frappe.get_all(
+            "CCD Match Review Candidate",
+            filters={"stale": 0},
+            or_filters={"left_record": doc.name, "right_record": doc.name},
+            fields=["name", "review_status", "materialization_status"],
+            limit_page_length=100_000,
+        ):
+            values: dict[str, Any] = {
+                "stale": 1,
+                "automated_qc_stale": 1,
+                "automation_status": "Stale",
+            }
+            if candidate.review_status not in {"Agreed", "Adjudicated"}:
+                values["review_status"] = "Stale"
+            if candidate.materialization_status not in {
+                "Applied",
+                "Reversed",
+                "Superseded",
+            }:
+                values["materialization_status"] = "Stale"
+            frappe.db.set_value(
+                "CCD Match Review Candidate",
+                candidate.name,
+                values,
+                update_modified=False,
+            )
     if not frappe.db.table_exists(MEMBERSHIP_DOCTYPE):
         return
     memberships = frappe.get_all(
@@ -1009,6 +1200,10 @@ def get_identity_resolution(ccd_master_name: str) -> dict[str, Any]:
         "members": member_payload,
         "decision": decision.name,
         "decision_origin": decision.origin,
+        "decision_provenance_class": decision.provenance_class,
+        "operationally_allowed": (
+            str(decision.provenance_class) in operational_provenance_allowlist()
+        ),
         "decision_type": decision.decision_type,
         "policy_version": decision.policy_version,
         "decided_at": decision.decided_at,

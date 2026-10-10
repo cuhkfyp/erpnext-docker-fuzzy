@@ -723,6 +723,13 @@ def assign_qc_cases(run_name: str, count: int | str | None = None) -> dict[str, 
     requested = int(
         count if count not in (None, "") else settings.qc_cases_per_week or 10
     )
+    from db_connector.api_splink_automation import _weekly_assigned_count
+
+    weekly_remaining = max(20 - _weekly_assigned_count(), 0)
+    if requested > weekly_remaining:
+        frappe.throw(
+            f"Shared weekly review capacity has only {weekly_remaining} pair case(s) remaining"
+        )
     result = _assign_qc_cases(
         run_name, requested, automated=False, advance_cadence=True
     )
@@ -899,17 +906,31 @@ def resolve_qc_investigation(
     # are comparable for precision, so its persisted Canary rollup must be
     # refreshed in the same transaction instead of waiting for the next daily
     # monitor cycle.
-    canary_run = str(
-        frappe.db.get_value(INVESTIGATION_DOCTYPE, investigation_name, "canary_run")
-        or ""
+    investigation_scope = frappe.db.get_value(
+        INVESTIGATION_DOCTYPE,
+        investigation_name,
+        ["automation_channel", "canary_run", "splink_validation_run"],
+        as_dict=True,
     )
-    if not canary_run:
+    if not investigation_scope:
+        frappe.throw("The QC Investigation no longer exists")
+    is_splink = str(investigation_scope.automation_channel or "Recommendation") == "Splink"
+    canary_run = str(investigation_scope.canary_run or "")
+    if not is_splink and not canary_run:
         frappe.throw("The QC Investigation has no Canary Run")
-    _lock_named_rows(RUN_DOCTYPE, (canary_run,))
+    if canary_run:
+        _lock_named_rows(RUN_DOCTYPE, (canary_run,))
     _lock_named_rows(INVESTIGATION_DOCTYPE, (investigation_name,))
     investigation = frappe.get_doc(INVESTIGATION_DOCTYPE, investigation_name)
     if investigation.status == "Resolved":
-        qc_rollup = refresh_qc_monitor(canary_run)
+        if is_splink:
+            from db_connector.api_splink_automation import _refresh_holdout_qc
+
+            qc_rollup = _refresh_holdout_qc(
+                str(investigation.splink_validation_run or "")
+            )
+        else:
+            qc_rollup = refresh_qc_monitor(canary_run)
         frappe.db.commit()
         return {
             "investigation": investigation.name,
@@ -966,7 +987,14 @@ def resolve_qc_investigation(
         },
         update_modified=False,
     )
-    qc_rollup = refresh_qc_monitor(canary_run)
+    if is_splink:
+        from db_connector.api_splink_automation import _refresh_holdout_qc
+
+        qc_rollup = _refresh_holdout_qc(
+            str(investigation.splink_validation_run or "")
+        )
+    else:
+        qc_rollup = refresh_qc_monitor(canary_run)
     frappe.db.commit()
     return {
         "investigation": investigation.name,
@@ -1105,7 +1133,10 @@ def run_qc_monitor() -> dict[str, Any]:
     try:
         settings = frappe.get_single(SETTINGS_DOCTYPE)
         if settings.automatic_qc_assignment_enabled:
-            result["qc_cadence"] = run_qc_cadence()
+            result["qc_cadence"] = {
+                "status": "Delegated to shared Recommendation/Splink capacity",
+                "assigned": 0,
+            }
         runs = frappe.get_all(
             RUN_DOCTYPE,
             filters={
@@ -1124,6 +1155,9 @@ def run_qc_monitor() -> dict[str, Any]:
         from db_connector.api_identity_automation import run_automatic_tiered_cycle
 
         result["automatic_tiered"] = run_automatic_tiered_cycle(scheduled=True)
+        from db_connector.api_splink_automation import monitor_splink_and_run_automatic
+
+        result["splink"] = monitor_splink_and_run_automatic()
         result["status"] = "Completed"
     except Exception as exc:
         frappe.db.rollback()

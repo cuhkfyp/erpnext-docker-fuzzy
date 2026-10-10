@@ -1,0 +1,52 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "batch_type", "validation_run", "queue_run", "matching_policy", "frozen_cutoff", "authorization_fingerprint", "selection_fingerprint", "idempotency_key",
+  "status", "zero_write_preview", "component_count", "candidate_count", "eligible_count", "applied_count", "exception_count", "stale_count",
+  "previewed_at", "previewed_by", "preview_json", "approved_at", "approved_by", "applied_at", "applied_by", "error_summary", "items"
+ ],
+ "fields": [
+  {"fieldname": "batch_type", "fieldtype": "Select", "in_list_view": 1, "label": "Batch Type", "options": "Validation Label Activation\nCapped Holdout Rollout\nScheduled Splink", "read_only": 1, "reqd": 1},
+  {"fieldname": "validation_run", "fieldtype": "Link", "in_list_view": 1, "label": "Authorization Validation", "options": "CCD Match Evaluation Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "queue_run", "fieldtype": "Link", "label": "Frozen Review Queue", "options": "CCD Match Review Queue Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "matching_policy", "fieldtype": "Link", "label": "Matching Policy", "options": "CCD Matching Policy", "read_only": 1, "reqd": 1},
+  {"fieldname": "frozen_cutoff", "fieldtype": "Float", "label": "Frozen Automatic Cutoff", "precision": "12", "read_only": 1, "reqd": 1},
+  {"fieldname": "authorization_fingerprint", "fieldtype": "Data", "label": "Authorization Fingerprint", "read_only": 1, "reqd": 1},
+  {"fieldname": "selection_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Selection Fingerprint", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "idempotency_key", "fieldtype": "Data", "hidden": 1, "label": "Batch Idempotency Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"default": "Previewed", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Previewed\nApproved\nQueued\nApplying\nApplied\nApplied with Exceptions\nFailed\nStale\nSuperseded", "read_only": 1, "reqd": 1},
+  {"default": "1", "fieldname": "zero_write_preview", "fieldtype": "Check", "label": "Zero-Write Preview Completed", "read_only": 1},
+  {"fieldname": "component_count", "fieldtype": "Int", "label": "Components", "read_only": 1},
+  {"fieldname": "candidate_count", "fieldtype": "Int", "label": "Candidates", "read_only": 1},
+  {"fieldname": "eligible_count", "fieldtype": "Int", "label": "Eligible Candidates", "read_only": 1},
+  {"fieldname": "applied_count", "fieldtype": "Int", "label": "Applied Candidates", "read_only": 1},
+  {"fieldname": "exception_count", "fieldtype": "Int", "label": "Exceptions", "read_only": 1},
+  {"fieldname": "stale_count", "fieldtype": "Int", "label": "Stale Candidates", "read_only": 1},
+  {"fieldname": "previewed_at", "fieldtype": "Datetime", "label": "Previewed At", "read_only": 1},
+  {"fieldname": "previewed_by", "fieldtype": "Link", "label": "Previewed By", "options": "User", "read_only": 1},
+  {"fieldname": "preview_json", "fieldtype": "Code", "label": "Frozen Zero-Write Preview", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"fieldname": "approved_at", "fieldtype": "Datetime", "label": "Approved At", "read_only": 1},
+  {"fieldname": "approved_by", "fieldtype": "Link", "label": "Approved By", "options": "User", "read_only": 1},
+  {"fieldname": "applied_at", "fieldtype": "Datetime", "label": "Applied At", "read_only": 1},
+  {"fieldname": "applied_by", "fieldtype": "Link", "label": "Applied By", "options": "User", "read_only": 1},
+  {"fieldname": "error_summary", "fieldtype": "Small Text", "label": "Error Summary", "read_only": 1},
+  {"fieldname": "items", "fieldtype": "Table", "label": "Component-Atomic Items", "options": "CCD Splink Automation Batch Item", "permlevel": 1, "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Splink Automation Batch",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
