@@ -1,11 +1,41 @@
+import json
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from db_connector import api_splink_automation as service
 
 
 class SplinkAutomationServiceTests(unittest.TestCase):
+    def test_system_manager_can_read_frozen_governance_fields(self):
+        schema_path = (
+            Path(__file__).resolve().parents[1]
+            / "db_connector"
+            / "doctype"
+            / "ccd_match_evaluation_run"
+            / "ccd_match_evaluation_run.json"
+        )
+        permissions = json.loads(schema_path.read_text())["permissions"]
+        self.assertTrue(
+            any(
+                row.get("role") == "System Manager"
+                and row.get("permlevel") == 2
+                and row.get("read") == 1
+                for row in permissions
+            )
+        )
+        self.assertFalse(
+            any(
+                row.get("role") in {
+                    "CCD Match Reviewer",
+                    "CCD Match Sensitive Reviewer",
+                }
+                and row.get("permlevel") == 2
+                for row in permissions
+            )
+        )
+
     def test_replacement_queue_requires_exact_fitted_model_runtime_and_scope(self):
         def queue(name, *, runtime_seed=19, source="DHCE"):
             return types.SimpleNamespace(
