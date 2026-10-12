@@ -1632,27 +1632,29 @@ def run_shared_review_capacity() -> dict[str, Any]:
         )
     mandatory_assigned = len(rec_names) + len(splink_names)
     optional_limit = max(available - mandatory_assigned, 0)
-    optional_rows = frappe.get_all(
-        CANDIDATE_DOCTYPE,
-        filters={
-            "stale": 0,
-            "automation_reserved": 0,
-            "assigned_review_batch": ["is", "not set"],
-            "assigned_at": ["is", "not set"],
-            "review_status": [
-                "in",
-                [
-                    "Unreviewed",
-                    "Partially Reviewed",
-                    "Positive Confirmation Required",
-                    "Needs Adjudication",
+    optional_rows = []
+    if optional_limit:
+        optional_rows = frappe.get_all(
+            CANDIDATE_DOCTYPE,
+            filters={
+                "stale": 0,
+                "automation_reserved": 0,
+                "assigned_review_batch": ["is", "not set"],
+                "assigned_at": ["is", "not set"],
+                "review_status": [
+                    "in",
+                    [
+                        "Unreviewed",
+                        "Partially Reviewed",
+                        "Positive Confirmation Required",
+                        "Needs Adjudication",
+                    ],
                 ],
-            ],
-        },
-        fields=["name"],
-        order_by="priority_rank asc, name asc",
-        limit=optional_limit,
-    )
+            },
+            fields=["name"],
+            order_by="priority_rank asc, name asc",
+            limit=optional_limit,
+        )
     optional_names = [str(row.name) for row in optional_rows]
     for name in optional_names:
         frappe.db.set_value(

@@ -217,6 +217,47 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         self.assertEqual(candidate_values["automation_reserved"], 1)
         self.assertEqual(candidate_values["automation_component_fingerprint"], "component")
 
+    def test_shared_capacity_skips_optional_query_when_mandatory_work_fills_cap(self):
+        settings = types.SimpleNamespace(
+            automatic_qc_assignment_enabled=1,
+            qc_sla_days=14,
+        )
+        recommendations = [
+            types.SimpleNamespace(name=f"recommendation-{index}", recommendation_key=str(index))
+            for index in range(2)
+        ]
+        splink = [
+            types.SimpleNamespace(name=f"splink-{index}", pair_key=str(index))
+            for index in range(18)
+        ]
+        database = MagicMock()
+        database.count.side_effect = [0, 46]
+        with patch.object(service.frappe, "db", database), patch.object(
+            service.frappe, "get_single", return_value=settings
+        ), patch.object(
+            service.frappe, "get_all"
+        ) as get_all, patch.object(
+            service, "_weekly_assigned_count", return_value=0
+        ), patch.object(
+            service, "_mandatory_unassigned", return_value=(recommendations, splink)
+        ), patch.object(
+            service, "_week_start", return_value="2026-10-12"
+        ), patch.object(
+            service, "now_datetime", return_value="2026-10-12 12:54:55"
+        ), patch.object(
+            service, "add_days", return_value="2026-10-26 12:54:55"
+        ):
+            result = service.run_shared_review_capacity()
+
+        self.assertEqual(result["assigned"], 20)
+        self.assertEqual(len(result["recommendation_qc"]), 2)
+        self.assertEqual(len(result["splink_qc"]), 18)
+        self.assertEqual(result["optional_splink"], [])
+        self.assertEqual(result["remaining_capacity"], 0)
+        get_all.assert_not_called()
+        self.assertEqual(database.set_value.call_count, 20)
+        database.commit.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()
