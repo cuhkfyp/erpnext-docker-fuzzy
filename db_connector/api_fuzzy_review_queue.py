@@ -977,6 +977,7 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
     _require_reviewer()
     candidate = frappe.get_doc(CANDIDATE_DOCTYPE, candidate_name)
     is_manager = "System Manager" in set(frappe.get_roles())
+    blinded_automated_qc = bool(candidate.automated_qc_assigned_at)
     run = frappe.get_doc(RUN_DOCTYPE, candidate.queue_run)
     policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
     left_exists = bool(frappe.db.exists("CCD Master", candidate.left_record))
@@ -999,6 +1000,7 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
             "right": {"alias": "Right", "source": candidate.right_source},
             "attributes": [],
             "sensitive_values_visible": False,
+            "blinded_automated_qc": blinded_automated_qc,
             "stale": True,
             "historical_source_retired": True,
             "historical_message": "Historical source retired",
@@ -1036,8 +1038,7 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
     # including a manager acting as adjudicator.  Managers retain separate
     # provenance/score visibility but do not receive direct CCD identifiers in
     # this review payload.
-    automated_qc = bool(candidate.automated_qc_assigned_at)
-    sensitive = _has_sensitive_access() and not automated_qc
+    sensitive = _has_sensitive_access() and not blinded_automated_qc
     attributes = []
     for attribute in policy.attributes():
         item = evidence.get(attribute)
@@ -1069,6 +1070,7 @@ def get_candidate_evidence(candidate_name: str) -> dict[str, Any]:
         "right": {"alias": "Right", "source": candidate.right_source},
         "attributes": attributes,
         "sensitive_values_visible": sensitive,
+        "blinded_automated_qc": blinded_automated_qc,
         "stale": stale,
         "review_status": (
             candidate.review_status

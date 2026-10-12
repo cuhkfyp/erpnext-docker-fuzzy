@@ -58,9 +58,11 @@ function comparison_label(value) {
 }
 
 function render_candidate_evidence(frm, payload) {
-	const privacy = payload.sensitive_values_visible
-		? '<div class="alert alert-warning">' + __("Sensitive values are visible because your role permits them.") + "</div>"
-		: '<div class="alert alert-info">' + __("Identity values are masked. A Sensitive Reviewer or System Manager can see the full permitted values.") + "</div>";
+	const privacy = payload.blinded_automated_qc
+		? '<div class="alert alert-info">' + __("This is blinded automated Splink QC. Identity values remain masked for every reviewer, including Sensitive Reviewers and System Managers. Comparison results are computed server-side from the governed evidence.") + "</div>"
+		: payload.sensitive_values_visible
+			? '<div class="alert alert-warning">' + __("Sensitive values are visible because your role permits them.") + "</div>"
+			: '<div class="alert alert-info">' + __("Identity values are masked. A Sensitive Reviewer or System Manager can see the full permitted values.") + "</div>";
 	const purpose = '<div class="alert alert-secondary"><b>' + __("Model tier: Review") + "</b> — " +
 		__("This pair is prioritized by Splink for human review only. It is not an automatic High match and this screen cannot link or merge records.") + "</div>";
 	const stale = payload.stale

@@ -162,6 +162,25 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(captured["u_random_max_pairs"], 123_456)
         self.assertEqual(captured["u_random_seed"], 7)
 
+    def test_automated_qc_banner_explains_manager_masking(self):
+        source = (
+            Path(__file__).parents[1]
+            / "db_connector"
+            / "doctype"
+            / "ccd_match_review_candidate"
+            / "ccd_match_review_candidate.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("payload.blinded_automated_qc", source)
+        self.assertIn(
+            "Identity values remain masked for every reviewer, including Sensitive Reviewers and System Managers.",
+            source,
+        )
+        self.assertIn(
+            '"blinded_automated_qc": blinded_automated_qc',
+            Path(self.module.__file__).read_text(encoding="utf-8"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
