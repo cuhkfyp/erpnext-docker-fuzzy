@@ -8,6 +8,16 @@ from db_connector import api_splink_automation as service
 
 
 class SplinkAutomationServiceTests(unittest.TestCase):
+    def setUp(self):
+        flags = patch.object(
+            service.frappe.local,
+            "flags",
+            types.SimpleNamespace(in_test=True),
+            create=True,
+        )
+        flags.start()
+        self.addCleanup(flags.stop)
+
     def test_system_manager_can_read_frozen_governance_fields(self):
         schema_path = (
             Path(__file__).resolve().parents[1]
@@ -35,6 +45,55 @@ class SplinkAutomationServiceTests(unittest.TestCase):
                 for row in permissions
             )
         )
+
+    def test_identity_event_schema_accepts_retry_audit_event(self):
+        schema_path = (
+            Path(__file__).resolve().parents[1]
+            / "db_connector"
+            / "doctype"
+            / "ccd_identity_event"
+            / "ccd_identity_event.json"
+        )
+        schema = json.loads(schema_path.read_text())
+        event_field = next(
+            field for field in schema["fields"] if field["fieldname"] == "event_type"
+        )
+        self.assertIn("Retry", event_field["options"].splitlines())
+
+    def test_splink_retry_replaces_the_previous_failed_queue_job(self):
+        batch = types.SimpleNamespace(
+            name="failed-batch",
+            status="Failed",
+            validation_run="validation-run",
+            authorization_fingerprint="authorization",
+            batch_type="Validation Label Activation",
+        )
+        run = types.SimpleNamespace(authorization_fingerprint="authorization")
+        database = MagicMock()
+        with patch.object(service.frappe, "db", database), patch.object(
+            service.frappe, "get_roles", return_value=["System Manager"]
+        ), patch.object(
+            service.frappe, "get_doc", side_effect=[batch, run]
+        ), patch.object(
+            service.frappe, "enqueue"
+        ) as enqueue, patch.object(
+            service.frappe, "session", types.SimpleNamespace(user="manager@example.com")
+        ), patch.object(
+            service, "_lock_rows"
+        ), patch.object(
+            service, "_authorization_current", return_value=(True, [])
+        ), patch.object(
+            service, "_append_event", return_value="retry-event"
+        ):
+            result = service.retry_splink_batch(
+                batch.name, "materialization enabled", batch.name
+            )
+        self.assertEqual(result, {"batch": batch.name, "status": "Queued"})
+        self.assertTrue(enqueue.call_args.kwargs["deduplicate"])
+        self.assertEqual(
+            enqueue.call_args.kwargs["job_id"], "ccd-splink-batch-failed-batch"
+        )
+        database.commit.assert_called_once_with()
 
     def test_replacement_queue_requires_exact_fitted_model_runtime_and_scope(self):
         def queue(name, *, runtime_seed=19, source="DHCE"):

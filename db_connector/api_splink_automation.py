@@ -1024,6 +1024,7 @@ def approve_and_queue_splink_batch(
         timeout=7_200,
         enqueue_after_commit=True,
         job_id=f"ccd-splink-batch-{batch.name}",
+        deduplicate=True,
         batch_name=batch.name,
         requested_by=frappe.session.user,
     )
@@ -1076,6 +1077,7 @@ def retry_splink_batch(
         timeout=7_200,
         enqueue_after_commit=True,
         job_id=f"ccd-splink-batch-{batch.name}",
+        deduplicate=True,
         batch_name=batch.name,
         requested_by=frappe.session.user,
     )
