@@ -1,9 +1,11 @@
 import json
 import types
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from db_connector import api_identity_automation as tiered_automation
 from db_connector import api_splink_automation as service
 
 
@@ -246,6 +248,10 @@ class SplinkAutomationServiceTests(unittest.TestCase):
             service, "now_datetime", return_value="2026-10-12 12:54:55"
         ), patch.object(
             service, "add_days", return_value="2026-10-26 12:54:55"
+        ), patch.object(
+            service,
+            "_advance_shared_recommendation_cadence",
+            return_value={"status": "Not Configured", "advanced": False},
         ):
             result = service.run_shared_review_capacity()
 
@@ -257,6 +263,161 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         get_all.assert_not_called()
         self.assertEqual(database.set_value.call_count, 20)
         database.commit.assert_called_once_with()
+
+    def test_due_shared_cadence_advances_when_weekly_capacity_is_exhausted(self):
+        settings = types.SimpleNamespace(
+            automatic_tiered_canary="canary-run",
+            qc_assignment_interval_days=7,
+        )
+        run = types.SimpleNamespace(
+            name="canary-run",
+            qc_next_assignment_at=datetime(2026, 10, 11, 0, 1, 44),
+            qc_assignment_cycle_count=4,
+        )
+        current = datetime(2026, 10, 13, 10, 30, 0)
+        expected_next = datetime(2026, 10, 20, 10, 30, 0)
+        database = MagicMock()
+        database.exists.return_value = True
+        with patch.object(service.frappe, "db", database), patch.object(
+            service.frappe, "get_doc", return_value=run
+        ), patch.object(service, "_lock_rows") as lock_rows, patch.object(
+            service, "_append_event", return_value="cadence-event"
+        ) as append_event:
+            result = service._advance_shared_recommendation_cadence(
+                settings,
+                now=current,
+                recommendation_names=(),
+                already_used=48,
+            )
+
+        self.assertTrue(result["advanced"])
+        self.assertEqual(result["status"], "Advanced")
+        self.assertEqual(result["assigned"], 0)
+        self.assertEqual(result["next_assignment_at"], expected_next)
+        self.assertEqual(result["assignment_cycle_count"], 5)
+        lock_rows.assert_called_once_with(service.CANARY_RUN_DOCTYPE, ("canary-run",))
+        database.set_value.assert_called_once_with(
+            service.CANARY_RUN_DOCTYPE,
+            "canary-run",
+            {
+                "qc_last_assignment_at": current,
+                "qc_next_assignment_at": expected_next,
+                "qc_assignment_cycle_count": 5,
+            },
+            update_modified=False,
+        )
+        metadata = append_event.call_args.kwargs["metadata"]
+        self.assertTrue(metadata["capacity_exhausted"])
+        self.assertEqual(metadata["assigned"], 0)
+
+    def test_shared_capacity_refreshes_due_cadence_with_no_weekly_slots(self):
+        settings = types.SimpleNamespace(
+            automatic_qc_assignment_enabled=1,
+            automatic_tiered_canary="canary-run",
+            qc_assignment_interval_days=7,
+            qc_sla_days=14,
+        )
+        run = types.SimpleNamespace(
+            name="canary-run",
+            qc_next_assignment_at=datetime(2026, 10, 11, 0, 1, 44),
+            qc_assignment_cycle_count=4,
+        )
+        current = datetime(2026, 10, 13, 10, 30, 0)
+        database = MagicMock()
+        database.exists.return_value = True
+        with patch.object(service.frappe, "db", database), patch.object(
+            service.frappe, "get_single", return_value=settings
+        ), patch.object(
+            service.frappe, "get_all"
+        ) as get_all, patch.object(
+            service.frappe, "get_doc", return_value=run
+        ), patch.object(
+            service, "_weekly_assigned_count", return_value=48
+        ), patch.object(
+            service, "_mandatory_unassigned", return_value=([], [])
+        ), patch.object(
+            service, "_week_start", return_value=datetime(2026, 10, 12)
+        ), patch.object(
+            service, "now_datetime", return_value=current
+        ), patch.object(service, "_lock_rows"), patch.object(
+            service, "_append_event", return_value="cadence-event"
+        ):
+            result = service.run_shared_review_capacity()
+
+        self.assertEqual(result["status"], "No Work")
+        self.assertEqual(result["assigned"], 0)
+        self.assertEqual(result["remaining_capacity"], 0)
+        self.assertTrue(result["recommendation_cadence"]["advanced"])
+        self.assertEqual(
+            result["recommendation_cadence"]["next_assignment_at"],
+            datetime(2026, 10, 20, 10, 30, 0),
+        )
+        get_all.assert_not_called()
+        database.commit.assert_called_once_with()
+
+    def test_shared_cadence_does_not_move_before_it_is_due(self):
+        settings = types.SimpleNamespace(
+            automatic_tiered_canary="canary-run",
+            qc_assignment_interval_days=7,
+        )
+        next_at = datetime(2026, 10, 20, 10, 30, 0)
+        run = types.SimpleNamespace(
+            name="canary-run",
+            qc_next_assignment_at=next_at,
+            qc_assignment_cycle_count=5,
+        )
+        database = MagicMock()
+        database.exists.return_value = True
+        with patch.object(service.frappe, "db", database), patch.object(
+            service.frappe, "get_doc", return_value=run
+        ), patch.object(service, "_lock_rows"), patch.object(
+            service, "_append_event"
+        ) as append_event:
+            result = service._advance_shared_recommendation_cadence(
+                settings,
+                now=datetime(2026, 10, 13, 10, 30, 0),
+                recommendation_names=("recommendation-1",),
+                already_used=2,
+            )
+
+        self.assertFalse(result["advanced"])
+        self.assertEqual(result["status"], "Not Due")
+        self.assertEqual(result["next_assignment_at"], next_at)
+        database.set_value.assert_not_called()
+        append_event.assert_not_called()
+
+    def test_current_shared_qc_cadence_does_not_block_tiered_enablement(self):
+        settings = types.SimpleNamespace(
+            automatic_tiered_enabled=0,
+            materialization_enabled=1,
+            automation_paused=0,
+            automatic_qc_assignment_enabled=1,
+            automatic_tiered_canary="canary-run",
+            automatic_tiered_policy="pilot-1.8",
+            automatic_tiered_authorization_event=None,
+            automatic_tiered_components_per_run=2,
+        )
+        canary = types.SimpleNamespace(
+            status="Active",
+            matching_policy="pilot-1.8",
+            qc_last_assignment_at=datetime(2026, 10, 13, 10, 30, 0),
+            qc_next_assignment_at=datetime(2026, 10, 20, 10, 30, 0),
+            qc_overdue_count=0,
+        )
+        database = MagicMock()
+        database.get_value.side_effect = ["Pilot", canary]
+        database.count.return_value = 0
+        with patch.object(tiered_automation.frappe, "db", database), patch.object(
+            tiered_automation,
+            "now_datetime",
+            return_value=datetime(2026, 10, 13, 10, 31, 0),
+        ):
+            blockers = tiered_automation._configuration_blockers(
+                settings, require_enabled=False
+            )
+
+        self.assertNotIn("qc_assignment_cadence_overdue", blockers)
+        self.assertEqual(blockers, ["automation_authorization_event_missing"])
 
 
 if __name__ == "__main__":

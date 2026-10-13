@@ -13,7 +13,7 @@ from collections import Counter
 from typing import Any, Iterable
 
 import frappe
-from frappe.utils import add_days, now_datetime
+from frappe.utils import add_days, get_datetime, now_datetime
 
 from db_connector.api_identity_resolution import (
     _append_event,
@@ -22,7 +22,11 @@ from db_connector.api_identity_resolution import (
     materialize_identity,
     preview_materialization,
 )
-from db_connector.fuzzy_matching.automation import current_shared_group, rolling_qc_summary
+from db_connector.fuzzy_matching.automation import (
+    cadence_due,
+    current_shared_group,
+    rolling_qc_summary,
+)
 from db_connector.fuzzy_matching.identity import expected_identity_fingerprints
 from db_connector.fuzzy_matching.splink_automation import (
     FROZEN_AUTOMATIC_CUTOFF,
@@ -50,6 +54,7 @@ ITEM_DOCTYPE = "CCD Splink Automation Batch Item"
 SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
 INVESTIGATION_DOCTYPE = "CCD Identity QC Investigation"
 RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
+CANARY_RUN_DOCTYPE = "CCD Match Canary Run"
 GROUP_DOCTYPE = "CCD Identity Group"
 FINAL_STATUSES = {"Agreed", "Adjudicated"}
 EXPECTED_ULTRA_HIGH_EDGES = 402
@@ -1588,6 +1593,86 @@ def _deterministic_names(channel: str, rows: list[Any], limit: int) -> list[str]
     ]
 
 
+def _advance_shared_recommendation_cadence(
+    settings: Any,
+    *,
+    now: Any,
+    recommendation_names: Iterable[str],
+    already_used: int,
+) -> dict[str, Any]:
+    """Record a due Recommendation cadence handled by the shared allocator.
+
+    The cadence represents a governed allocation attempt, so it advances even
+    when the shared weekly capacity is already exhausted and no new case can be
+    assigned. Actual overdue review cases remain a separate safety gate.
+    """
+    run_name = str(getattr(settings, "automatic_tiered_canary", "") or "")
+    if not run_name:
+        return {"status": "Not Configured", "run": "", "advanced": False}
+    if not frappe.db.exists(CANARY_RUN_DOCTYPE, run_name):
+        return {"status": "Canary Missing", "run": run_name, "advanced": False}
+
+    _lock_rows(CANARY_RUN_DOCTYPE, (run_name,))
+    run = frappe.get_doc(CANARY_RUN_DOCTYPE, run_name)
+    current = get_datetime(now)
+    next_at = (
+        get_datetime(run.qc_next_assignment_at)
+        if run.qc_next_assignment_at
+        else None
+    )
+    if not cadence_due(next_at, current):
+        return {
+            "status": "Not Due",
+            "run": run_name,
+            "advanced": False,
+            "next_assignment_at": next_at,
+        }
+
+    interval = max(int(getattr(settings, "qc_assignment_interval_days", 7) or 7), 1)
+    next_assignment_at = add_days(current, interval)
+    cycle = int(run.qc_assignment_cycle_count or 0) + 1
+    assigned = tuple(sorted({str(name) for name in recommendation_names if name}))
+    frappe.db.set_value(
+        CANARY_RUN_DOCTYPE,
+        run_name,
+        {
+            "qc_last_assignment_at": current,
+            "qc_next_assignment_at": next_assignment_at,
+            "qc_assignment_cycle_count": cycle,
+        },
+        update_modified=False,
+    )
+    event = _append_event(
+        entity_doctype=CANARY_RUN_DOCTYPE,
+        entity_name=run_name,
+        event_type="QC Assign",
+        reason="shared_recommendation_splink_qc_cadence",
+        nonce=hashlib.sha256(
+            f"{run_name}\x1f{next_at or 'initial'}\x1fshared_qc_cadence".encode()
+        ).hexdigest(),
+        from_status="Due",
+        to_status="Scheduled",
+        metadata={
+            "assigned": len(assigned),
+            "recommendations": list(assigned),
+            "already_used": int(already_used),
+            "weekly_capacity": WEEKLY_PAIR_CAPACITY,
+            "capacity_exhausted": int(already_used) >= WEEKLY_PAIR_CAPACITY,
+            "next_assignment_at": next_assignment_at,
+        },
+    )
+    return {
+        "status": "Advanced",
+        "run": run_name,
+        "advanced": True,
+        "assigned": len(assigned),
+        "assignment_event": event,
+        "last_assignment_at": current,
+        "next_assignment_at": next_assignment_at,
+        "assignment_cycle_count": cycle,
+    }
+
+
 def run_shared_review_capacity() -> dict[str, Any]:
     """Assign mandatory QC first within one hard 20-pair weekly capacity."""
     settings = frappe.get_single(SETTINGS_DOCTYPE)
@@ -1663,6 +1748,21 @@ def run_shared_review_capacity() -> dict[str, Any]:
             {"assigned_at": now, "due_at": due},
             update_modified=False,
         )
+    configured_canary = str(getattr(settings, "automatic_tiered_canary", "") or "")
+    recommendation_canaries = {
+        str(row.name): str(getattr(row, "canary_run", "") or "")
+        for row in recommendations
+    }
+    recommendation_cadence = _advance_shared_recommendation_cadence(
+        settings,
+        now=now,
+        recommendation_names=(
+            name
+            for name in rec_names
+            if recommendation_canaries.get(name) == configured_canary
+        ),
+        already_used=used,
+    )
     assigned = mandatory_assigned + len(optional_names)
     frappe.db.commit()
     return {
@@ -1674,6 +1774,7 @@ def run_shared_review_capacity() -> dict[str, Any]:
         "recommendation_qc": rec_names,
         "splink_qc": splink_names,
         "optional_splink": optional_names,
+        "recommendation_cadence": recommendation_cadence,
         "remaining_capacity": available - assigned,
     }
 
