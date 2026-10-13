@@ -2014,7 +2014,152 @@ def _scheduled_candidates(run: Any, queue_run: str) -> list[dict[str, Any]]:
     ]
 
 
-def run_automatic_splink_cycle() -> dict[str, Any]:
+def _automatic_splink_authorization_blockers(settings: Any, run: Any) -> list[str]:
+    blockers = list(_holdout_acceptance_blockers(run))
+    if run.second_management_approval_status != "Approved":
+        blockers.append("second_management_approval_missing")
+    current, reasons = _authorization_current(run)
+    if not current:
+        blockers.extend(reasons)
+    if str(settings.authorized_splink_queue or "") != str(
+        run.validation_queue_run or ""
+    ):
+        blockers.append("authorized_queue_mismatch")
+    if str(settings.authorized_splink_policy or "") != str(run.matching_policy or ""):
+        blockers.append("authorized_policy_mismatch")
+    if abs(
+        float(settings.authorized_splink_cutoff or 0)
+        - float(run.frozen_automatic_cutoff or 0)
+    ) > 1e-12:
+        blockers.append("authorized_cutoff_mismatch")
+    return sorted(set(blockers))
+
+
+def _automatic_splink_selection(settings: Any, run: Any) -> dict[str, Any]:
+    maximum_size = min(max(2, int(settings.maximum_splink_component_size or 2)), 100)
+    component_limit = min(
+        max(int(settings.automatic_splink_components_per_run or 10), 1), 100
+    )
+    active_queue = _active_queue_for_run(run)
+    rows = _scheduled_candidates(run, str(active_queue.name))
+    metadata = component_metadata(rows)
+    incomplete_fingerprints = {
+        str(details["component_fingerprint"])
+        for details in metadata.values()
+        if not details["complete_clique"]
+    }
+    all_complete = automatic_components(rows, maximum_size=100)
+    eligible = tuple(
+        component
+        for component in all_complete
+        if len(component.records) <= maximum_size
+    )
+    selected = eligible[:component_limit]
+
+    def size_counts(components: Iterable[Any]) -> dict[str, int]:
+        return {
+            str(size): count
+            for size, count in sorted(
+                Counter(len(component.records) for component in components).items()
+            )
+        }
+
+    return {
+        "active_queue": active_queue,
+        "rows": rows,
+        "components": selected,
+        "summary": {
+            "queue_run": str(active_queue.name),
+            "maximum_component_size": maximum_size,
+            "component_limit": component_limit,
+            "candidate_count": len(rows),
+            "complete_component_count": len(all_complete),
+            "eligible_component_count": len(eligible),
+            "selected_component_count": len(selected),
+            "selected_candidate_count": sum(
+                len(component.candidate_names) for component in selected
+            ),
+            "incomplete_component_count": len(incomplete_fingerprints),
+            "excluded_above_maximum_count": sum(
+                len(component.records) > maximum_size
+                for component in all_complete
+            ),
+            "available_complete_size_counts": size_counts(all_complete),
+            "eligible_size_counts": size_counts(eligible),
+            "selected_size_counts": size_counts(selected),
+            "selected_component_details": [
+                {
+                    "component_fingerprint": component.fingerprint,
+                    "component_size": len(component.records),
+                    "candidate_count": len(component.candidate_names),
+                    "complete_clique": component.complete_clique,
+                    "candidate_names": list(component.candidate_names),
+                }
+                for component in selected
+            ],
+        },
+    }
+
+
+@frappe.whitelist()
+def preview_automatic_splink_cycle() -> dict[str, Any]:
+    """Return the current bounded Splink plan without reserving or writing it."""
+    _require_manager()
+    settings = frappe.get_single(SETTINGS_DOCTYPE)
+    operational_blockers = []
+    if not settings.automatic_splink_enabled:
+        operational_blockers.append("automatic_splink_disabled")
+    if not settings.materialization_enabled:
+        operational_blockers.append("master_materialization_disabled")
+    if not settings.automatic_qc_assignment_enabled:
+        operational_blockers.append("automatic_qc_assignment_disabled")
+    if settings.splink_automation_paused:
+        operational_blockers.append("splink_automation_paused")
+
+    run_name = str(settings.authorized_splink_validation_run or "")
+    summary: dict[str, Any] = {
+        "queue_run": "",
+        "maximum_component_size": min(
+            max(2, int(settings.maximum_splink_component_size or 2)), 100
+        ),
+        "component_limit": min(
+            max(int(settings.automatic_splink_components_per_run or 10), 1), 100
+        ),
+        "candidate_count": 0,
+        "complete_component_count": 0,
+        "eligible_component_count": 0,
+        "selected_component_count": 0,
+        "selected_candidate_count": 0,
+        "incomplete_component_count": 0,
+        "excluded_above_maximum_count": 0,
+        "available_complete_size_counts": {},
+        "eligible_size_counts": {},
+        "selected_size_counts": {},
+        "selected_component_details": [],
+    }
+    authorization_blockers: list[str] = []
+    if not run_name or not frappe.db.exists(RUN_DOCTYPE, run_name):
+        authorization_blockers.append("authorized_validation_run_missing")
+    else:
+        run = frappe.get_doc(RUN_DOCTYPE, run_name)
+        authorization_blockers = _automatic_splink_authorization_blockers(
+            settings, run
+        )
+        if not authorization_blockers:
+            summary = _automatic_splink_selection(settings, run)["summary"]
+
+    blockers = sorted(set(operational_blockers + authorization_blockers))
+    return {
+        "validation_run": run_name,
+        "zero_write": True,
+        **summary,
+        "authorization_blockers": authorization_blockers,
+        "operational_blockers": blockers,
+        "would_queue_now": not blockers and bool(summary["selected_component_count"]),
+    }
+
+
+def run_automatic_splink_cycle(*, requested_by: str = "Administrator") -> dict[str, Any]:
     """Run after the deterministic Recommendation cycle against refreshed identity state."""
     settings = frappe.get_single(SETTINGS_DOCTYPE)
     if not settings.automatic_splink_enabled:
@@ -2022,21 +2167,18 @@ def run_automatic_splink_cycle() -> dict[str, Any]:
     if settings.splink_automation_paused:
         return {"status": "Paused", "selected_components": 0, "reason": settings.splink_pause_reason}
     run = frappe.get_doc(RUN_DOCTYPE, settings.authorized_splink_validation_run)
-    blockers = _holdout_acceptance_blockers(run)
-    current, reasons = _authorization_current(run)
-    if not current:
-        blockers.extend(reasons)
+    blockers = _automatic_splink_authorization_blockers(settings, run)
     if blockers:
         pause = _pause_splink("scheduled_preflight:" + ",".join(blockers))
         frappe.db.commit()
         return {"status": "Paused", "selected_components": 0, "blockers": blockers, **pause}
-    maximum_size = max(2, int(settings.maximum_splink_component_size or 2))
-    component_limit = min(max(int(settings.automatic_splink_components_per_run or 10), 1), 100)
-    active_queue = _active_queue_for_run(run)
-    rows = _scheduled_candidates(run, str(active_queue.name))
-    components = automatic_components(rows, maximum_size=maximum_size)[:component_limit]
+    selection = _automatic_splink_selection(settings, run)
+    active_queue = selection["active_queue"]
+    rows = selection["rows"]
+    components = selection["components"]
+    summary = selection["summary"]
     if not components:
-        return {"status": "No Eligible Work", "selected_components": 0}
+        return {"status": "No Eligible Work", "selected_components": 0, **summary}
     by_name = {str(row["name"]): row for row in rows}
     planned = []
     for component in components:
@@ -2061,7 +2203,11 @@ def run_automatic_splink_cycle() -> dict[str, Any]:
         queue_run=str(active_queue.name),
     )
     batch.db_set(
-        {"status": "Queued", "approved_at": now_datetime(), "approved_by": "Administrator"},
+        {
+            "status": "Queued",
+            "approved_at": now_datetime(),
+            "approved_by": requested_by,
+        },
         update_modified=False,
     )
     frappe.enqueue(
@@ -2071,10 +2217,22 @@ def run_automatic_splink_cycle() -> dict[str, Any]:
         enqueue_after_commit=True,
         job_id=f"ccd-splink-batch-{batch.name}",
         batch_name=batch.name,
-        requested_by="Administrator",
+        requested_by=requested_by,
     )
     frappe.db.commit()
-    return {"status": "Queued", "batch": batch.name, "selected_components": len(components)}
+    return {
+        "status": "Queued",
+        "batch": batch.name,
+        "selected_components": len(components),
+        **summary,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def run_automatic_splink_now() -> dict[str, Any]:
+    """Queue one manager-requested Splink cycle; materialization stays backgrounded."""
+    _require_manager()
+    return run_automatic_splink_cycle(requested_by=str(frappe.session.user))
 
 
 def monitor_splink_and_run_automatic() -> dict[str, Any]:

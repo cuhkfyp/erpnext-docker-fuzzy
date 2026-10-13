@@ -419,6 +419,60 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         self.assertNotIn("qc_assignment_cadence_overdue", blockers)
         self.assertEqual(blockers, ["automation_authorization_event_missing"])
 
+    def test_automatic_splink_selection_reports_complete_triple(self):
+        settings = types.SimpleNamespace(
+            maximum_splink_component_size=3,
+            automatic_splink_components_per_run=10,
+        )
+        rows = [
+            {"name": "AB", "left_record": "A", "right_record": "B"},
+            {"name": "AC", "left_record": "A", "right_record": "C"},
+            {"name": "BC", "left_record": "B", "right_record": "C"},
+            {"name": "DE", "left_record": "D", "right_record": "E"},
+            {"name": "EF", "left_record": "E", "right_record": "F"},
+        ]
+        queue = types.SimpleNamespace(name="ready-queue")
+        with patch.object(
+            service, "_active_queue_for_run", return_value=queue
+        ), patch.object(service, "_scheduled_candidates", return_value=rows):
+            selection = service._automatic_splink_selection(
+                settings, types.SimpleNamespace(name="validation-run")
+            )
+
+        summary = selection["summary"]
+        self.assertEqual(summary["maximum_component_size"], 3)
+        self.assertEqual(summary["available_complete_size_counts"], {"3": 1})
+        self.assertEqual(summary["selected_size_counts"], {"3": 1})
+        self.assertEqual(summary["selected_component_count"], 1)
+        self.assertEqual(summary["selected_candidate_count"], 3)
+        self.assertEqual(summary["incomplete_component_count"], 1)
+
+    def test_manual_splink_cycle_uses_requesting_manager(self):
+        with patch.object(service, "_require_manager") as require_manager, patch.object(
+            service.frappe,
+            "session",
+            types.SimpleNamespace(user="manager@example.com"),
+        ), patch.object(
+            service,
+            "run_automatic_splink_cycle",
+            return_value={"status": "Queued", "batch": "batch-1"},
+        ) as run_cycle:
+            result = service.run_automatic_splink_now()
+
+        require_manager.assert_called_once_with()
+        run_cycle.assert_called_once_with(requested_by="manager@example.com")
+        self.assertEqual(result["batch"], "batch-1")
+
+    def test_desk_exposes_splink_preview_and_manual_cycle(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "db_connector/doctype/ccd_identity_resolution_settings/ccd_identity_resolution_settings.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Preview Automatic Splink Run", source)
+        self.assertIn("Run One Automatic Splink Cycle Now", source)
+        self.assertIn("preview_automatic_splink_cycle", source)
+        self.assertIn("run_automatic_splink_now", source)
+
 
 if __name__ == "__main__":
     unittest.main()

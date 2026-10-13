@@ -62,6 +62,84 @@ function add_splink_control(frm) {
 		}),
 		breakerAction,
 	), __("Splink Automation"));
+	frm.add_custom_button(
+		__("Preview Automatic Splink Run"),
+		() => preview_automatic_splink(frm),
+		__("Splink Automation"),
+	);
+	if (frm.doc.automatic_splink_enabled) {
+		frm.add_custom_button(
+			__("Run One Automatic Splink Cycle Now"),
+			() => frappe.confirm(
+				__("Queue one bounded automatic Splink cycle using the current component-size limit and fresh safety checks?"),
+				() => run_automatic_splink_now(frm),
+			),
+			__("Splink Automation"),
+		);
+	}
+}
+
+function preview_automatic_splink(frm) {
+	frappe.call({
+		method: "db_connector.api_splink_automation.preview_automatic_splink_cycle",
+		freeze: true,
+		callback(response) {
+			const result = response.message || {};
+			const blockers = result.operational_blockers || [];
+			frappe.msgprint({
+				title: __("Zero-write automatic Splink preview"),
+				indicator: blockers.length ? "orange" : "green",
+				message: `<p>${__("Maximum component size")}: ${esc(result.maximum_component_size || 0)}</p>` +
+					`<p>${__("Candidate edges")}: ${esc(result.candidate_count || 0)}</p>` +
+					`<p>${__("Complete components available by size")}: ${esc(format_size_counts(result.available_complete_size_counts))}</p>` +
+					`<p>${__("Selected components by size")}: ${esc(format_size_counts(result.selected_size_counts))}</p>` +
+					`<p>${__("Selected components / candidate edges")}: ${esc(result.selected_component_count || 0)} / ${esc(result.selected_candidate_count || 0)}</p>` +
+					`<p>${__("Incomplete components excluded")}: ${esc(result.incomplete_component_count || 0)}</p>` +
+					`<p>${__("Complete components above maximum excluded")}: ${esc(result.excluded_above_maximum_count || 0)}</p>` +
+					`<p>${__("Operational blockers")}: ${blockers.length ? blockers.map(esc).join("<br>") : __("None")}</p>` +
+					`<p><strong>${__("No records were changed.")}</strong></p>`,
+			});
+		},
+	});
+}
+
+function run_automatic_splink_now(frm) {
+	if (frm.__ccd_splink_cycle_starting) return;
+	frm.__ccd_splink_cycle_starting = true;
+	frappe.call({
+		method: "db_connector.api_splink_automation.run_automatic_splink_now",
+		freeze: true,
+		freeze_message: __("Selecting and queueing the bounded Splink batch…"),
+		callback(response) {
+			frm.__ccd_splink_cycle_starting = false;
+			const result = response.message || {};
+			const batch = result.batch || "";
+			const batchLink = batch
+				? `<a href="/app/ccd-splink-automation-batch/${encodeURIComponent(batch)}">${esc(batch)}</a>`
+				: __("None");
+			frappe.msgprint({
+				title: __("Automatic Splink cycle"),
+				indicator: result.status === "Queued" ? "green" : "orange",
+				message: `<p>${__("Status")}: ${esc(result.status || "")}</p>` +
+					`<p>${__("Batch")}: ${batchLink}</p>` +
+					`<p>${__("Maximum component size")}: ${esc(result.maximum_component_size || 0)}</p>` +
+					`<p>${__("Selected components by size")}: ${esc(format_size_counts(result.selected_size_counts))}</p>` +
+					`<p>${__("Selected components")}: ${esc(result.selected_component_count || result.selected_components || 0)}</p>` +
+					`<p class="text-muted">${__("A queued batch continues on the long worker after this dialog closes.")}</p>`,
+			});
+			frm.reload_doc();
+		},
+		error() {
+			frm.__ccd_splink_cycle_starting = false;
+		},
+	});
+}
+
+function format_size_counts(counts) {
+	const entries = Object.entries(counts || {});
+	return entries.length
+		? entries.map(([size, count]) => `${size}: ${count}`).join(", ")
+		: __("None");
 }
 
 function add_unified_person_control(frm) {
