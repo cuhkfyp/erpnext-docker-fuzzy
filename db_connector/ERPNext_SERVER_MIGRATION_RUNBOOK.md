@@ -1377,6 +1377,41 @@ Before UAT, wait for explicit approval. The UAT code-only deployment must
 create and validate its own fresh full backup, must not copy Development data,
 and must leave Materialization plus every automatic control disabled.
 
+### 11.9 Development-only lower-score hybrid validation
+
+This workflow is research evidence, not an activation path. Its service never
+calls identity materialization and does not read an enabled automatic control
+as hybrid authorization. Existing independently authorized channels may keep
+their current state, but their controls must not be changed merely to run this
+validation. In Development:
+
+1. complete the governed 100-pair **CCD Hybrid Exploratory Batch**;
+2. take and verify a fresh full backup before migrating the hybrid validation
+   schema/code;
+3. on the completed batch, click **Prepare Development Validation Proposal**;
+4. wait for the linked **CCD Match Evaluation Run** to reach `Queued`, then
+   verify the displayed unseen population, two frozen corroboration routes,
+   score range, manifest SHA-256, and dynamic source allocations;
+5. generate and record one governance-approved 64-character hexadecimal seed;
+   do not try multiple seeds to obtain a preferred cohort;
+6. click **Freeze 165 Validation + 50 Holdout**, wait for `Reviewing`, and
+   verify that exactly 165 Evaluation Pairs exist while 50 holdout candidates
+   are reserved but not exposed as Evaluation Pairs;
+7. have two independent reviewers complete every masked validation pair;
+   managers adjudicate disagreements or `Unsure` only after two ordinary
+   reviews exist;
+8. click **Finalize Prospective Validation** and inspect the global Wilson gate
+   plus source/route/score subgroups; and
+9. record the Development evidence decision with a reason and exact Run ID.
+
+If proposal or freeze fails, inspect `Error Summary` and Error Log, correct the
+cause, and use **Retry Background Job** on the same run. Do not manually edit
+candidate reservations or construct a replacement cohort. A population or
+provenance change requires rebuilding the proposal rather than retaining the
+old manifest. Approval creates no identity state and does not unlock the 50
+holdout pairs for materialization; that requires a later, separately developed
+and approved holdout/QC workflow.
+
 ## 12. Sign-off checklist
 
 Before declaring transfer complete, record:
@@ -1417,6 +1452,7 @@ Before declaring transfer complete, record:
 | Continuous QC, breaker, and governed recovery | `api_identity_qc.py` and `fuzzy_matching/automation.py` |
 | Default-off bounded unattended Tiered | `api_identity_automation.py` and `api_identity_activation.py` |
 | Default-off prospective and unattended Splink | `api_splink_automation.py`, `fuzzy_matching/splink_automation.py`, and `CCD Splink Automation Batch` |
+| Development-only lower-score hybrid validation | `api_hybrid_validation.py`, `fuzzy_matching/hybrid_validation.py`, and `CCD Match Evaluation Run` |
 | Development QC/automation acceptance | `SYNTHETIC_QC_AUTOMATION_TEST_GUIDE.md` and `synthetic_qc_automation_fixture.py` |
 | Exact versioned component | Git commit recorded in Document control |
 

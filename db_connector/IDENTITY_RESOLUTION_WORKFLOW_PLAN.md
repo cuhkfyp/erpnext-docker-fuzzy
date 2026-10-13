@@ -1429,3 +1429,46 @@ candidate exposed through an active or completed exploratory batch. Formal
 authorization still requires a separately frozen, unseen, masked,
 two-reviewer validation cohort, adjudication, holdout QC, Wilson gate, and
 management approval.
+
+### 27.9 Development-only hybrid prospective validation
+
+After a completed 100-pair exploratory batch, a System Manager may use
+**Prepare Development Validation Proposal** on that batch. The long worker
+recomputes the current lower-score population without exposing or reserving a
+pair. The frozen proposal is deliberately narrower than the exploratory rule:
+it includes only `exact_name+unverified_identifier_exact` and
+`name_support+unverified_identifier+secondary_exact`, at
+`0.95 <= Splink score < 0.999148140`. It excludes every candidate previously
+exposed through exploratory or Evaluation Pair review, every changed, reviewed,
+assigned, reserved, or materialized candidate, non-isolated components, active
+identity overlap, and human exclusions.
+
+Source scope is data-driven rather than restricted to HMSSHP-to-SHP-UAT. Every
+source pair present in the current unseen eligible population receives a
+validation position when the 165-pair capacity permits; a source with at least
+two available pairs also receives a holdout position when the 50-pair capacity
+permits. Remaining positions are allocated deterministically from current
+stratum sizes. The form displays the exact available, validation, and holdout
+allocation per source before review begins.
+
+From the prepared Evaluation Run, management records one governance-approved
+64-character hexadecimal seed and uses **Freeze 165 Validation + 50 Holdout**
+once. The worker rechecks the complete manifest, source/route/score strata,
+candidate lifecycle, record fingerprints, memberships, and exclusions under
+locks before atomically reserving the disjoint cohorts. Only the 165 Validation
+pairs become Evaluation Pairs; the 50 holdout candidates stay blinded and
+reserved for a later rollout workflow. Background retries are idempotent.
+
+Each validation pair requires two independent masked reviews. `Unsure` or a
+disagreement requires adjudication only after both ordinary reviews exist.
+Finalization requires no unresolved pair, at least 150 non-stale `Same` or
+`Different` labels, and a 95% Wilson lower bound of at least 0.95. At all 165
+pairs, no more than two `Different` outcomes can pass. Source, route, and score
+subgroup results remain visible even though the accepted gate is global.
+
+This workflow is explicitly Development-only. A recorded approval describes
+the evidence but cannot enable automation, materialize a label, create an
+identity group or exclusion, or authorize UAT/Production. The separately
+reserved holdout, full two-reviewer holdout QC, correction path, and a new
+governed authorization remain necessary before any lower-score hybrid write
+path can be proposed.

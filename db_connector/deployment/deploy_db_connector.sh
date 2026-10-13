@@ -87,6 +87,7 @@ for container in "${containers[@]}"; do
 			db_connector/api_fuzzy_splink_experiment.py \
 			db_connector/api_hybrid_exploratory_review.py \
 			db_connector/api_hybrid_research.py \
+			db_connector/api_hybrid_validation.py \
 			db_connector/api_identity_activation.py \
 			db_connector/api_identity_automation.py \
 			db_connector/api_identity_correction.py \

@@ -16,6 +16,7 @@
 !api_fuzzy_review_queue.py
 !api_fuzzy_splink_experiment.py
 !api_hybrid_exploratory_review.py
+!api_hybrid_validation.py
 !api_identity_activation.py
 !api_identity_automation.py
 !api_identity_correction.py

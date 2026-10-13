@@ -969,3 +969,50 @@ HMSSHP-to-SHP-UAT source allocation. Repeating the create request returns this
 same batch rather than drawing again. The post-build database audit found zero
 candidate review, assignment, reservation, automation-batch, or materialization
 state violations. No exploratory label was fabricated during deployment.
+
+## Development-only hybrid prospective validation — 2026-10-13
+
+Development now provides the next persistent Desk step from completed
+exploratory batch `8bq5df7htr`. **Prepare Development Validation Proposal**
+creates an idempotent background Evaluation Run without exposing or reserving a
+pair. The run freezes the narrower `0.95 <= score < 0.999148140` proposal for
+`exact_name+unverified_identifier_exact` and
+`name_support+unverified_identifier+secondary_exact`, with exact queue,
+canary, policy, model/runtime, rule-version, cutoff, manifest, source, route,
+score-band, and exploratory-batch provenance.
+
+After management inspects the proposal, **Freeze 165 Validation + 50 Holdout**
+records one 64-character governance seed and atomically reserves disjoint
+cohorts on the long worker. Selection is source-dynamic: every unseen eligible
+source stratum is represented when capacity permits instead of hardcoding
+HMSSHP-to-SHP-UAT. The worker serializes retries, locks selected candidates and
+CCD records, and rechecks lifecycle, fingerprints, component structure,
+membership, exclusions, and all frozen population strata before writing a
+reservation. Only Validation pairs become Evaluation Pairs; holdout candidates
+stay blinded.
+
+The Evaluation Run supplies persistent **Review Next Validation Pair**,
+two-independent-review masking, adjudication, finalization, subgroup metrics,
+and a global 150-valid/95%-Wilson-lower gate. A management decision is recorded
+as Development evidence only. The module contains no identity materialization
+call and cannot enable lower-score automation or authorize UAT/Production.
+
+The migration followed fresh full Development backup `20261013_180455`.
+Configuration JSON, the compressed database, public files, and private files
+all passed format/archive validation and received SHA-256 digests before
+migration. Live schema/module/JavaScript checks pass. The new eight-test hybrid
+validation suite and 30 hybrid-research/Splink/policy regressions pass. One
+older evaluation-helper harness remains unable to initialize after the
+pre-existing application `__init__` began importing real Frappe symbols; live
+module import and the changed source contracts pass independently.
+
+The post-deploy read-only inventory scanned 6,787 lower-band candidates and
+found 3,700 unseen, operationally clear pairs in the two-route proposal: 155
+exact-name-plus-unverified-identifier and 3,545 name-support-plus-unverified-
+identifier-plus-secondary cases. All 3,700 currently belong to
+HMSSHP-to-SHP-UAT, so the displayed allocation will be 165 Validation and 50
+Holdout for that source. The selector remains dynamic and will include other
+source pairs if they are present in a future unchanged eligible manifest.
+Deployment created zero Hybrid Prospective Validation runs and zero new cohort
+reservations; the operator must start the proposal from Desk. Existing Live,
+Tiered, and Splink control states were observed but deliberately left unchanged.

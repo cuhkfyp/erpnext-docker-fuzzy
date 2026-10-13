@@ -2007,7 +2007,8 @@ def submit_review(pair_name: str, label: str, notes: str = "") -> dict[str, str]
     ordinary = [row.label for row in pair.review_labels if not row.is_adjudication]
     required = 2 if pair.needs_double_review else 1
     if (
-        pair.double_review_reason == "splink_automatic_validation"
+        pair.double_review_reason
+        in {"splink_automatic_validation", "hybrid_prospective_validation"}
         and len(ordinary) < 2
     ):
         pair.review_status = "Partially Reviewed"
@@ -2036,7 +2037,10 @@ def adjudicate_review(pair_name: str, label: str, notes: str = "") -> dict[str, 
         frappe.throw("This pair is stale. Create a new evaluation run before adjudicating it.")
     if pair.review_status != "Needs Adjudication":
         frappe.throw("Only pairs awaiting adjudication may be adjudicated")
-    if pair.double_review_reason == "splink_automatic_validation":
+    if pair.double_review_reason in {
+        "splink_automatic_validation",
+        "hybrid_prospective_validation",
+    }:
         ordinary_reviewers = {
             str(row.reviewer)
             for row in pair.review_labels
@@ -2044,7 +2048,7 @@ def adjudicate_review(pair_name: str, label: str, notes: str = "") -> dict[str, 
         }
         if len(ordinary_reviewers) < 2:
             frappe.throw(
-                "Splink automatic validation requires two independent masked reviews before adjudication"
+                "Prospective validation requires two independent masked reviews before adjudication"
             )
     pair.append(
         "review_labels",
@@ -2838,7 +2842,9 @@ def get_pair_evidence(pair_name: str) -> dict[str, Any]:
         as_dict=True,
     )
     validation_masked = bool(
-        run_values and run_values.run_purpose == "Splink Automatic Validation"
+        run_values
+        and run_values.run_purpose
+        in {"Splink Automatic Validation", "Hybrid Prospective Validation"}
     )
     sensitive = not validation_masked and (
         "System Manager" in frappe.get_roles() or SENSITIVE_ROLE in frappe.get_roles()

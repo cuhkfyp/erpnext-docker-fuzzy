@@ -36,6 +36,23 @@ frappe.ui.form.on("CCD Hybrid Exploratory Batch", {
 				});
 			}, __("Exploratory Review"));
 		}
+		if (frm.doc.status === "Completed" && frappe.user.has_role("System Manager")) {
+			frm.add_custom_button(__("Prepare Development Validation Proposal"), () => {
+				frappe.confirm(
+					__("Prepare a zero-write Development-only proposal from unseen eligible pairs? The proposal includes every available source pair dynamically and does not expose or reserve a cohort until you separately freeze it."),
+					() => frappe.call({
+						method: "db_connector.api_hybrid_validation.start_hybrid_validation_proposal",
+						args: { exploratory_batch: frm.doc.name },
+						freeze: true,
+						freeze_message: __("Starting the background Development proposal…"),
+						callback(response) {
+							const run = response.message?.run;
+							if (run) frappe.set_route("Form", "CCD Match Evaluation Run", run);
+						},
+					}),
+				);
+			}, __("Prospective Validation"));
+		}
 		if (frm.doc.status === "Failed" && frappe.user.has_role("System Manager")) {
 			frm.add_custom_button(__("Retry Build"), () => {
 				frappe.call({

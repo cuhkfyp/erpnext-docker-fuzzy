@@ -65,10 +65,30 @@ function adjudicate(frm, label) {
 		(values) => frappe.call({
 			method: "db_connector.api_fuzzy_evaluation.adjudicate_review",
 			args: { pair_name: frm.doc.name, label, notes: values.notes },
-			callback: () => frm.reload_doc(),
+			callback: () => continue_hybrid_review_or_reload(frm),
 		}),
 		__(`Adjudicate as ${label}`),
 	);
+}
+
+function continue_hybrid_review_or_reload(frm) {
+	frappe.db.get_value("CCD Match Evaluation Run", frm.doc.evaluation_run, "run_purpose")
+		.then((response) => {
+			if (response.message?.run_purpose !== "Hybrid Prospective Validation") {
+				frm.reload_doc();
+				return;
+			}
+			frappe.call({
+				method: "db_connector.api_hybrid_validation.get_next_hybrid_validation_pair",
+				args: { run_name: frm.doc.evaluation_run },
+				callback(nextResponse) {
+					const pair = nextResponse.message?.pair;
+					if (pair) frappe.set_route("Form", "CCD Match Evaluation Pair", pair);
+					else frappe.set_route("Form", "CCD Match Evaluation Run", frm.doc.evaluation_run);
+				},
+			});
+		})
+		.catch(() => frm.reload_doc());
 }
 
 function submit_label(frm, label) {
@@ -77,7 +97,7 @@ function submit_label(frm, label) {
 		(values) => frappe.call({
 			method: "db_connector.api_fuzzy_evaluation.submit_review",
 			args: { pair_name: frm.doc.name, label, notes: values.notes || "" },
-			callback: () => frm.reload_doc(),
+			callback: () => continue_hybrid_review_or_reload(frm),
 		}),
 		__(`Submit ${label} label`),
 	);
