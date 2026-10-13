@@ -3,8 +3,46 @@ frappe.ui.form.on("CCD Match Review Candidate", {
 		if (frm.is_new()) return;
 		load_candidate_evidence(frm);
 		add_splink_qc_buttons(frm);
+		add_hybrid_research_button(frm);
 	},
 });
+
+function add_hybrid_research_button(frm) {
+	if (!(frappe.user_roles || []).includes("System Manager")) return;
+	frm.add_custom_button(
+		__("Preview Lower-Score Hybrid Research"),
+		() => frappe.call({
+			method: "db_connector.api_hybrid_research.preview_lower_score_hybrid_candidate",
+			args: { candidate_name: frm.doc.name },
+			freeze: true,
+			callback(response) {
+				const result = response.message || {};
+				const routes = (result.routes || []).length
+					? result.routes.map(esc).join("<br>")
+					: __("None");
+				const conflicts = (result.hard_conflicts || []).length
+					? result.hard_conflicts.map(esc).join("<br>")
+					: __("None");
+				const unavailable = (result.unavailable_reasons || []).length
+					? result.unavailable_reasons.map(esc).join("<br>")
+					: __("None");
+				frappe.msgprint({
+					title: __("Zero-write hybrid research preview"),
+					indicator: result.preliminary_operationally_clear ? "green" : "orange",
+					message: `<p>${__("Candidate")}: ${esc(result.candidate || "")}</p>` +
+						`<p>${__("Splink score / frozen ultra-high cutoff")}: ${esc(result.probabilistic_score)} / ${esc(result.frozen_ultra_high_cutoff)}</p>` +
+						`<p>${__("Birthday evidence")}: ${esc(result.birthday_status || "")}</p>` +
+						`<p><strong>${__("Corroboration routes")}</strong><br>${routes}</p>` +
+						`<p><strong>${__("Hard evidence conflicts")}</strong><br>${conflicts}</p>` +
+						`<p><strong>${__("Unavailable reasons")}</strong><br>${unavailable}</p>` +
+						`<p>${__("Preliminary operationally clear")}: ${result.preliminary_operationally_clear ? __("Yes") : __("No")}</p>` +
+						`<p class="text-muted"><strong>${__("Research only: no records were changed and this does not authorize materialization.")}</strong></p>`,
+				});
+			},
+		}),
+		__("Splink Research"),
+	);
+}
 
 function add_splink_qc_buttons(frm) {
 	if (!frm.doc.automated_qc_assigned_at || !["Unreviewed", "Partially Reviewed", "Needs Adjudication"].includes(frm.doc.automated_qc_review_status)) return;

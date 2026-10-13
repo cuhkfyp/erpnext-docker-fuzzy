@@ -1343,3 +1343,33 @@ The accepted population risk is global: source-pair subgroup precision is
 reported but may be weaker. Successful rollout does not authorize lowering the
 cutoff. The next research question is lower-score Splink combined with strong
 deterministic corroboration.
+
+### 27.6 Lower-score hybrid research preview
+
+Development contains a zero-write research preview for pairs below the frozen
+`0.999148140` ultra-high boundary. It reuses only the stored scores in the
+currently authorized Review queue; it does not refit Splink, change the
+authorized cutoff, reserve candidates, create identity state, or authorize a
+new automatic band. System Managers can preview the bounded pool from Identity
+Resolution Settings and can explain one candidate from its Review Candidate
+form.
+
+The research classifier records explainable combinations of name support,
+exact normalized phone/email values, exact but unverified identifiers, and
+quality-aware birthday evidence. Birthday evidence is deliberately asymmetric:
+equal normalized values are positive even when an uncertain source represents
+the date as `YYYY-01-01`; a mismatch is a conflict only when both Birthday Keys
+confirm their dates. If either side is unconfirmed or its key is absent, a
+mismatch is neutral rather than evidence of Different. Confirmed and
+unconfirmed equal birthdays remain separately visible in the preview.
+
+The preview rejects trusted-identifier conflicts and confirmed-birthday
+conflicts, reports previous review/reservation/staleness, and separately counts
+isolated pairs, multi-record components, current Group overlap, and active
+human exclusions. Its examples contain record and candidate IDs but no raw
+identity values. Retrospective labels are descriptive only. Before any hybrid
+write path exists, management must freeze one exact score band and
+corroboration rule, select an unseen prospective cohort once, complete masked
+independent review and holdout QC, and establish separate authorization and
+provenance. A later Splink-model or birthday-input change requires a new model
+version, evaluation, queue, cutoff, and authorization.

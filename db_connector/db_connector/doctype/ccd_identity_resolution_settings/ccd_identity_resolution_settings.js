@@ -5,6 +5,7 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		add_tiered_control(frm);
 		add_breaker_control(frm);
 		add_splink_control(frm);
+		add_hybrid_research_control(frm);
 		add_integrity_control(frm);
 		add_unified_person_control(frm);
 		add_notification_control(frm);
@@ -140,6 +141,79 @@ function format_size_counts(counts) {
 	return entries.length
 		? entries.map(([size, count]) => `${size}: ${count}`).join(", ")
 		: __("None");
+}
+
+function add_hybrid_research_control(frm) {
+	frm.add_custom_button(
+		__("Preview Lower-Score Hybrid Research"),
+		() => frappe.prompt(
+			[
+				{
+					fieldname: "minimum_score",
+					fieldtype: "Float",
+					label: __("Research minimum Splink score"),
+					default: 0.95,
+					reqd: 1,
+					description: __("Zero-write only. Must remain below the frozen ultra-high cutoff."),
+				},
+			],
+			(values) => preview_hybrid_research(values.minimum_score),
+			__("Lower-Score Hybrid Research"),
+		),
+		__("Splink Automation"),
+	);
+}
+
+function preview_hybrid_research(minimumScore) {
+	frappe.call({
+		method: "db_connector.api_hybrid_research.preview_lower_score_hybrid_research",
+		args: { minimum_score: minimumScore },
+		freeze: true,
+		freeze_message: __("Classifying lower-score pairs without writing identity state…"),
+		callback(response) {
+			const result = response.message || {};
+			const routes = format_count_map(result.corroboration_route_counts);
+			const birthdays = format_count_map(result.birthday_evidence_counts);
+			const bands = format_count_map(result.score_band_counts);
+			const exclusions = format_count_map(result.state_exclusion_counts);
+			const examples = format_hybrid_examples(result.examples_by_route);
+			frappe.msgprint({
+				title: __("Zero-write lower-score hybrid research"),
+				indicator: "blue",
+				wide: true,
+				message: `<p>${__("Queue")}: ${esc(result.queue_run || "")}</p>` +
+					`<p>${__("Research score range")}: ${esc(result.research_minimum_score)} ≤ score &lt; ${esc(result.frozen_ultra_high_cutoff)}</p>` +
+					`<p>${__("Scanned / corroborated / untouched edges")}: ${esc(result.scanned_candidate_count || 0)} / ${esc(result.corroborated_candidate_count || 0)} / ${esc(result.untouched_corroborated_edge_count || 0)}</p>` +
+					`<p>${__("Isolated pairs / operationally clear isolated pairs")}: ${esc(result.isolated_pair_count || 0)} / ${esc(result.operationally_clear_isolated_pair_count || 0)}</p>` +
+					`<p>${__("Incomplete or multi-record components")}: ${esc(result.incomplete_or_multi_record_component_count || 0)}</p>` +
+					`<p><strong>${__("Corroboration routes")}</strong><br>${routes}</p>` +
+					`<p><strong>${__("Birthday evidence")}</strong><br>${birthdays}</p>` +
+					`<p><strong>${__("Score bands")}</strong><br>${bands}</p>` +
+					`<p><strong>${__("Excluded states")}</strong><br>${exclusions}</p>` +
+					`${examples}` +
+					`<p class="text-muted"><strong>${__("Research only: no candidate, authorization, automation control, or identity record was changed.")}</strong></p>`,
+			});
+		},
+	});
+}
+
+function format_count_map(counts) {
+	const entries = Object.entries(counts || {});
+	return entries.length
+		? entries.map(([key, count]) => `${esc(key)}: ${esc(count)}`).join("<br>")
+		: __("None");
+}
+
+function format_hybrid_examples(examplesByRoute) {
+	const entries = Object.entries(examplesByRoute || {});
+	if (!entries.length) return `<p><strong>${__("Examples")}</strong><br>${__("None")}</p>`;
+	const rows = entries.map(([route, examples]) => {
+		const links = (examples || []).map((item) =>
+			`<a href="/app/ccd-match-review-candidate/${encodeURIComponent(item.candidate)}">${esc(item.candidate)}</a> (${esc(item.score)})`
+		).join(", ");
+		return `${esc(route)}: ${links || __("None")}`;
+	});
+	return `<p><strong>${__("Highest-score operationally clear examples")}</strong><br>${rows.join("<br>")}</p>`;
 }
 
 function add_unified_person_control(frm) {

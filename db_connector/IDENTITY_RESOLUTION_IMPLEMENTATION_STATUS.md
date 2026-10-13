@@ -886,3 +886,37 @@ cannot also enter optional human assignment. Previously reviewed candidates
 are excluded. A replacement Ready queue preserves the reserved 165/50 cohort
 and may inherit ongoing authorization only when it replays the exact fitted
 evaluation and all frozen policy/source/runtime provenance.
+
+## Lower-score hybrid research preview — 2026-10-13
+
+Development now includes a System Manager-only, zero-write preview for
+researching lower-score Splink pairs that also have strong deterministic
+corroboration. It reads the stored scores and fingerprints from the currently
+authorized Ready queue, excludes previously reviewed, reserved, assigned, or
+materialized candidates, and reports candidate-level reasons and aggregate
+source, score-band, evidence-route, birthday-quality, component, and current
+identity-state counts. It neither creates identity groups nor changes the
+authorized `0.999148140` cutoff.
+
+Birthday evidence is quality-aware. Two identical normalized dates, including
+two identical `YYYY-01-01` dates, count as exact birthday evidence. A birthday
+mismatch is a hard conflict only when both birthday keys are confirmed;
+otherwise it is neutral because the day, month, and even year may be unknown or
+unconfirmed. Birthday is not the only available corroboration: the preview also
+combines name support with exact phone, email, trusted or unverified identifiers,
+and multiple independent secondary fields. Trusted-identifier conflicts remain
+fail-closed.
+
+At the initial `0.95` research floor, the live zero-write checkpoint scanned
+6,787 untouched lower-band candidates and found 3,810 with a configured
+corroboration route; 3,800 isolated pairs were preliminarily clear of current
+group overlap and active exclusions. The result is overwhelmingly the
+HMSSHP-Production-to-SHP-UAT source stratum, so it is useful for Development
+flow testing but is not evidence authorizing general-population automation.
+Candidate `e85f70fcc8` is correctly explained as below the frozen cutoff, with
+an exact but unconfirmed birthday and additional name/local-identifier support.
+
+Any future write path requires a new prospective, blinded validation and canary
+covering the intended source population and the frozen hybrid rule/version. It
+must receive separate governance approval; the current ultra-high Splink
+authorization cannot be reused to authorize lower-score hybrid decisions.
