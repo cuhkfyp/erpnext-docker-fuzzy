@@ -84,6 +84,10 @@ class HybridExploratoryReviewTests(unittest.TestCase):
             app
             / "db_connector/doctype/ccd_hybrid_exploratory_batch/ccd_hybrid_exploratory_batch.js"
         ).read_text(encoding="utf-8")
+        batch_list_source = (
+            app
+            / "db_connector/doctype/ccd_hybrid_exploratory_batch/ccd_hybrid_exploratory_batch_list.js"
+        ).read_text(encoding="utf-8")
         item_source = (
             app
             / "db_connector/doctype/ccd_hybrid_exploratory_item/ccd_hybrid_exploratory_item.js"
@@ -91,6 +95,10 @@ class HybridExploratoryReviewTests(unittest.TestCase):
         self.assertIn("Create Persistent Exploratory Review Batch", settings_source)
         self.assertIn("start_hybrid_exploratory_batch", settings_source)
         self.assertIn("Review Next Unreviewed", batch_source)
+        self.assertIn("frm.disable_save()", batch_source)
+        self.assertIn("Create / Reopen Governed Batch", batch_source)
+        self.assertIn("set_primary_action", batch_list_source)
+        self.assertIn("start_hybrid_exploratory_batch", batch_list_source)
         self.assertIn("submit_hybrid_exploratory_label", item_source)
 
     def test_reviewer_permissions_are_read_only(self):
