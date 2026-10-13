@@ -7,6 +7,7 @@ automation controls, or identity state.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter, defaultdict
 from typing import Any, Iterable
@@ -15,7 +16,9 @@ import frappe
 
 from db_connector.api_fuzzy_evaluation import _evaluation_record_fields
 from db_connector.fuzzy_matching.hybrid_research import (
+    HYBRID_RESEARCH_RULE_VERSION,
     classify_corroboration,
+    deterministic_stratified_sample,
     lower_score_band,
 )
 from db_connector.fuzzy_matching.identity import identity_fingerprint
@@ -37,6 +40,7 @@ CURRENT_MEMBERSHIP_STATUSES = ("Active", "Needs Revalidation")
 DEFAULT_RESEARCH_MINIMUM_SCORE = 0.95
 MAX_RESEARCH_CANDIDATES = 100_000
 MAX_EXAMPLES_PER_ROUTE = 5
+MAX_EXPLORATORY_SAMPLE_SIZE = 250
 QUERY_CHUNK_SIZE = 1_000
 
 
@@ -129,6 +133,58 @@ def _stable_example(row: dict[str, Any]) -> dict[str, Any]:
         "score": float(row["probabilistic_score"]),
         "score_band": str(row["score_band"]),
         "birthday_status": str(row["birthday_status"]),
+        "routes": list(row["routes"]),
+    }
+
+
+def _eligible_manifest_digest(rows: Iterable[dict[str, Any]]) -> str:
+    material = []
+    for row in rows:
+        material.append(
+            "\x1f".join(
+                (
+                    str(row.get("name") or ""),
+                    str(row.get("left_identity_fingerprint") or ""),
+                    str(row.get("right_identity_fingerprint") or ""),
+                    f"{float(row.get('probabilistic_score') or 0):.12f}",
+                    ",".join(sorted(str(route) for route in row.get("routes", ()))),
+                )
+            )
+        )
+    return hashlib.sha256("\n".join(sorted(material)).encode("utf-8")).hexdigest()
+
+
+def _derived_exploratory_seed(
+    queue: Any,
+    cutoff: float,
+    floor: float,
+) -> str:
+    payload = {
+        "purpose": "lower-score-hybrid-exploratory-sample",
+        "rule_version": HYBRID_RESEARCH_RULE_VERSION,
+        "queue_run": str(queue.name),
+        "matching_policy": str(queue.matching_policy or ""),
+        "policy_version": str(queue.policy_version or ""),
+        "policy_snapshot": str(queue.policy_snapshot_json or ""),
+        "frozen_ultra_high_cutoff": f"{float(cutoff):.12f}",
+        "research_minimum_score": f"{float(floor):.12f}",
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _stable_sample_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sample_order": int(row.get("sample_order") or 0),
+        "candidate": str(row["name"]),
+        "left_record": str(row["left_record"]),
+        "right_record": str(row["right_record"]),
+        "source_pair": canonical_source_pair(row.get("source_pair")),
+        "score": float(row["probabilistic_score"]),
+        "score_band": str(row["score_band"]),
+        "birthday_status": str(row["birthday_status"]),
+        "primary_route": str(row.get("primary_route") or ""),
         "routes": list(row["routes"]),
     }
 
@@ -241,6 +297,7 @@ def preview_lower_score_hybrid_candidate(candidate_name: str) -> dict[str, Any]:
 def preview_lower_score_hybrid_research(
     minimum_score: float | str = DEFAULT_RESEARCH_MINIMUM_SCORE,
     queue_run: str = "",
+    exploratory_sample_size: int | str = 0,
 ) -> dict[str, Any]:
     """Classify the current lower-score pool without writing any state."""
     _require_manager()
@@ -265,6 +322,13 @@ def preview_lower_score_hybrid_research(
             f"Research minimum score must be at least {review_threshold:.12f} "
             f"and below {cutoff:.12f}"
         )
+    requested_sample_size = int(exploratory_sample_size or 0)
+    if requested_sample_size < 0 or requested_sample_size > MAX_EXPLORATORY_SAMPLE_SIZE:
+        frappe.throw(
+            f"Exploratory sample size must be between 0 and {MAX_EXPLORATORY_SAMPLE_SIZE}"
+        )
+    if requested_sample_size and requested_sample_size < 25:
+        frappe.throw("Exploratory sample size must be at least 25")
 
     rows = [
         dict(row)
@@ -412,6 +476,46 @@ def preview_lower_score_hybrid_research(
     for row in operationally_clear:
         source_pair_counts[canonical_source_pair(row.get("source_pair"))] += 1
 
+    exploratory_sample: dict[str, Any] | None = None
+    if requested_sample_size:
+        eligible_manifest_digest = _eligible_manifest_digest(operationally_clear)
+        exploratory_seed = _derived_exploratory_seed(queue, cutoff, floor)
+        sample = deterministic_stratified_sample(
+            operationally_clear,
+            requested_sample_size,
+            exploratory_seed,
+        )
+        sample_rows = sample.pop("rows")
+        sample_route_counts: Counter[str] = Counter()
+        sample_primary_route_counts: Counter[str] = Counter()
+        sample_score_band_counts: Counter[str] = Counter()
+        sample_source_pair_counts: Counter[str] = Counter()
+        sample_birthday_counts: Counter[str] = Counter()
+        for row in sample_rows:
+            sample_route_counts.update(str(route) for route in row["routes"])
+            sample_primary_route_counts[str(row["primary_route"])] += 1
+            sample_score_band_counts[str(row["score_band"])] += 1
+            sample_source_pair_counts[canonical_source_pair(row.get("source_pair"))] += 1
+            sample_birthday_counts[str(row["birthday_status"])] += 1
+        exploratory_sample = {
+            **sample,
+            "rule_version": HYBRID_RESEARCH_RULE_VERSION,
+            "derived_seed": exploratory_seed,
+            "eligible_manifest_digest": eligible_manifest_digest,
+            "route_counts": dict(sorted(sample_route_counts.items())),
+            "primary_route_counts": dict(sorted(sample_primary_route_counts.items())),
+            "score_band_counts": dict(sorted(sample_score_band_counts.items())),
+            "source_pair_counts": dict(sorted(sample_source_pair_counts.items())),
+            "birthday_evidence_counts": dict(sorted(sample_birthday_counts.items())),
+            "rows": [_stable_sample_row(row) for row in sample_rows],
+            "notes": [
+                "The seed is derived from frozen queue/rule provenance; it is not user-selectable.",
+                "The same eligible manifest and provenance produce the same sample.",
+                "Rare routes are included in full when the sample target permits.",
+                "Exploratory inspection cannot be counted as prospective validation.",
+            ],
+        }
+
     total_lower_score = frappe.db.count(
         CANDIDATE_DOCTYPE,
         filters={
@@ -455,6 +559,7 @@ def preview_lower_score_hybrid_research(
             for route, labels in sorted(retrospective_labels.items())
         },
         "examples_by_route": dict(sorted(examples.items())),
+        "exploratory_sample": exploratory_sample,
         "warnings": [
             "This preview does not approve or materialize any lower-score pair.",
             "Retrospective labels are descriptive only and cannot authorize the future frozen rule.",

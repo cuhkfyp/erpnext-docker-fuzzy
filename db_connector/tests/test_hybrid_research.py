@@ -2,6 +2,7 @@ import unittest
 
 from fuzzy_matching.hybrid_research import (
     classify_corroboration,
+    deterministic_stratified_sample,
     lower_score_band,
     quality_aware_birthday,
 )
@@ -130,6 +131,89 @@ class HybridResearchTests(unittest.TestCase):
         )
         self.assertEqual(
             lower_score_band(cutoff, cutoff), "at_or_above_ultra_high"
+        )
+
+    def _sample_row(
+        self,
+        name,
+        route,
+        band="0.95_to_0.99",
+        source="HMSSHP::SHP-UAT",
+        birthday="birthday_exact_unconfirmed",
+    ):
+        return {
+            "name": name,
+            "routes": [route],
+            "score_band": band,
+            "source_pair": source,
+            "birthday_status": birthday,
+        }
+
+    def test_exploratory_sample_is_order_independent_and_exact_size(self):
+        rows = [
+            self._sample_row(
+                f"major-{index:03d}",
+                "major",
+                band=("0.99_to_0.999" if index % 2 else "0.95_to_0.99"),
+            )
+            for index in range(120)
+        ]
+        first = deterministic_stratified_sample(rows, 50, "a" * 64)
+        second = deterministic_stratified_sample(
+            list(reversed(rows)), 50, "a" * 64
+        )
+        self.assertEqual(first["selected_size"], 50)
+        self.assertEqual(
+            [row["name"] for row in first["rows"]],
+            [row["name"] for row in second["rows"]],
+        )
+        self.assertEqual(len({row["name"] for row in first["rows"]}), 50)
+
+    def test_exploratory_sample_includes_rare_routes_in_full(self):
+        rows = [
+            self._sample_row(f"rare-{index}", "rare") for index in range(4)
+        ] + [
+            self._sample_row(f"major-{index:03d}", "major")
+            for index in range(100)
+        ]
+        result = deterministic_stratified_sample(rows, 30, "b" * 64)
+        names = {row["name"] for row in result["rows"]}
+        self.assertEqual(
+            {f"rare-{index}" for index in range(4)}.intersection(names),
+            {f"rare-{index}" for index in range(4)},
+        )
+        self.assertEqual(result["rare_routes_included_in_full"], ["rare"])
+
+    def test_exploratory_sample_represents_routes_and_strata(self):
+        rows = []
+        for route in ("route-a", "route-b"):
+            for index in range(60):
+                rows.append(
+                    self._sample_row(
+                        f"{route}-{index:03d}",
+                        route,
+                        band=(
+                            "0.999_to_ultra_high"
+                            if index % 3 == 0
+                            else "0.95_to_0.99"
+                        ),
+                        source=(
+                            "DHCE::HMSSHP"
+                            if index % 5 == 0
+                            else "HMSSHP::SHP-UAT"
+                        ),
+                    )
+                )
+        result = deterministic_stratified_sample(rows, 50, "c" * 64)
+        selected = result["rows"]
+        self.assertEqual({row["primary_route"] for row in selected}, {"route-a", "route-b"})
+        self.assertEqual(
+            {row["score_band"] for row in selected},
+            {"0.999_to_ultra_high", "0.95_to_0.99"},
+        )
+        self.assertEqual(
+            {row["source_pair"] for row in selected},
+            {"DHCE::HMSSHP", "HMSSHP::SHP-UAT"},
         )
 
 

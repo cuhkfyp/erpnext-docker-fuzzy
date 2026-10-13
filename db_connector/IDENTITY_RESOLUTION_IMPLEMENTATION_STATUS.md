@@ -920,3 +920,26 @@ Any future write path requires a new prospective, blinded validation and canary
 covering the intended source population and the frozen hybrid rule/version. It
 must receive separate governance approval; the current ultra-high Splink
 authorization cannot be reused to authorize lower-score hybrid decisions.
+
+## Deterministic hybrid exploratory sample — 2026-10-13
+
+Development now provides the exploratory sampler directly in Desk. From
+Identity Resolution Settings, a System Manager can open a fixed 100-pair,
+paginated sample, launch candidate evidence in new tabs, or download a manifest
+CSV. The UI reports the derived 64-character seed and eligible-pool digest so
+the selection is reproducible and auditable without allowing seed shopping.
+
+Against queue `gkd75jb71h` at the `0.95` floor, the zero-write sampler selected
+100 of 3,800 operationally clear pairs. The sample contains 22
+`exact_name+unverified_identifier_exact`, 67
+`name_support+unverified_identifier+secondary_exact`, two
+`name_support+two_secondary_exact`, five `strong_name+two_secondary_exact`, and
+four `strong_name+unverified_identifier+secondary_exact` primary-route cases.
+It includes all seven eligible DHCE-to-HMSSHP pairs, all operationally clear
+rare-route pairs, and 93 HMSSHP-to-SHP-UAT pairs. Its score coverage is 22 in
+`0.999` to the frozen cutoff, 14 in `0.99–0.999`, and 64 in `0.95–0.99`.
+
+The sampler is deliberately non-materializing and does not assign or label its
+candidates. Exploratory observations remain ineligible for formal prospective
+statistics; a later frozen hybrid proposal still requires its own unseen,
+masked validation and holdout cohorts.

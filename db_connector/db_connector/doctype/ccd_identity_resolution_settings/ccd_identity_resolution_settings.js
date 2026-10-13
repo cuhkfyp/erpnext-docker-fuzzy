@@ -162,6 +162,24 @@ function add_hybrid_research_control(frm) {
 		),
 		__("Splink Automation"),
 	);
+	frm.add_custom_button(
+		__("Open Stratified Exploratory Sample"),
+		() => frappe.prompt(
+			[
+				{
+					fieldname: "minimum_score",
+					fieldtype: "Float",
+					label: __("Research minimum Splink score"),
+					default: 0.95,
+					reqd: 1,
+					description: __("Builds the fixed 100-pair, deterministic, zero-write sample."),
+				},
+			],
+			(values) => open_hybrid_exploratory_sample(values.minimum_score),
+			__("Deterministic Hybrid Exploratory Sample"),
+		),
+		__("Splink Automation"),
+	);
 }
 
 function preview_hybrid_research(minimumScore) {
@@ -214,6 +232,136 @@ function format_hybrid_examples(examplesByRoute) {
 		return `${esc(route)}: ${links || __("None")}`;
 	});
 	return `<p><strong>${__("Highest-score operationally clear examples")}</strong><br>${rows.join("<br>")}</p>`;
+}
+
+function open_hybrid_exploratory_sample(minimumScore) {
+	frappe.call({
+		method: "db_connector.api_hybrid_research.preview_lower_score_hybrid_research",
+		args: {
+			minimum_score: minimumScore,
+			exploratory_sample_size: 100,
+		},
+		freeze: true,
+		freeze_message: __("Building the deterministic stratified sample without writing candidate state…"),
+		callback(response) {
+			show_hybrid_exploratory_sample(response.message || {});
+		},
+	});
+}
+
+function show_hybrid_exploratory_sample(result) {
+	const sample = result.exploratory_sample || {};
+	const rows = sample.rows || [];
+	if (!rows.length) {
+		frappe.msgprint({
+			title: __("No exploratory sample available"),
+			indicator: "orange",
+			message: __("No operationally clear corroborated pair is available at this score floor."),
+		});
+		return;
+	}
+	const pageSize = 20;
+	let page = 0;
+	const dialog = new frappe.ui.Dialog({
+		title: __("Deterministic Lower-Score Hybrid Sample"),
+		size: "extra-large",
+		fields: [
+			{ fieldname: "sample_summary", fieldtype: "HTML" },
+			{ fieldname: "sample_rows", fieldtype: "HTML" },
+		],
+	});
+	const summary = dialog.get_field("sample_summary").$wrapper;
+	summary.html(
+		`<div class="alert alert-blue">` +
+			`<p><strong>${__("Exploratory only")}</strong>: ${__("opening or downloading this sample changes no candidate, review, authorization, or identity state.")}</p>` +
+			`<p>${__("Queue / score range")}: ${esc(result.queue_run || "")} — ${esc(result.research_minimum_score)} ≤ score &lt; ${esc(result.frozen_ultra_high_cutoff)}</p>` +
+			`<p>${__("Selected / eligible / target")}: ${esc(sample.selected_size || 0)} / ${esc(sample.population_size || 0)} / ${esc(sample.target_size || 0)}</p>` +
+			`<p>${__("Rare routes included in full")}: ${esc((sample.rare_routes_included_in_full || []).join(", ") || __("None"))}</p>` +
+			`<p><strong>${__("Sample route coverage")}</strong> ${__("(one pair may satisfy more than one route)")}<br>${format_count_map(sample.route_counts)}</p>` +
+			`<p><strong>${__("Score bands")}</strong><br>${format_count_map(sample.score_band_counts)}</p>` +
+			`<p><strong>${__("Source pairs")}</strong><br>${format_count_map(sample.source_pair_counts)}</p>` +
+			`<p><strong>${__("Birthday evidence")}</strong><br>${format_count_map(sample.birthday_evidence_counts)}</p>` +
+			`<p class="small text-muted" style="overflow-wrap:anywhere">${__("Rule version")}: ${esc(sample.rule_version || "")}<br>` +
+			`${__("Derived seed")}: ${esc(sample.derived_seed || "")}<br>` +
+			`${__("Eligible manifest digest")}: ${esc(sample.eligible_manifest_digest || "")}</p>` +
+			`<p><strong>${__("Open candidates in new tabs for exploratory inspection. These inspections cannot be counted as prospective validation.")}</strong></p>` +
+		`</div>`,
+	);
+
+	function render_page() {
+		const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+		page = Math.max(0, Math.min(page, pageCount - 1));
+		const visible = rows.slice(page * pageSize, (page + 1) * pageSize);
+		const tableRows = visible.map((item) =>
+			`<tr>` +
+				`<td>${esc(item.sample_order)}</td>` +
+				`<td><a target="_blank" rel="noopener" href="/app/ccd-match-review-candidate/${encodeURIComponent(item.candidate)}">${esc(item.candidate)}</a></td>` +
+				`<td>${esc(item.primary_route)}</td>` +
+				`<td>${esc(item.score)}</td>` +
+				`<td>${esc(item.score_band)}</td>` +
+				`<td>${esc(item.source_pair)}</td>` +
+				`<td>${esc(item.birthday_status)}</td>` +
+			`</tr>`
+		).join("");
+		const wrapper = dialog.get_field("sample_rows").$wrapper;
+		wrapper.html(
+			`<div class="mb-3">` +
+				`<button class="btn btn-xs btn-default hybrid-sample-prev" ${page === 0 ? "disabled" : ""}>${__("Previous")}</button> ` +
+				`<span>${__("Page")} ${page + 1} / ${pageCount}</span> ` +
+				`<button class="btn btn-xs btn-default hybrid-sample-next" ${page + 1 >= pageCount ? "disabled" : ""}>${__("Next")}</button> ` +
+				`<button class="btn btn-xs btn-default hybrid-sample-download">${__("Download CSV")}</button>` +
+			`</div>` +
+			`<div style="max-height:55vh;overflow:auto">` +
+				`<table class="table table-bordered table-condensed">` +
+					`<thead><tr><th>#</th><th>${__("Candidate")}</th><th>${__("Primary route")}</th><th>${__("Score")}</th><th>${__("Score band")}</th><th>${__("Source pair")}</th><th>${__("Birthday")}</th></tr></thead>` +
+					`<tbody>${tableRows}</tbody>` +
+				`</table>` +
+			`</div>`,
+		);
+		wrapper.find(".hybrid-sample-prev").on("click", () => { page -= 1; render_page(); });
+		wrapper.find(".hybrid-sample-next").on("click", () => { page += 1; render_page(); });
+		wrapper.find(".hybrid-sample-download").on("click", () => download_hybrid_sample_csv(result, sample));
+	}
+	dialog.show();
+	render_page();
+}
+
+function download_hybrid_sample_csv(result, sample) {
+	const headers = ["sample_order", "candidate", "left_record", "right_record", "primary_route", "all_routes", "score", "score_band", "source_pair", "birthday_status", "queue_run", "rule_version", "derived_seed", "eligible_manifest_digest"];
+	const lines = [headers.map(hybrid_csv_cell).join(",")];
+	for (const row of (sample.rows || [])) {
+		lines.push([
+			row.sample_order,
+			row.candidate,
+			row.left_record,
+			row.right_record,
+			row.primary_route,
+			(row.routes || []).join("|"),
+			row.score,
+			row.score_band,
+			row.source_pair,
+			row.birthday_status,
+			result.queue_run,
+			sample.rule_version,
+			sample.derived_seed,
+			sample.eligible_manifest_digest,
+		].map(hybrid_csv_cell).join(","));
+	}
+	const blob = new Blob([`\ufeff${lines.join("\r\n")}`], { type: "text/csv;charset=utf-8" });
+	const url = URL.createObjectURL(blob);
+	const anchor = document.createElement("a");
+	anchor.href = url;
+	anchor.download = `hybrid-exploratory-sample-${result.queue_run || "queue"}.csv`;
+	document.body.appendChild(anchor);
+	anchor.click();
+	anchor.remove();
+	URL.revokeObjectURL(url);
+}
+
+function hybrid_csv_cell(value) {
+	let text = String(value ?? "");
+	if (/^[=+\-@]/.test(text)) text = `'${text}`;
+	return `"${text.replaceAll('"', '""')}"`;
 }
 
 function add_unified_person_control(frm) {

@@ -7,6 +7,8 @@ corroboration strata so a prospective rule can later be frozen and validated.
 
 from __future__ import annotations
 
+import hashlib
+from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
 from . import normalization as norm
@@ -23,6 +25,9 @@ STRONG_NAME_LEVELS = frozenset(
         EvidenceLevel.PHONETIC.value,
     }
 )
+HYBRID_RESEARCH_RULE_VERSION = "hybrid-research-v1"
+EXPLORATORY_RARE_ROUTE_LIMIT = 10
+EXPLORATORY_ROUTE_MINIMUM = 20
 
 
 def _level(evidence: Mapping[str, Any], attribute: str) -> str:
@@ -207,3 +212,221 @@ def lower_score_band(score: float, ultra_high_cutoff: float) -> str:
     if value >= 0.95:
         return "0.95_to_0.99"
     return "below_0.95"
+
+
+def _rank(seed: str, *values: Any) -> str:
+    material = "\x1f".join([str(seed), *(str(value) for value in values)])
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _candidate_name(row: Mapping[str, Any]) -> str:
+    return str(row.get("name") or row.get("candidate") or "")
+
+
+def _row_routes(row: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(sorted({str(route) for route in row.get("routes", ()) if route}))
+
+
+def _stratum_key(row: Mapping[str, Any]) -> tuple[str, ...]:
+    return (
+        str(row.get("primary_route") or ""),
+        str(row.get("score_band") or ""),
+        str(row.get("source_pair") or ""),
+        str(row.get("birthday_status") or ""),
+    )
+
+
+def _stratified_take(
+    rows: Iterable[Mapping[str, Any]], count: int, seed: str
+) -> list[dict[str, Any]]:
+    """Take a deterministic round-robin sample across the visible strata."""
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
+    for source in rows:
+        row = dict(source)
+        groups[_stratum_key(row)].append(row)
+    for key, members in groups.items():
+        members.sort(key=lambda item: _rank(seed, key, _candidate_name(item)))
+    keys = sorted(groups, key=lambda key: _rank(seed, "stratum", *key))
+    offsets = {key: 0 for key in keys}
+    selected: list[dict[str, Any]] = []
+    target = max(0, int(count))
+    while len(selected) < target:
+        progressed = False
+        for key in keys:
+            offset = offsets[key]
+            if offset >= len(groups[key]):
+                continue
+            selected.append(groups[key][offset])
+            offsets[key] += 1
+            progressed = True
+            if len(selected) >= target:
+                break
+        if not progressed:
+            break
+    return selected
+
+
+def _route_allocations(
+    capacities: Mapping[str, int], slots: int, seed: str
+) -> dict[str, int]:
+    """Give active routes a floor, then apportion remaining slots by size."""
+    routes = sorted(capacities, key=lambda route: _rank(seed, "route", route))
+    allocation = {route: 0 for route in routes}
+    remaining = min(max(0, int(slots)), sum(max(0, value) for value in capacities.values()))
+
+    # A balanced floor keeps a large route from hiding a smaller route.
+    for _ in range(EXPLORATORY_ROUTE_MINIMUM):
+        for route in routes:
+            if not remaining:
+                break
+            if allocation[route] >= max(0, int(capacities[route])):
+                continue
+            allocation[route] += 1
+            remaining -= 1
+        if not remaining:
+            break
+
+    while remaining:
+        residual = {
+            route: max(0, int(capacities[route]) - allocation[route])
+            for route in routes
+        }
+        total = sum(residual.values())
+        if not total:
+            break
+        round_slots = min(remaining, total)
+        raw = {
+            route: round_slots * residual[route] / total for route in routes
+        }
+        added = {
+            route: min(residual[route], int(raw[route])) for route in routes
+        }
+        for route, value in added.items():
+            allocation[route] += value
+            remaining -= value
+        if not remaining:
+            break
+        remainder_order = sorted(
+            (route for route in routes if allocation[route] < capacities[route]),
+            key=lambda route: (
+                -(raw[route] - int(raw[route])),
+                _rank(seed, "remainder", route),
+            ),
+        )
+        if not remainder_order:
+            break
+        for route in remainder_order:
+            if not remaining:
+                break
+            if allocation[route] >= capacities[route]:
+                continue
+            allocation[route] += 1
+            remaining -= 1
+    return allocation
+
+
+def deterministic_stratified_sample(
+    rows: Iterable[Mapping[str, Any]],
+    target_size: int,
+    seed: str,
+) -> dict[str, Any]:
+    """Build a reproducible exploratory sample without changing candidates.
+
+    Routes containing no more than ten candidates are included in full when
+    the target permits. Remaining capacity gives every active primary route a
+    balanced floor and then follows population size. Within a route, selection
+    cycles across score band, source pair, and birthday state.
+    """
+    unique: dict[str, dict[str, Any]] = {}
+    for source in rows:
+        name = _candidate_name(source)
+        routes = _row_routes(source)
+        if not name or not routes:
+            continue
+        row = dict(source)
+        row["name"] = name
+        row["routes"] = routes
+        unique[name] = row
+    population = list(unique.values())
+    target = min(max(0, int(target_size)), len(population))
+
+    route_members: dict[str, set[str]] = defaultdict(set)
+    for row in population:
+        for route in row["routes"]:
+            route_members[route].add(row["name"])
+    route_counts = {
+        route: len(names) for route, names in sorted(route_members.items())
+    }
+    rare_routes = tuple(
+        route
+        for route, count in route_counts.items()
+        if count <= EXPLORATORY_RARE_ROUTE_LIMIT
+    )
+
+    for row in population:
+        row["primary_route"] = min(
+            row["routes"], key=lambda route: (route_counts[route], route)
+        )
+
+    mandatory = [
+        row for row in population if set(row["routes"]).intersection(rare_routes)
+    ]
+    if len(mandatory) > target:
+        selected = _stratified_take(mandatory, target, f"{seed}:rare")
+    else:
+        selected = sorted(
+            mandatory,
+            key=lambda row: (
+                row["primary_route"],
+                _rank(seed, "rare", row["name"]),
+            ),
+        )
+
+    selected_names = {row["name"] for row in selected}
+    remaining_rows = [row for row in population if row["name"] not in selected_names]
+    route_pools: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in remaining_rows:
+        route_pools[row["primary_route"]].append(row)
+    allocations = _route_allocations(
+        {route: len(pool) for route, pool in route_pools.items()},
+        target - len(selected),
+        seed,
+    )
+    for route in sorted(route_pools):
+        selected.extend(
+            _stratified_take(
+                route_pools[route],
+                allocations.get(route, 0),
+                f"{seed}:{route}",
+            )
+        )
+
+    selected_names = {row["name"] for row in selected}
+    if len(selected) < target:
+        selected.extend(
+            _stratified_take(
+                (row for row in population if row["name"] not in selected_names),
+                target - len(selected),
+                f"{seed}:top-up",
+            )
+        )
+
+    selected.sort(
+        key=lambda row: (
+            row["primary_route"],
+            row.get("score_band") or "",
+            row.get("source_pair") or "",
+            row.get("birthday_status") or "",
+            _rank(seed, "final", row["name"]),
+        )
+    )
+    for index, row in enumerate(selected, start=1):
+        row["sample_order"] = index
+    return {
+        "rows": selected,
+        "target_size": int(target_size),
+        "selected_size": len(selected),
+        "population_size": len(population),
+        "population_route_counts": route_counts,
+        "rare_routes_included_in_full": list(rare_routes),
+    }

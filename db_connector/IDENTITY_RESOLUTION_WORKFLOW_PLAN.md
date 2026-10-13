@@ -1373,3 +1373,29 @@ corroboration rule, select an unseen prospective cohort once, complete masked
 independent review and holdout QC, and establish separate authorization and
 provenance. A later Splink-model or birthday-input change requires a new model
 version, evaluation, queue, cutoff, and authorization.
+
+### 27.7 Deterministic stratified exploratory sample
+
+The Settings form exposes **Open Stratified Exploratory Sample** under Splink
+Automation. It builds a fixed 100-pair Desk sample from the operationally clear
+output of the zero-write hybrid preview. The server derives a non-selectable
+64-character seed from the authorized queue, policy snapshot, rule version,
+frozen cutoff, and requested research floor. It also returns a digest of the
+exact eligible manifest. Unchanged provenance and eligibility therefore
+produce the same sample; operators cannot retry random seeds for a preferred
+result.
+
+Routes with no more than ten eligible pairs are included in full when capacity
+permits. Other active routes first receive a balanced allocation and then a
+population-proportional allocation. Candidate selection within each route
+rotates deterministically across score band, governed source pair, and birthday
+evidence status. Candidate IDs open in new Desk tabs, the table is paginated,
+and a CSV export records the order, route/strata, seed, queue, rule version, and
+eligible-manifest digest without exporting raw identity values.
+
+The exploratory sample creates no Review assignment, reservation, decision,
+authorization, or identity write. An operator's inspection is hypothesis
+development and cannot be counted in prospective precision statistics. Once
+management freezes a candidate score band and corroboration rule, formal
+validation must use a separately selected unseen cohort with masked independent
+review and holdout QC.
