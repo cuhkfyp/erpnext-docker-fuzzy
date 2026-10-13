@@ -180,6 +180,40 @@ function add_hybrid_research_control(frm) {
 		),
 		__("Splink Automation"),
 	);
+	frm.add_custom_button(
+		__("Create Persistent Exploratory Review Batch"),
+		() => frappe.prompt(
+			[
+				{
+					fieldname: "minimum_score",
+					fieldtype: "Float",
+					label: __("Research minimum Splink score"),
+					default: 0.95,
+					reqd: 1,
+					description: __("Freezes the deterministic 100-pair sample for reopenable exploratory review."),
+				},
+			],
+			(values) => frappe.confirm(
+				__("Create or reopen the persistent exploratory batch? Labels remain separate from candidate and identity decisions."),
+				() => start_hybrid_exploratory_batch(values.minimum_score),
+			),
+			__("Persistent Hybrid Exploratory Review"),
+		),
+		__("Splink Automation"),
+	);
+}
+
+function start_hybrid_exploratory_batch(minimumScore) {
+	frappe.call({
+		method: "db_connector.api_hybrid_exploratory_review.start_hybrid_exploratory_batch",
+		args: { minimum_score: minimumScore },
+		freeze: true,
+		freeze_message: __("Creating the persistent exploratory request…"),
+		callback(response) {
+			const batch = response.message?.batch;
+			if (batch) frappe.set_route("Form", "CCD Hybrid Exploratory Batch", batch);
+		},
+	});
 }
 
 function preview_hybrid_research(minimumScore) {

@@ -1399,3 +1399,33 @@ development and cannot be counted in prospective precision statistics. Once
 management freezes a candidate score band and corroboration rule, formal
 validation must use a separately selected unseen cohort with masked independent
 review and holdout QC.
+
+### 27.8 Persistent hybrid exploratory review
+
+For review that spans multiple sessions, a System Manager uses **Create
+Persistent Exploratory Review Batch** under Splink Automation in Identity
+Resolution Settings. The action creates or reopens the one idempotent batch for
+the authorized queue, policy snapshot, rule version, research floor, frozen
+cutoff, and fixed 100-pair target. Selection runs on the long worker, freezes
+the exact candidate/provenance manifest, and stores its derived seed, eligible
+manifest digest, and route/score/source/birthday strata. Closing the form or
+browser does not interrupt the build or lose review progress.
+
+The batch form provides **Review Next Unreviewed** and **View Sample Items**.
+Each item presents the frozen research stratum and a purpose-built evidence
+table, with values masked for an ordinary CCD Match Reviewer and visible only
+under the existing sensitive-access boundary. The reviewer records one
+exploratory `Same`, `Different`, or `Unsure` outcome plus optional notes. The
+outcome is immutable and updates only the exploratory batch/item tables: it
+does not change the Review Candidate, create an exclusion or identity group,
+reserve/assign optional work, or count toward formal validation. The batch may
+be reopened at any time from the **CCD Hybrid Exploratory Batch** list.
+
+Each item rechecks its source modification time, identity fingerprint, and
+candidate lifecycle before accepting a label. A changed, reviewed, assigned,
+reserved, or materialized pair becomes `Stale` instead of receiving an
+exploratory outcome. Future formal hybrid cohort selection must exclude every
+candidate exposed through an active or completed exploratory batch. Formal
+authorization still requires a separately frozen, unseen, masked,
+two-reviewer validation cohort, adjudication, holdout QC, Wilson gate, and
+management approval.

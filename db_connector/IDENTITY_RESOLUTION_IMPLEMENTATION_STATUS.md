@@ -943,3 +943,29 @@ The sampler is deliberately non-materializing and does not assign or label its
 candidates. Exploratory observations remain ineligible for formal prospective
 statistics; a later frozen hybrid proposal still requires its own unseen,
 masked validation and holdout cohorts.
+
+## Persistent hybrid exploratory Desk review — 2026-10-13
+
+Development now has persistent **CCD Hybrid Exploratory Batch** and **CCD
+Hybrid Exploratory Item** DocTypes. A System Manager can create/reopen the
+fixed deterministic 100-pair sample from Identity Resolution Settings, while
+reviewers can leave and later resume from **Review Next Unreviewed** or the
+filtered item list. Stored `Same`, `Different`, and `Unsure` labels are
+explicitly exploratory, immutable, and isolated from Review Candidate and
+identity/materialization state. Before every label the service rechecks record
+fingerprints and candidate lifecycle; drift records the item as stale.
+
+The migration followed a fresh full Development backup at `20261013_160618`.
+Database, site configuration, public files, and private files were each
+format-checked and SHA-256 verified before the migration. Both DocTypes and all
+three lifecycle/progress indexes are deployed, browser/Python/schema checks
+pass, and the existing 30-test hybrid/Splink/policy set plus the five new
+persistent-workflow tests pass.
+
+Acceptance batch `8bq5df7htr` is `Reviewing` with exactly 100 unreviewed items
+from the same 3,800-pair eligible manifest. It reproduces the prior sample's
+22/67/2/5/4 primary-route allocation and 7 DHCE-to-HMSSHP plus 93
+HMSSHP-to-SHP-UAT source allocation. Repeating the create request returns this
+same batch rather than drawing again. The post-build database audit found zero
+candidate review, assignment, reservation, automation-batch, or materialization
+state violations. No exploratory label was fabricated during deployment.
