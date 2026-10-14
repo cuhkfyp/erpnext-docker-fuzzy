@@ -1466,10 +1466,13 @@ the separate guarded controls below.
    score band, rule version, `Hybrid Automated` Identity Decision, and exactly
    one active two-record group. Disable Hybrid and Live Materialization after
    the test window.
-9. Assign the mandatory QC through the shared capacity action and complete two
-   masked independent reviews. Exercise the correction/investigation path in a
-   controlled demonstration if required; a finalized Different must pause only
-   Hybrid and suspend the affected group.
+9. Run or verify the shared-capacity allocator. Confirm new Hybrid output first
+   becomes `Sampling Eligible`, only the deterministic bounded sample becomes
+   `QC Assigned`, and every unselected pair becomes `Not Selected` without a
+   reviewer, due date, or SLA. Complete two masked independent reviews only for
+   selected cases. Exercise the correction/investigation path in a controlled
+   demonstration if required; a finalized Different must pause only Hybrid and
+   suspend the affected group.
 10. Do not copy Development data or authorization to UAT/Production. Repeat the
     backup, prospective validation, holdout, and approval on target-local data.
 

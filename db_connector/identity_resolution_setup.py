@@ -396,6 +396,34 @@ def _backfill_identity_provenance_classes() -> dict[str, int]:
     return {"decisions": decisions, "groups": int(groups)}
 
 
+def _backfill_hybrid_qc_sampling_statuses() -> int:
+    """Move legacy unassigned Hybrid output out of the mandatory QC backlog."""
+    if not frappe.db.table_exists("CCD Match Review Candidate"):
+        return 0
+    count = int(
+        frappe.db.count(
+            "CCD Match Review Candidate",
+            {
+                "automation_channel": "Hybrid Development",
+                "automation_status": "Applied",
+                "automated_qc_assigned_at": ["is", "not set"],
+                "automated_qc_review_status": ["in", ["", "Unreviewed"]],
+            },
+        )
+    )
+    if count:
+        frappe.db.sql(
+            "UPDATE `tabCCD Match Review Candidate` "
+            "SET automated_qc_review_status = 'Sampling Eligible', "
+            "automated_qc_due_at = NULL "
+            "WHERE automation_channel = 'Hybrid Development' "
+            "AND automation_status = 'Applied' "
+            "AND automated_qc_assigned_at IS NULL "
+            "AND COALESCE(automated_qc_review_status, '') IN ('', 'Unreviewed')"
+        )
+    return count
+
+
 def install_identity_resolution() -> dict[str, object]:
     from db_connector.api_identity_activation import (
         backfill_activation_item_source_pairs,
@@ -408,6 +436,7 @@ def install_identity_resolution() -> dict[str, object]:
     unified_person_register = _configure_unified_person_register()
     migration = _migrate_recommendation_terms()
     provenance_backfill = _backfill_identity_provenance_classes()
+    hybrid_qc_sampling_backfill = _backfill_hybrid_qc_sampling_statuses()
     automation_defaults = _backfill_fail_closed_automation_defaults()
     registration_sources = _backfill_registration_source_keys()
     legacy_cancel_script = _disable_legacy_registration_cancel_script()
@@ -433,6 +462,7 @@ def install_identity_resolution() -> dict[str, object]:
         "legacy_cancel_script": legacy_cancel_script,
         "recommendation_term_migration": migration,
         "identity_provenance_backfill": provenance_backfill,
+        "hybrid_qc_sampling_backfill": hybrid_qc_sampling_backfill,
         "activation_item_source_backfill": activation_item_source_backfill,
         "unified_person_sequence": unified_person_sequence,
         "unified_person_register": unified_person_register,

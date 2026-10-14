@@ -1083,11 +1083,15 @@ component-atomic, idempotent, backgrounded, and rechecks authorization,
 fingerprints, timestamps, exclusions, and membership before using the explicit
 `Hybrid Automated` / `Validated Probabilistic Automation` provenance.
 
-Every applied pair enters the existing two-reviewer masked mandatory QC pool.
-A finalized Hybrid QC `Different`, overdue Hybrid QC, or a complete rolling
-window below the accepted lower bound pauses only Development Hybrid, suspends
-the affected group, and opens a `Hybrid Development` QC Investigation. Ultra-
-high Splink and deterministic Recommendation controls remain independent.
+Applied Hybrid pairs enter a deterministic sampling population, not the
+mandatory QC backlog. Only the Hybrid allocation within the common 20-case
+weekly capacity receives a reviewer assignment, SLA, and masked two-reviewer
+QC. Every remainder is explicitly `Not Selected`; it stays fully auditable but
+has no reviewer or due date. A finalized sampled Hybrid QC `Different`, overdue
+selected Hybrid QC, or a complete rolling window below the accepted lower
+bound pauses only Development Hybrid, suspends the affected group, and opens a
+`Hybrid Development` QC Investigation. Ultra-high Splink and deterministic
+Recommendation controls remain independent.
 
 Migration followed verified full backup `20261014_163104`: the site config
 parsed, the 452.8 MiB database gzip passed, the 1.6 GiB public archive and 30.4
@@ -1104,3 +1108,37 @@ limit of one it selects one HMSSHP-to-SHP-UAT pair in the frozen route/score
 scope. The run has not yet been adopted into Settings, no Hybrid batch exists,
 and both Hybrid materialization and scheduling remain disabled; deployment
 created no Identity Decision, Group, Membership, or Exclusion.
+
+## Development Hybrid sampled-QC correction — 2026-10-14
+
+The first manual Development Hybrid batch `nqk2810tru` applied all three
+isolated components without exceptions and created identity groups
+`6qpkrj95qc`, `6sk6nmll6a`, and `6t8p82q1r6`. Operational inspection then
+confirmed that the original implementation incorrectly treated every applied
+Hybrid Candidate as mandatory future QC. That behavior contradicted the
+bounded ongoing-sampling design and would have converted a large unattended
+population into an unbounded human-review backlog.
+
+The corrected lifecycle is `Sampling Eligible` followed by either `QC
+Assigned` or `Not Selected`. The shared allocator treats Hybrid as its own
+active channel inside the same governed 20-pair weekly capacity, uses the same
+seeded weekly deterministic ranking, assigns two-review QC and an SLA only to
+the allocated sample, and closes every remainder without a reviewer or due
+date. Hybrid is explicitly excluded from the ordinary mandatory Candidate
+backlog. An allocator failure after a component-atomic identity commit leaves
+the Candidate sampling-eligible for a later monitor and cannot relabel the
+already-applied batch as failed.
+
+Migration followed verified full Development backup `20261014_230227`. Its
+761-byte configuration JSON parsed, the 452.9 MiB database gzip passed, the
+1.6 GiB public archive and 30.4 MiB private archive listed successfully, and
+all artifacts were SHA-256 hashed. The superseded local `20261014_163104` set
+was then removed; the off-machine backup was not touched.
+
+Because the current week already contains 48 assigned cases against the shared
+capacity of 20, the allocator selected zero of the three existing Hybrid cases
+and deterministically marked all three `Not Selected`. They retain their
+applied groups and complete provenance, while all reviewer and due-date fields
+remain empty. The live mandatory Hybrid backlog and sampling-eligible carryover
+are both zero. The complete 240-test suite, deployed JavaScript syntax checks,
+worker imports, schema migration, and live state queries pass.

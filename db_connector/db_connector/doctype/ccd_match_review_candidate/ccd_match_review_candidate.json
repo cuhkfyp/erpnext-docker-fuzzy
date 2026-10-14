@@ -47,7 +47,7 @@
   {"fieldname": "automated_applied_at", "fieldtype": "Datetime", "label": "Automated Applied At", "read_only": 1},
   {"fieldname": "automated_qc_assigned_at", "fieldtype": "Datetime", "label": "Automated QC Assigned At", "read_only": 1},
   {"fieldname": "automated_qc_due_at", "fieldtype": "Datetime", "label": "Automated QC Due At", "read_only": 1},
-  {"fieldname": "automated_qc_review_status", "fieldtype": "Select", "label": "Automated QC Review Status", "options": "\nUnreviewed\nPartially Reviewed\nNeeds Adjudication\nAgreed\nAdjudicated\nStale", "read_only": 1},
+  {"fieldname": "automated_qc_review_status", "fieldtype": "Select", "label": "Automated QC Review Status", "options": "\nSampling Eligible\nNot Selected\nUnreviewed\nPartially Reviewed\nNeeds Adjudication\nAgreed\nAdjudicated\nStale", "read_only": 1},
   {"fieldname": "automated_qc_final_label", "fieldtype": "Select", "label": "Automated QC Final Label", "options": "\nSame\nDifferent", "read_only": 1},
   {"fieldname": "automated_qc_finalized_at", "fieldtype": "Datetime", "label": "Automated QC Finalized At", "read_only": 1},
   {"default": "0", "fieldname": "automated_qc_stale", "fieldtype": "Check", "label": "Automated QC Stale", "read_only": 1},

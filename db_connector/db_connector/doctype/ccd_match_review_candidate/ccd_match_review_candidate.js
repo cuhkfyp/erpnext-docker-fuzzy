@@ -107,9 +107,14 @@ function render_candidate_evidence(frm, payload) {
 		: payload.sensitive_values_visible
 			? '<div class="alert alert-warning">' + __("Sensitive values are visible because your role permits them.") + "</div>"
 			: '<div class="alert alert-info">' + __("Identity values are masked. A Sensitive Reviewer or System Manager can see the full permitted values.") + "</div>";
+	const hybridQcPurpose = frm.doc.automated_qc_assigned_at
+		? __("This lower-score pair matched the frozen, prospectively validated corroboration rule and was deterministically selected for masked QC. This screen cannot link or merge records.")
+		: frm.doc.automated_qc_review_status === "Not Selected"
+			? __("This automatically materialized pair was not selected for the bounded QC sample. It has no reviewer assignment or QC SLA; its complete automation provenance remains visible for audit.")
+			: __("This automatically materialized pair is awaiting the bounded deterministic QC-sampling decision. It has no reviewer assignment or QC SLA unless selected.");
 	const purpose = frm.doc.automation_channel === "Hybrid Development"
 		? '<div class="alert alert-secondary"><b>' + __("Automation channel: Development Hybrid") + "</b> — " +
-			__("This lower-score pair was selected only because it matched the frozen, prospectively validated deterministic corroboration rule. This screen performs masked QC and cannot link or merge records.") + "</div>"
+			hybridQcPurpose + "</div>"
 		: '<div class="alert alert-secondary"><b>' + __("Model tier: Review") + "</b> — " +
 			__("This pair is prioritized by Splink for human review only. It is not an automatic High match and this screen cannot link or merge records.") + "</div>";
 	const stale = payload.stale

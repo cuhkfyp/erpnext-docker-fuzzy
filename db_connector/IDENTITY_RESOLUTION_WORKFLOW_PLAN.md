@@ -1531,10 +1531,15 @@ confirmation. A scheduled Hybrid cycle is deferred whenever the preceding
 ultra-high Splink cycle queued work, so Hybrid selection sees refreshed identity
 state on a later cycle.
 
-Every applied pair is mandatory masked two-reviewer QC under the shared weekly
-capacity. A confirmed `Different` pauses only Hybrid, suspends its group, and
-opens a Hybrid Development investigation; overdue QC and a completed rolling
-window below 0.95 also pause only Hybrid. This remains a Development-only
-demonstration path. UAT/Production still require their own backup, code-only
-deployment, fresh data-local validation, holdout approval, and explicit
-authorization; Development data or authorization must not be copied.
+Every applied pair retains its full Candidate and identity provenance, but it
+does not automatically become mandatory QC. The shared weekly allocator first
+marks new Hybrid output `Sampling Eligible`, deterministically selects only its
+bounded share of the common capacity, and closes the remainder as `Not
+Selected` with no reviewer, due date, or SLA. Selected cases alone enter masked
+two-reviewer QC. A confirmed sampled `Different` pauses only Hybrid, suspends
+its group, and opens a Hybrid Development investigation; overdue selected QC
+and a completed rolling window below 0.95 also pause only Hybrid. This remains
+a Development-only demonstration path. UAT/Production still require their own
+backup, code-only deployment, fresh data-local validation, holdout approval,
+and explicit authorization; Development data or authorization must not be
+copied.

@@ -1594,17 +1594,39 @@ def _mandatory_unassigned() -> tuple[list[Any], list[Any]]:
         fields=["name", "recommendation_key", "canary_run"],
         limit_page_length=100_000,
     )
-    splink = frappe.get_all(
+    candidate_rows = frappe.get_all(
         CANDIDATE_DOCTYPE,
         filters={
             "automation_status": "Applied",
             "automated_qc_review_status": "Unreviewed",
             "automated_qc_assigned_at": ["is", "not set"],
         },
-        fields=["name", "pair_key", "automation_validation_run"],
+        fields=["name", "pair_key", "automation_validation_run", "automation_channel"],
         limit_page_length=100_000,
     )
+    # Ongoing Development Hybrid output is sampled separately.  It must never
+    # become mandatory merely because it was materialized; only the bounded
+    # deterministic sample receives a reviewer assignment and SLA.
+    splink = [
+        row
+        for row in candidate_rows
+        if str(getattr(row, "automation_channel", "") or "") != "Hybrid Development"
+    ]
     return recommendations, splink
+
+
+def _hybrid_sampling_eligible() -> list[Any]:
+    return frappe.get_all(
+        CANDIDATE_DOCTYPE,
+        filters={
+            "automation_channel": "Hybrid Development",
+            "automation_status": "Applied",
+            "automated_qc_review_status": "Sampling Eligible",
+            "automated_qc_assigned_at": ["is", "not set"],
+        },
+        fields=["name", "pair_key", "automation_validation_run", "automated_applied_at"],
+        limit_page_length=100_000,
+    )
 
 
 def _deterministic_names(channel: str, rows: list[Any], limit: int) -> list[str]:
@@ -1704,14 +1726,30 @@ def _advance_shared_recommendation_cadence(
 
 
 def run_shared_review_capacity() -> dict[str, Any]:
-    """Assign mandatory QC first within one hard 20-pair weekly capacity."""
+    """Assign mandatory QC and a sampled Hybrid subset within one weekly cap."""
     settings = frappe.get_single(SETTINGS_DOCTYPE)
     if not settings.automatic_qc_assignment_enabled:
         return {"status": "Disabled", "assigned": 0}
     used = _weekly_assigned_count()
     available = max(WEEKLY_PAIR_CAPACITY - used, 0)
     recommendations, splink = _mandatory_unassigned()
+    hybrid = _hybrid_sampling_eligible()
     week = _week_start()
+    recent_candidate_volume = int(
+        frappe.db.count(
+            CANDIDATE_DOCTYPE,
+            {"automated_applied_at": [">=", week]},
+        )
+    )
+    recent_hybrid_volume = int(
+        frappe.db.count(
+            CANDIDATE_DOCTYPE,
+            {
+                "automation_channel": "Hybrid Development",
+                "automated_applied_at": [">=", week],
+            },
+        )
+    )
     recent_volume = {
         "Recommendation": int(
             frappe.db.count(
@@ -1719,14 +1757,15 @@ def run_shared_review_capacity() -> dict[str, Any]:
                 {"rollout_state": "Applied", "activated_at": [">=", week]},
             )
         ),
-        "Splink": int(
-            frappe.db.count(
-                CANDIDATE_DOCTYPE, {"automated_applied_at": [">=", week]}
-            )
-        ),
+        "Splink": max(recent_candidate_volume - recent_hybrid_volume, 0),
+        "Hybrid": recent_hybrid_volume,
     }
     allocation = allocate_shared_capacity(
-        {"Recommendation": len(recommendations), "Splink": len(splink)},
+        {
+            "Recommendation": len(recommendations),
+            "Splink": len(splink),
+            "Hybrid": len(hybrid),
+        },
         capacity=available,
         recent_unattended_volume=recent_volume,
     )
@@ -1734,6 +1773,11 @@ def run_shared_review_capacity() -> dict[str, Any]:
     due = add_days(now, int(settings.qc_sla_days or 14))
     rec_names = _deterministic_names("Recommendation", recommendations, allocation["Recommendation"])
     splink_names = _deterministic_names("Splink", splink, allocation["Splink"])
+    hybrid_names = _deterministic_names("Hybrid", hybrid, allocation["Hybrid"])
+    hybrid_name_set = set(hybrid_names)
+    hybrid_not_selected = sorted(
+        str(row.name) for row in hybrid if str(row.name) not in hybrid_name_set
+    )
     for name in rec_names:
         frappe.db.set_value(
             RECOMMENDATION_DOCTYPE, name, {"qc_assigned_at": now, "qc_due_at": due}, update_modified=False
@@ -1745,7 +1789,31 @@ def run_shared_review_capacity() -> dict[str, Any]:
             {"automated_qc_assigned_at": now, "automated_qc_due_at": due, "automation_status": "QC Assigned"},
             update_modified=False,
         )
-    mandatory_assigned = len(rec_names) + len(splink_names)
+    for name in hybrid_names:
+        frappe.db.set_value(
+            CANDIDATE_DOCTYPE,
+            name,
+            {
+                "automated_qc_assigned_at": now,
+                "automated_qc_due_at": due,
+                "automated_qc_review_status": "Unreviewed",
+                "automation_status": "QC Assigned",
+            },
+            update_modified=False,
+        )
+    for name in hybrid_not_selected:
+        frappe.db.set_value(
+            CANDIDATE_DOCTYPE,
+            name,
+            {
+                "automated_qc_review_status": "Not Selected",
+                "automated_qc_assigned_at": None,
+                "automated_qc_due_at": None,
+                "automation_status": "Applied",
+            },
+            update_modified=False,
+        )
+    mandatory_assigned = len(rec_names) + len(splink_names) + len(hybrid_names)
     optional_limit = max(available - mandatory_assigned, 0)
     optional_rows = []
     if optional_limit:
@@ -1803,6 +1871,8 @@ def run_shared_review_capacity() -> dict[str, Any]:
         "assigned": assigned,
         "recommendation_qc": rec_names,
         "splink_qc": splink_names,
+        "hybrid_qc": hybrid_names,
+        "hybrid_not_selected": hybrid_not_selected,
         "optional_splink": optional_names,
         "recommendation_cadence": recommendation_cadence,
         "remaining_capacity": available - assigned,

@@ -854,7 +854,13 @@ def apply_hybrid_batch(batch_name: str, requested_by: str) -> dict[str, Any]:
                         "identity_groups_json": _json(result.get("identity_groups") or []),
                         "materialization_status": "Applied",
                         "automated_applied_at": now_datetime(),
-                        "automated_qc_review_status": "Unreviewed",
+                        # This is an eligible population, not a mandatory QC
+                        # backlog.  The shared weekly allocator deterministically
+                        # selects a bounded sample and closes every other case as
+                        # Not Selected without assigning an SLA.
+                        "automated_qc_review_status": "Sampling Eligible",
+                        "automated_qc_assigned_at": None,
+                        "automated_qc_due_at": None,
                     },
                     update_modified=False,
                 )
@@ -914,12 +920,31 @@ def apply_hybrid_batch(batch_name: str, requested_by: str) -> dict[str, Any]:
             }
         )
         frappe.db.commit()
+        try:
+            from db_connector.api_splink_automation import run_shared_review_capacity
+
+            qc_sampling = run_shared_review_capacity()
+        except Exception as sampling_exc:
+            # Materialization is already component-atomically committed.  A
+            # transient allocator failure must leave the candidates Sampling
+            # Eligible for the next monitor rather than misreport the applied
+            # identity batch as Failed.
+            frappe.db.rollback()
+            frappe.log_error(
+                traceback.format_exc(),
+                "Development Hybrid QC sampling deferred",
+            )
+            qc_sampling = {
+                "status": "Deferred",
+                "error": f"{type(sampling_exc).__name__}:{str(sampling_exc)}"[:140],
+            }
         return {
             "batch": batch.name,
             "status": status,
             "applied": applied,
             "exceptions": exceptions,
             "stale": stale,
+            "qc_sampling": qc_sampling,
         }
     except Exception as exc:
         frappe.db.rollback()

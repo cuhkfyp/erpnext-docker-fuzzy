@@ -233,7 +233,7 @@ class SplinkAutomationServiceTests(unittest.TestCase):
             for index in range(18)
         ]
         database = MagicMock()
-        database.count.side_effect = [0, 46]
+        database.count.side_effect = [46, 0, 0]
         with patch.object(service.frappe, "db", database), patch.object(
             service.frappe, "get_single", return_value=settings
         ), patch.object(
@@ -242,6 +242,8 @@ class SplinkAutomationServiceTests(unittest.TestCase):
             service, "_weekly_assigned_count", return_value=0
         ), patch.object(
             service, "_mandatory_unassigned", return_value=(recommendations, splink)
+        ), patch.object(
+            service, "_hybrid_sampling_eligible", return_value=[]
         ), patch.object(
             service, "_week_start", return_value="2026-10-12"
         ), patch.object(
@@ -258,6 +260,8 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         self.assertEqual(result["assigned"], 20)
         self.assertEqual(len(result["recommendation_qc"]), 2)
         self.assertEqual(len(result["splink_qc"]), 18)
+        self.assertEqual(result["hybrid_qc"], [])
+        self.assertEqual(result["hybrid_not_selected"], [])
         self.assertEqual(result["optional_splink"], [])
         self.assertEqual(result["remaining_capacity"], 0)
         get_all.assert_not_called()
@@ -336,6 +340,8 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         ), patch.object(
             service, "_mandatory_unassigned", return_value=([], [])
         ), patch.object(
+            service, "_hybrid_sampling_eligible", return_value=[]
+        ), patch.object(
             service, "_week_start", return_value=datetime(2026, 10, 12)
         ), patch.object(
             service, "now_datetime", return_value=current
@@ -354,6 +360,149 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         )
         get_all.assert_not_called()
         database.commit.assert_called_once_with()
+
+    def test_exhausted_week_closes_hybrid_population_without_qc_backlog(self):
+        settings = types.SimpleNamespace(
+            automatic_qc_assignment_enabled=1,
+            automatic_tiered_canary="",
+            qc_assignment_interval_days=7,
+            qc_sla_days=14,
+        )
+        hybrid = [
+            types.SimpleNamespace(
+                name=f"hybrid-{index}",
+                pair_key=f"pair-{index}",
+                automation_validation_run="hybrid-run",
+                automated_applied_at="2026-10-14 17:46:59",
+            )
+            for index in range(3)
+        ]
+        database = MagicMock()
+        database.count.side_effect = [3, 3, 0]
+        with patch.object(service.frappe, "db", database), patch.object(
+            service.frappe, "get_single", return_value=settings
+        ), patch.object(
+            service.frappe, "get_all"
+        ) as get_all, patch.object(
+            service, "_weekly_assigned_count", return_value=48
+        ), patch.object(
+            service, "_mandatory_unassigned", return_value=([], [])
+        ), patch.object(
+            service, "_hybrid_sampling_eligible", return_value=hybrid
+        ), patch.object(
+            service, "_week_start", return_value=datetime(2026, 10, 12)
+        ), patch.object(
+            service, "now_datetime", return_value=datetime(2026, 10, 14, 18, 0)
+        ), patch.object(
+            service,
+            "_advance_shared_recommendation_cadence",
+            return_value={"status": "Not Configured", "advanced": False},
+        ):
+            result = service.run_shared_review_capacity()
+
+        self.assertEqual(result["assigned"], 0)
+        self.assertEqual(result["hybrid_qc"], [])
+        self.assertEqual(
+            result["hybrid_not_selected"],
+            ["hybrid-0", "hybrid-1", "hybrid-2"],
+        )
+        self.assertEqual(database.set_value.call_count, 3)
+        for call in database.set_value.call_args_list:
+            values = call.args[2]
+            self.assertEqual(values["automated_qc_review_status"], "Not Selected")
+            self.assertIsNone(values["automated_qc_assigned_at"])
+            self.assertIsNone(values["automated_qc_due_at"])
+        get_all.assert_not_called()
+        database.commit.assert_called_once_with()
+
+    def test_hybrid_sample_is_bounded_and_remainder_is_not_selected(self):
+        settings = types.SimpleNamespace(
+            automatic_qc_assignment_enabled=1,
+            automatic_tiered_canary="",
+            qc_assignment_interval_days=7,
+            qc_sla_days=14,
+        )
+        recommendations = [
+            types.SimpleNamespace(name=f"recommendation-{index}", recommendation_key=str(index))
+            for index in range(2)
+        ]
+        hybrid = [
+            types.SimpleNamespace(
+                name=f"hybrid-{index}",
+                pair_key=f"pair-{index}",
+                automation_validation_run="hybrid-run",
+                automated_applied_at="2026-10-14 17:46:59",
+            )
+            for index in range(3)
+        ]
+        database = MagicMock()
+        database.count.side_effect = [3, 3, 2]
+        with patch.object(service.frappe, "db", database), patch.object(
+            service.frappe, "get_single", return_value=settings
+        ), patch.object(
+            service.frappe, "get_all"
+        ) as get_all, patch.object(
+            service, "_weekly_assigned_count", return_value=16
+        ), patch.object(
+            service, "_mandatory_unassigned", return_value=(recommendations, [])
+        ), patch.object(
+            service, "_hybrid_sampling_eligible", return_value=hybrid
+        ), patch.object(
+            service, "_week_start", return_value=datetime(2026, 10, 12)
+        ), patch.object(
+            service, "now_datetime", return_value=datetime(2026, 10, 14, 18, 0)
+        ), patch.object(
+            service, "add_days", return_value=datetime(2026, 10, 28, 18, 0)
+        ), patch.object(
+            service,
+            "_advance_shared_recommendation_cadence",
+            return_value={"status": "Not Configured", "advanced": False},
+        ):
+            result = service.run_shared_review_capacity()
+
+        self.assertEqual(result["assigned"], 4)
+        self.assertEqual(len(result["recommendation_qc"]), 2)
+        self.assertEqual(len(result["hybrid_qc"]), 2)
+        self.assertEqual(len(result["hybrid_not_selected"]), 1)
+        selected_calls = [
+            call.args[2]
+            for call in database.set_value.call_args_list
+            if call.args[0] == service.CANDIDATE_DOCTYPE
+            and call.args[2].get("automation_status") == "QC Assigned"
+        ]
+        not_selected_calls = [
+            call.args[2]
+            for call in database.set_value.call_args_list
+            if call.args[0] == service.CANDIDATE_DOCTYPE
+            and call.args[2].get("automated_qc_review_status") == "Not Selected"
+        ]
+        self.assertEqual(len(selected_calls), 2)
+        self.assertTrue(
+            all(values["automated_qc_review_status"] == "Unreviewed" for values in selected_calls)
+        )
+        self.assertEqual(len(not_selected_calls), 1)
+        get_all.assert_not_called()
+        database.commit.assert_called_once_with()
+
+    def test_hybrid_is_excluded_from_mandatory_candidate_backlog(self):
+        settings = types.SimpleNamespace(automatic_tiered_canary="")
+        ordinary = types.SimpleNamespace(
+            name="splink", pair_key="s", automation_channel="Splink"
+        )
+        hybrid = types.SimpleNamespace(
+            name="hybrid", pair_key="h", automation_channel="Hybrid Development"
+        )
+        with patch.object(
+            service.frappe, "get_single", return_value=settings
+        ), patch.object(
+            service.frappe,
+            "get_all",
+            side_effect=[[], [ordinary, hybrid]],
+        ):
+            recommendations, candidates = service._mandatory_unassigned()
+
+        self.assertEqual(recommendations, [])
+        self.assertEqual([row.name for row in candidates], ["splink"])
 
     def test_shared_cadence_does_not_move_before_it_is_due(self):
         settings = types.SimpleNamespace(

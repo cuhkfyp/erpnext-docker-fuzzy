@@ -142,6 +142,25 @@ class HybridAutomationDeskContractTests(unittest.TestCase):
             json.loads((self.app / "db_connector/doctype/ccd_identity_resolution_settings/ccd_identity_resolution_settings.json").read_text())
         ))
 
+    def test_applied_hybrid_enters_sampling_pool_not_mandatory_qc(self):
+        source = (self.app / "api_hybrid_automation.py").read_text(encoding="utf-8")
+        self.assertIn(
+            '"automated_qc_review_status": "Sampling Eligible"', source
+        )
+        schema = json.loads(
+            (
+                self.app
+                / "db_connector/doctype/ccd_match_review_candidate/ccd_match_review_candidate.json"
+            ).read_text(encoding="utf-8")
+        )
+        status = next(
+            field
+            for field in schema["fields"]
+            if field["fieldname"] == "automated_qc_review_status"
+        )
+        self.assertIn("Sampling Eligible", status["options"].splitlines())
+        self.assertIn("Not Selected", status["options"].splitlines())
+
     def test_identity_and_batch_provenance_are_explicit(self):
         decision = json.loads(
             (
