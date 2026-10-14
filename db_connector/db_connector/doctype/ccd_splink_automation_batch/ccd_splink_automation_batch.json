@@ -9,7 +9,7 @@
   "previewed_at", "previewed_by", "preview_json", "approved_at", "approved_by", "applied_at", "applied_by", "error_summary", "items"
  ],
  "fields": [
-  {"fieldname": "batch_type", "fieldtype": "Select", "in_list_view": 1, "label": "Batch Type", "options": "Validation Label Activation\nCapped Holdout Rollout\nScheduled Splink", "read_only": 1, "reqd": 1},
+  {"fieldname": "batch_type", "fieldtype": "Select", "in_list_view": 1, "label": "Batch Type", "options": "Validation Label Activation\nCapped Holdout Rollout\nScheduled Splink\nDevelopment Hybrid Automation", "read_only": 1, "reqd": 1},
   {"fieldname": "validation_run", "fieldtype": "Link", "in_list_view": 1, "label": "Authorization Validation", "options": "CCD Match Evaluation Run", "read_only": 1, "reqd": 1},
   {"fieldname": "queue_run", "fieldtype": "Link", "label": "Frozen Review Queue", "options": "CCD Match Review Queue Run", "read_only": 1, "reqd": 1},
   {"fieldname": "matching_policy", "fieldtype": "Link", "label": "Matching Policy", "options": "CCD Matching Policy", "read_only": 1, "reqd": 1},

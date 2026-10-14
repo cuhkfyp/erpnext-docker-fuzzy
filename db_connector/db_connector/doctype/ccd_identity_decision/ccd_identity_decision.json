@@ -14,7 +14,7 @@
   {"fieldname": "decision_key", "fieldtype": "Data", "hidden": 1, "label": "Decision Key", "read_only": 1, "reqd": 1, "unique": 1},
   {"default": "1", "fieldname": "decision_version", "fieldtype": "Int", "label": "Decision Version", "read_only": 1, "reqd": 1},
   {"fieldname": "decision_type", "fieldtype": "Select", "in_list_view": 1, "label": "Decision Type", "options": "Same\nDifferent\nPartition", "read_only": 1, "reqd": 1},
-  {"fieldname": "origin", "fieldtype": "Select", "in_list_view": 1, "label": "Origin", "options": "Tiered Evidence\nSplink Human Review\nSplink Validation\nSplink Automated\nComponent Review\nGovernance Override", "read_only": 1, "reqd": 1},
+  {"fieldname": "origin", "fieldtype": "Select", "in_list_view": 1, "label": "Origin", "options": "Tiered Evidence\nSplink Human Review\nSplink Validation\nSplink Automated\nHybrid Automated\nComponent Review\nGovernance Override", "read_only": 1, "reqd": 1},
   {"fieldname": "provenance_class", "fieldtype": "Select", "in_list_view": 1, "label": "Governed Provenance Class", "options": "Human Confirmed\nValidated Deterministic Automation\nValidated Probabilistic Automation\nGovernance Correction/Override", "read_only": 1, "reqd": 1},
   {"fieldname": "origin_doctype", "fieldtype": "Link", "label": "Origin DocType", "options": "DocType", "read_only": 1, "reqd": 1},
   {"fieldname": "origin_document", "fieldtype": "Dynamic Link", "in_list_view": 1, "label": "Origin Document", "options": "origin_doctype", "read_only": 1, "reqd": 1},

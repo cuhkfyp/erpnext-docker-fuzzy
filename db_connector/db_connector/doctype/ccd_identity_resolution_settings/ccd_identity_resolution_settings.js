@@ -7,6 +7,7 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		add_splink_control(frm);
 		add_hybrid_research_control(frm);
 		add_hybrid_holdout_control(frm);
+		add_hybrid_automation_control(frm);
 		add_integrity_control(frm);
 		add_unified_person_control(frm);
 		add_notification_control(frm);
@@ -79,6 +80,192 @@ function add_splink_control(frm) {
 			__("Splink Automation"),
 		);
 	}
+}
+
+function add_hybrid_automation_control(frm) {
+	const field = frm.get_field("hybrid_automation_status_html");
+	if (!field?.$wrapper) return;
+	field.$wrapper.html(`<div class="text-muted">${__("Loading Development Hybrid automation controls…")}</div>`);
+	frappe.call({
+		method: "db_connector.api_hybrid_automation.get_hybrid_automation_dashboard",
+		callback(response) {
+			const result = response.message || {};
+			render_hybrid_automation_dashboard(field.$wrapper, result);
+			const latest = result.latest_approved_run || "";
+			if (result.can_authorize && latest) {
+				frm.add_custom_button(
+					__("Authorize Approved Hybrid Evidence"),
+					() => frappe.prompt(
+						[
+							{ fieldname: "reason", fieldtype: "Small Text", label: __("Development authorization reason"), reqd: 1 },
+							{ fieldname: "confirm_run_name", fieldtype: "Data", label: __("Type the exact Hybrid Validation Run ID"), description: latest, reqd: 1 },
+						],
+						(values) => frappe.call({
+							method: "db_connector.api_hybrid_automation.authorize_hybrid_development_automation",
+							args: { run_name: latest, ...values },
+							callback: () => frm.reload_doc(),
+						}),
+						__("Authorize Development Hybrid evidence"),
+					),
+					__("Development Hybrid Automation"),
+				);
+			}
+			frm.add_custom_button(
+				__("Preview Development Hybrid Cycle"),
+				() => preview_automatic_hybrid(frm),
+				__("Development Hybrid Automation"),
+			);
+			if (!result.authorized_run) return;
+			const desired = result.enabled ? 0 : 1;
+			const action = desired ? __("Enable Development Hybrid") : __("Disable Development Hybrid");
+			const phrase = desired ? "ENABLE DEVELOPMENT HYBRID AUTOMATION" : "DISABLE DEVELOPMENT HYBRID AUTOMATION";
+			frm.add_custom_button(action, () => prompt_hybrid_control(
+				"db_connector.api_hybrid_automation.set_automatic_hybrid",
+				action,
+				phrase,
+				{ enabled: desired },
+				frm,
+			), __("Development Hybrid Automation"));
+
+			const paused = !!result.paused;
+			const pauseAction = paused ? __("Resume Development Hybrid") : __("Pause Development Hybrid");
+			const pausePhrase = paused ? "RESUME DEVELOPMENT HYBRID AUTOMATION" : "PAUSE DEVELOPMENT HYBRID AUTOMATION";
+			frm.add_custom_button(pauseAction, () => prompt_hybrid_control(
+				paused
+					? "db_connector.api_hybrid_automation.resume_hybrid_automation"
+					: "db_connector.api_hybrid_automation.pause_hybrid_automation",
+				pauseAction,
+				pausePhrase,
+				{},
+				frm,
+			), __("Development Hybrid Automation"));
+
+			if (result.enabled) {
+				frm.add_custom_button(
+					__("Run One Development Hybrid Cycle Now"),
+					() => frappe.confirm(
+						__("Queue one bounded Development-only Hybrid cycle? The background worker will repeat all current-state safety checks."),
+						() => run_automatic_hybrid_now(frm),
+					),
+					__("Development Hybrid Automation"),
+				);
+				const scheduleDesired = result.scheduling_enabled ? 0 : 1;
+				const scheduleAction = scheduleDesired
+					? __("Enable Daily Development Hybrid")
+					: __("Disable Daily Development Hybrid");
+				const schedulePhrase = scheduleDesired
+					? "ENABLE SCHEDULED DEVELOPMENT HYBRID"
+					: "DISABLE SCHEDULED DEVELOPMENT HYBRID";
+				frm.add_custom_button(scheduleAction, () => prompt_hybrid_control(
+					"db_connector.api_hybrid_automation.set_hybrid_scheduling",
+					scheduleAction,
+					schedulePhrase,
+					{ enabled: scheduleDesired },
+					frm,
+				), __("Development Hybrid Automation"));
+			}
+		},
+	});
+}
+
+function prompt_hybrid_control(method, title, phrase, extraArgs, frm) {
+	frappe.prompt(
+		[
+			{ fieldname: "reason", fieldtype: "Small Text", label: __("Control-change reason"), reqd: 1 },
+			{ fieldname: "confirm_phrase", fieldtype: "Data", label: __("Type {0} exactly", [phrase]), reqd: 1 },
+		],
+		(values) => frappe.call({
+			method,
+			args: { ...extraArgs, ...values },
+			callback: () => frm.reload_doc(),
+		}),
+		title,
+	);
+}
+
+function render_hybrid_automation_dashboard(wrapper, result) {
+	if (!result.available) {
+		wrapper.html(`<div class="alert alert-warning">${__("No approved Development Hybrid evidence is available.")}</div>`);
+		return;
+	}
+	const blockers = result.authorization_blockers || [];
+	const batch = result.last_batch
+		? `<a href="/app/ccd-splink-automation-batch/${encodeURIComponent(result.last_batch)}">${esc(result.last_batch)}</a>`
+		: __("None");
+	wrapper.html(
+		`<div class="alert alert-${blockers.length ? "warning" : "info"}">` +
+			`<p><strong>${__("Development-only lower-score Hybrid automation")}</strong></p>` +
+			`<p>${__("Latest approved evidence")}: ${esc(result.latest_approved_run || "None")}<br>` +
+			`${__("Authorized run")}: ${esc(result.authorized_run || "None")}<br>` +
+			`${__("Materialization control / daily schedule / paused")}: ${result.enabled ? __("Enabled") : __("Disabled")} / ${result.scheduling_enabled ? __("Enabled") : __("Disabled")} / ${result.paused ? __("Yes") : __("No")}</p>` +
+			`<p>${__("Maximum isolated components per cycle")}: ${esc(result.component_limit || 1)}<br>` +
+			`${__("Last status / batch")}: ${esc(result.last_status || "None")} / ${batch}</p>` +
+			(blockers.length ? `<p class="text-danger">${__("Authorization blockers")}: ${blockers.map(esc).join("<br>")}</p>` : "") +
+			(result.pause_reason ? `<p class="text-danger">${__("Pause reason")}: ${esc(result.pause_reason)}</p>` : "") +
+			(result.last_error ? `<p class="text-danger">${__("Last error")}: ${esc(result.last_error)}</p>` : "") +
+			`<p class="small">${__("This authorization is Development-only. It does not lower or replace the independent 0.999148140 ultra-high Splink authorization.")}</p>` +
+		`</div>`,
+	);
+}
+
+function preview_automatic_hybrid(frm) {
+	frappe.call({
+		method: "db_connector.api_hybrid_automation.preview_automatic_hybrid_cycle",
+		freeze: true,
+		callback(response) {
+			const result = response.message || {};
+			const blockers = result.operational_blockers || [];
+			frappe.msgprint({
+				title: __("Zero-write Development Hybrid preview"),
+				indicator: blockers.length ? "orange" : "green",
+				message: `<p>${__("Authorized run")}: ${esc(result.validation_run || "")}</p>` +
+					`<p>${__("Frozen score range")}: ${esc(result.minimum_score || 0)} ≤ score &lt; ${esc(result.upper_cutoff || 0)}</p>` +
+					`<p>${__("Per-cycle component limit")}: ${esc(result.component_limit || 0)}</p>` +
+					`<p>${__("Eligible / selected isolated components")}: ${esc(result.eligible_component_count || 0)} / ${esc(result.selected_component_count || 0)}</p>` +
+					`<p>${__("Selected by route")}: ${esc(format_map(result.selected_by_route))}</p>` +
+					`<p>${__("Selected by score band")}: ${esc(format_map(result.selected_by_score_band))}</p>` +
+					`<p>${__("Selected by source")}: ${esc(format_map(result.selected_by_source))}</p>` +
+					`<p>${__("Selected candidates")}: ${(result.selected_candidates || []).map(esc).join(", ") || __("None")}</p>` +
+					`<p>${__("Operational blockers")}: ${blockers.length ? blockers.map(esc).join("<br>") : __("None")}</p>` +
+					`<p><strong>${__("No records were changed.")}</strong></p>`,
+			});
+		},
+	});
+}
+
+function run_automatic_hybrid_now(frm) {
+	if (frm.__ccd_hybrid_cycle_starting) return;
+	frm.__ccd_hybrid_cycle_starting = true;
+	frappe.call({
+		method: "db_connector.api_hybrid_automation.run_automatic_hybrid_now",
+		freeze: true,
+		freeze_message: __("Selecting and queueing the bounded Development Hybrid batch…"),
+		callback(response) {
+			frm.__ccd_hybrid_cycle_starting = false;
+			const result = response.message || {};
+			const batch = result.batch || "";
+			const batchLink = batch
+				? `<a href="/app/ccd-splink-automation-batch/${encodeURIComponent(batch)}">${esc(batch)}</a>`
+				: __("None");
+			frappe.msgprint({
+				title: __("Development Hybrid cycle"),
+				indicator: result.status === "Queued" ? "green" : "orange",
+				message: `<p>${__("Status")}: ${esc(result.status || "")}</p>` +
+					`<p>${__("Batch")}: ${batchLink}</p>` +
+					`<p>${__("Selected isolated components")}: ${esc(result.selected_component_count || result.selected_components || 0)}</p>` +
+					`<p class="text-muted">${__("A queued batch continues on the long worker after this dialog closes.")}</p>`,
+			});
+			frm.reload_doc();
+		},
+		error() {
+			frm.__ccd_hybrid_cycle_starting = false;
+		},
+	});
+}
+
+function format_map(values) {
+	const entries = Object.entries(values || {});
+	return entries.length ? entries.map(([key, value]) => `${key}: ${value}`).join(", ") : __("None");
 }
 
 function preview_automatic_splink(frm) {

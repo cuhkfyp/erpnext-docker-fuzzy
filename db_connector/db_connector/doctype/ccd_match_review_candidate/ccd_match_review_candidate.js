@@ -46,19 +46,23 @@ function add_hybrid_research_button(frm) {
 
 function add_splink_qc_buttons(frm) {
 	if (!frm.doc.automated_qc_assigned_at || !["Unreviewed", "Partially Reviewed", "Needs Adjudication"].includes(frm.doc.automated_qc_review_status)) return;
+	const group = frm.doc.automation_channel === "Hybrid Development"
+		? __("Automated Hybrid QC")
+		: __("Automated Splink QC");
 	if (["Unreviewed", "Partially Reviewed"].includes(frm.doc.automated_qc_review_status)) {
 		for (const label of ["Same", "Different", "Unsure"]) {
-			frm.add_custom_button(__(label), () => submit_splink_qc(frm, label), __("Automated Splink QC"));
+			frm.add_custom_button(__(label), () => submit_splink_qc(frm, label), group);
 		}
 	}
 	if (frm.doc.automated_qc_review_status === "Needs Adjudication" && (frappe.user_roles || []).includes("System Manager")) {
 		for (const label of ["Same", "Different"]) {
-			frm.add_custom_button(__(`Adjudicate ${label}`), () => submit_splink_qc(frm, label, true), __("Automated Splink QC"));
+			frm.add_custom_button(__(`Adjudicate ${label}`), () => submit_splink_qc(frm, label, true), group);
 		}
 	}
 }
 
 function submit_splink_qc(frm, label, adjudication = false) {
+	const channel = frm.doc.automation_channel === "Hybrid Development" ? __("Hybrid") : __("Splink");
 	frappe.prompt(
 		[{ fieldname: "notes", fieldtype: "Small Text", label: __("Notes"), reqd: adjudication ? 1 : 0 }],
 		(values) => frappe.call({
@@ -68,7 +72,9 @@ function submit_splink_qc(frm, label, adjudication = false) {
 			args: { candidate_name: frm.doc.name, label, notes: values.notes || "" },
 			callback: () => frm.reload_doc(),
 		}),
-		adjudication ? __(`Adjudicate Splink QC as ${label}`) : __(`Submit Splink QC ${label}`),
+		adjudication
+			? __(`Adjudicate ${channel} QC as ${label}`)
+			: __(`Submit ${channel} QC ${label}`),
 	);
 }
 
@@ -97,12 +103,15 @@ function comparison_label(value) {
 
 function render_candidate_evidence(frm, payload) {
 	const privacy = payload.blinded_automated_qc
-		? '<div class="alert alert-info">' + __("This is blinded automated Splink QC. Identity values remain masked for every reviewer, including Sensitive Reviewers and System Managers. Comparison results are computed server-side from the governed evidence.") + "</div>"
+		? '<div class="alert alert-info">' + __("This is blinded automated probabilistic QC. Identity values remain masked for every reviewer, including Sensitive Reviewers and System Managers. Comparison results are computed server-side from the governed evidence.") + "</div>"
 		: payload.sensitive_values_visible
 			? '<div class="alert alert-warning">' + __("Sensitive values are visible because your role permits them.") + "</div>"
 			: '<div class="alert alert-info">' + __("Identity values are masked. A Sensitive Reviewer or System Manager can see the full permitted values.") + "</div>";
-	const purpose = '<div class="alert alert-secondary"><b>' + __("Model tier: Review") + "</b> — " +
-		__("This pair is prioritized by Splink for human review only. It is not an automatic High match and this screen cannot link or merge records.") + "</div>";
+	const purpose = frm.doc.automation_channel === "Hybrid Development"
+		? '<div class="alert alert-secondary"><b>' + __("Automation channel: Development Hybrid") + "</b> — " +
+			__("This lower-score pair was selected only because it matched the frozen, prospectively validated deterministic corroboration rule. This screen performs masked QC and cannot link or merge records.") + "</div>"
+		: '<div class="alert alert-secondary"><b>' + __("Model tier: Review") + "</b> — " +
+			__("This pair is prioritized by Splink for human review only. It is not an automatic High match and this screen cannot link or merge records.") + "</div>";
 	const stale = payload.stale
 		? '<div class="alert alert-danger">' + (payload.historical_source_retired
 			? __("Historical source retired. The deleted CCD Master is not remapped to a recreated record.")

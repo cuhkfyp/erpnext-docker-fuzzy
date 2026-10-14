@@ -19,6 +19,8 @@ class CCDIdentityResolutionSettings(Document):
             self.automatic_splink_components_per_run = 10
         if not self.maximum_splink_component_size:
             self.maximum_splink_component_size = 2
+        if not self.automatic_hybrid_components_per_run:
+            self.automatic_hybrid_components_per_run = 1
         self.qc_cases_per_week = 20
 
     def validate(self):
@@ -37,12 +39,23 @@ class CCDIdentityResolutionSettings(Document):
             "authorized_splink_cutoff",
             "maximum_splink_component_size",
             "automatic_splink_components_per_run",
+            "authorized_hybrid_validation_run",
+            "authorized_hybrid_queue",
+            "authorized_hybrid_policy",
+            "authorized_hybrid_minimum_score",
+            "authorized_hybrid_upper_cutoff",
+            "authorized_hybrid_rule_version",
+            "authorized_hybrid_source_scope_json",
+            "authorized_hybrid_route_scope_json",
+            "authorized_hybrid_fingerprint",
+            "automatic_hybrid_components_per_run",
             "operational_provenance_allowlist",
         )
         if before and (
             before.automatic_tiered_enabled
             or before.automatic_qc_assignment_enabled
             or before.automatic_splink_enabled
+            or before.automatic_hybrid_enabled
         ):
             changed = [
                 self.meta.get_label(fieldname)
@@ -51,17 +64,21 @@ class CCDIdentityResolutionSettings(Document):
             ]
             if changed:
                 frappe.throw(
-                    "Stop both automatic controls before changing governed "
+                    "Stop all automatic controls before changing governed "
                     "automation settings: " + ", ".join(changed)
                 )
         if (
             before
             and not before.materialization_enabled
             and self.materialization_enabled
-            and (before.automatic_tiered_enabled or before.automatic_splink_enabled)
+            and (
+                before.automatic_tiered_enabled
+                or before.automatic_splink_enabled
+                or before.automatic_hybrid_enabled
+            )
         ):
             frappe.throw(
-                "Stop Automatic Tiered and Automatic Splink before re-enabling Live Identity Materialization"
+                "Stop Automatic Tiered, Automatic Splink, and Development Hybrid before re-enabling Live Identity Materialization"
             )
         for fieldname in (
             "initial_pilot_wave_components",
@@ -74,6 +91,7 @@ class CCDIdentityResolutionSettings(Document):
             "automatic_tiered_components_per_run",
             "automatic_splink_components_per_run",
             "maximum_splink_component_size",
+            "automatic_hybrid_components_per_run",
         ):
             if int(self.get(fieldname) or 0) < 0:
                 frappe.throw(f"{self.meta.get_label(fieldname)} cannot be negative")
@@ -85,6 +103,7 @@ class CCDIdentityResolutionSettings(Document):
             "qc_sla_days",
             "automatic_tiered_components_per_run",
             "automatic_splink_components_per_run",
+            "automatic_hybrid_components_per_run",
         ):
             value = int(self.get(fieldname) or 0)
             if value < 1 or value > 100:
@@ -151,3 +170,22 @@ class CCDIdentityResolutionSettings(Document):
                 or not self.authorized_splink_cutoff
             ):
                 frappe.throw("Complete governed Splink authorization is required")
+        if self.automatic_hybrid_enabled:
+            if not self.materialization_enabled or not self.automatic_qc_assignment_enabled:
+                frappe.throw(
+                    "Live Materialization and Automatic QC Assignment are required for Development Hybrid Automation"
+                )
+            if (
+                not self.authorized_hybrid_validation_run
+                or not self.authorized_hybrid_queue
+                or not self.authorized_hybrid_policy
+                or not self.authorized_hybrid_minimum_score
+                or not self.authorized_hybrid_upper_cutoff
+                or not self.authorized_hybrid_rule_version
+                or not self.authorized_hybrid_fingerprint
+            ):
+                frappe.throw("Complete governed Development Hybrid authorization is required")
+        if self.automatic_hybrid_scheduling_enabled and not self.automatic_hybrid_enabled:
+            frappe.throw(
+                "Development Hybrid Materialization must be enabled before scheduled execution"
+            )

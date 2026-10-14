@@ -852,8 +852,34 @@ def _create_batch(
             if batch_type == "Scheduled Splink":
                 candidate_values.update(
                     {
+                        "automation_channel": "Splink",
                         "automation_validation_run": run.name,
                         "automation_cohort": "Scheduled Splink",
+                    }
+                )
+            elif batch_type == "Capped Holdout Rollout":
+                candidate_values["automation_channel"] = "Splink"
+            elif batch_type == "Development Hybrid Automation":
+                candidate_values.update(
+                    {
+                        "automation_channel": "Hybrid Development",
+                        "automation_validation_run": run.name,
+                        "automation_cohort": "Development Hybrid",
+                        "hybrid_automation_route": item.get(
+                            "hybrid_primary_route"
+                        ),
+                        "hybrid_automation_routes_json": _json(
+                            item.get("hybrid_routes") or []
+                        ),
+                        "hybrid_automation_score_band": item.get(
+                            "hybrid_score_band"
+                        ),
+                        "hybrid_automation_birthday_status": item.get(
+                            "hybrid_birthday_status"
+                        ),
+                        "hybrid_automation_rule_version": item.get(
+                            "hybrid_rule_version"
+                        ),
                     }
                 )
             frappe.db.set_value(
@@ -1451,6 +1477,10 @@ def adjudicate_splink_qc(candidate_name: str, label: str, notes: str) -> dict[st
 
 
 def _apply_splink_qc_breaker(candidate: Any) -> dict[str, Any]:
+    if str(getattr(candidate, "automation_channel", "") or "") == "Hybrid Development":
+        from db_connector.api_hybrid_automation import apply_hybrid_qc_breaker
+
+        return apply_hybrid_qc_breaker(candidate)
     if candidate.automated_qc_failure_action:
         return {"status": "Already Applied", "action": candidate.automated_qc_failure_action}
     memberships = _current_memberships((str(candidate.left_record), str(candidate.right_record)))
@@ -1963,13 +1993,19 @@ def resume_splink_automation(reason: str, confirm_phrase: str) -> dict[str, Any]
     blockers = []
     if frappe.db.count(INVESTIGATION_DOCTYPE, {"automation_channel": "Splink", "status": "Open"}):
         blockers.append("open_splink_investigations")
-    if frappe.db.count(
+    overdue_rows = frappe.get_all(
         CANDIDATE_DOCTYPE,
-        {
+        filters={
             "automated_qc_due_at": ["<", now_datetime()],
             "automated_qc_stale": 0,
             "automated_qc_review_status": ["not in", ["Agreed", "Adjudicated", "Stale"]],
         },
+        fields=["name", "automation_channel"],
+        limit_page_length=100_000,
+    )
+    if any(
+        str(row.automation_channel or "") != "Hybrid Development"
+        for row in overdue_rows
     ):
         blockers.append("overdue_splink_qc")
     if blockers:
@@ -2241,20 +2277,26 @@ def monitor_splink_and_run_automatic() -> dict[str, Any]:
     result["shared_capacity"] = run_shared_review_capacity()
     settings = frappe.get_single(SETTINGS_DOCTYPE)
     now = now_datetime()
-    overdue = frappe.db.count(
+    overdue_rows = frappe.get_all(
         CANDIDATE_DOCTYPE,
-        {
+        filters={
             "automated_qc_due_at": ["<", now],
             "automated_qc_stale": 0,
             "automated_qc_review_status": ["not in", ["Agreed", "Adjudicated", "Stale"]],
         },
+        fields=["name", "automation_channel"],
+        limit_page_length=100_000,
+    )
+    overdue = sum(
+        str(row.automation_channel or "") != "Hybrid Development"
+        for row in overdue_rows
     )
     if overdue:
         result["pause"] = _pause_splink(f"overdue_splink_qc:{overdue}")
     finalized = frappe.get_all(
         CANDIDATE_DOCTYPE,
         filters={"automated_qc_review_status": ["in", ["Agreed", "Adjudicated"]]},
-        fields=["name", "automated_qc_final_label"],
+        fields=["name", "automated_qc_final_label", "automation_channel"],
         order_by="automated_qc_finalized_at asc, name asc",
         limit_page_length=10_000,
     )
@@ -2277,6 +2319,7 @@ def monitor_splink_and_run_automatic() -> dict[str, Any]:
             str(row.automated_qc_final_label)
             for row in finalized
             if str(row.name) not in excluded
+            and str(row.automation_channel or "") != "Hybrid Development"
         ],
         max(int(settings.rolling_qc_window or 100), 1),
     )
@@ -2287,5 +2330,10 @@ def monitor_splink_and_run_automatic() -> dict[str, Any]:
         )
     frappe.db.commit()
     result["automatic_splink"] = run_automatic_splink_cycle()
+    from db_connector.api_hybrid_automation import monitor_hybrid_and_run_scheduled
+
+    result["development_hybrid"] = monitor_hybrid_and_run_scheduled(
+        allow_schedule=result["automatic_splink"].get("status") != "Queued"
+    )
     result["status"] = "Completed"
     return result

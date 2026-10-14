@@ -1061,3 +1061,46 @@ unrelated application `__init__` imports an unavailable Google module in that
 standalone harness; the deployed Frappe module and changed contracts load and
 pass independently. Scheduler/queue processes are healthy and Redis reports a
 successful current persistence state.
+
+## Development-only capped hybrid automation — 2026-10-14
+
+Development now implements the separately governed write path that follows the
+approved prospective validation and blinded holdout. It does not alter the
+independent `0.999148140` ultra-high Splink authorization. Identity Resolution
+Settings exposes a distinct Development Hybrid authorization, materialization
+switch, daily-schedule switch, circuit breaker, 1–100 component limit (default
+`1`), last batch/status/error fields, zero-write preview, and manual bounded
+cycle. Both write and schedule switches migrate disabled.
+
+The authorization action adopts only a completed/approved Hybrid Prospective
+Validation whose blinded holdout is completed and separately approved, whose
+combined gate passed, and whose queue/policy/model/runtime/rule/score/source/
+route provenance is still exact. Selection recomputes current evidence and
+admits only untouched isolated pairs in the frozen source and route scope;
+exploratory, validation, holdout, reviewed, assigned, stale, overlapping,
+excluded, and non-isolated candidates remain unavailable. Each queued batch is
+component-atomic, idempotent, backgrounded, and rechecks authorization,
+fingerprints, timestamps, exclusions, and membership before using the explicit
+`Hybrid Automated` / `Validated Probabilistic Automation` provenance.
+
+Every applied pair enters the existing two-reviewer masked mandatory QC pool.
+A finalized Hybrid QC `Different`, overdue Hybrid QC, or a complete rolling
+window below the accepted lower bound pauses only Development Hybrid, suspends
+the affected group, and opens a `Hybrid Development` QC Investigation. Ultra-
+high Splink and deterministic Recommendation controls remain independent.
+
+Migration followed verified full backup `20261014_163104`: the site config
+parsed, the 452.8 MiB database gzip passed, the 1.6 GiB public archive and 30.4
+MiB private archive listed successfully, and all four artifacts received
+SHA-256 digests. The superseded local `20261014_122741` set was removed after
+verification; the off-machine copy was not touched. The 236-test regression
+suite, targeted 28-test hybrid/Splink set, Python compilation, JSON validation,
+and deployed JavaScript syntax checks pass.
+
+The deployed zero-write preview for approved run `mt1ab9l6pv` scans 6,787
+lower-band candidates and reports 3,485 currently eligible untouched isolated
+pairs after excluding the 215 validation/holdout candidates. With the default
+limit of one it selects one HMSSHP-to-SHP-UAT pair in the frozen route/score
+scope. The run has not yet been adopted into Settings, no Hybrid batch exists,
+and both Hybrid materialization and scheduling remain disabled; deployment
+created no Identity Decision, Group, Membership, or Exclusion.

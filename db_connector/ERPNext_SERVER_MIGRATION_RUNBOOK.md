@@ -1437,8 +1437,41 @@ After the run's first Development evidence decision is Approved:
 `Failed` before pair creation may be retried on the same run after correction;
 the retry uses the same reserved candidates and no seed. Never manually top up
 an ineligible holdout or resample it. `Stale` provenance requires a new governed
-proposal. Approval is evidence only and is not permission to deploy to UAT or
-to implement or enable a lower-score materialization path.
+proposal. Approval is evidence only and does not itself enable a lower-score
+write path or authorize UAT/Production. Development adoption and enablement use
+the separate guarded controls below.
+
+### 11.11 Development-only Hybrid automation acceptance
+
+1. Verify the prospective validation and blinded holdout both show Approved,
+   with the combined gate passed and no stale provenance.
+2. In **CCD Identity Resolution Settings → Development Hybrid Automation**,
+   run **Preview Development Hybrid Cycle** and confirm the frozen run, score
+   range, routes, sources, exclusions, and selected Candidate IDs. This preview
+   is zero-write and may be run before authorization adoption.
+3. Use **Authorize Approved Hybrid Evidence**, provide a management reason, and
+   type the exact Evaluation Run ID. Confirm both Hybrid materialization and
+   its daily schedule remain disabled.
+4. Keep **Maximum Hybrid Components per Run** at `1` for the first test. One
+   component is one isolated pair (two CCD records), not one record.
+5. Immediately before the first write, verify a fresh full Development backup
+   and its database/config/public/private checksums or archive tests.
+6. Enable Live Identity Materialization and Automatic QC Assignment if they are
+   not already governed on; then explicitly enable Development Hybrid. Do not
+   enable its daily schedule for the first test.
+7. Repeat the preview, inspect the single selected Candidate, and use **Run One
+   Development Hybrid Cycle Now**. The HTTP dialog may close; the idempotent
+   long-worker batch continues independently.
+8. Confirm the batch and Candidate record the Hybrid channel, frozen route,
+   score band, rule version, `Hybrid Automated` Identity Decision, and exactly
+   one active two-record group. Disable Hybrid and Live Materialization after
+   the test window.
+9. Assign the mandatory QC through the shared capacity action and complete two
+   masked independent reviews. Exercise the correction/investigation path in a
+   controlled demonstration if required; a finalized Different must pause only
+   Hybrid and suspend the affected group.
+10. Do not copy Development data or authorization to UAT/Production. Repeat the
+    backup, prospective validation, holdout, and approval on target-local data.
 
 ## 12. Sign-off checklist
 

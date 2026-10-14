@@ -45,6 +45,7 @@ PROVENANCE_CLASS_BY_ORIGIN = {
     "Component Review": "Human Confirmed",
     "Tiered Evidence": "Validated Deterministic Automation",
     "Splink Automated": "Validated Probabilistic Automation",
+    "Hybrid Automated": "Validated Probabilistic Automation",
     "Governance Override": "Governance Correction/Override",
 }
 
@@ -81,6 +82,8 @@ def materialization_enabled(*, automated: bool = True, channel: str = "tiered") 
         return False
     if not automated:
         return True
+    if channel == "hybrid":
+        return not bool(settings.hybrid_automation_paused)
     if channel == "splink":
         return not bool(settings.splink_automation_paused)
     return not bool(settings.automation_paused)
@@ -347,7 +350,7 @@ def preview_materialization(
     if (
         memberships
         and not existing_decision
-        and origin in {"Splink Validation", "Splink Automated"}
+        and origin in {"Splink Validation", "Splink Automated", "Hybrid Automated"}
     ):
         conflicts.add("existing_group_overlap")
     exclusion_conflicts = fingerprint_scoped_exclusion_conflicts(
@@ -455,9 +458,9 @@ def _validate_origin(
         ):
             frappe.throw("The Splink validation authorization is not current and approved")
         return dict(values)
-    elif origin == "Splink Automated":
+    elif origin in {"Splink Automated", "Hybrid Automated"}:
         if origin_doctype != "CCD Match Review Candidate":
-            frappe.throw("Splink Automated must originate from a Review Candidate")
+            frappe.throw(f"{origin} must originate from a Review Candidate")
         values = frappe.db.get_value(
             origin_doctype,
             origin_document,
@@ -471,12 +474,56 @@ def _validate_origin(
             as_dict=True,
         )
         if not values or not values.automation_batch:
-            frappe.throw("The candidate is not part of an approved Splink automation batch")
-        batch_status = frappe.db.get_value(
-            "CCD Splink Automation Batch", values.automation_batch, "status"
+            frappe.throw("The candidate is not part of an approved automation batch")
+        batch = frappe.db.get_value(
+            "CCD Splink Automation Batch",
+            values.automation_batch,
+            ["status", "batch_type", "validation_run"],
+            as_dict=True,
         )
-        if batch_status not in {"Approved", "Queued", "Applying", "Applied", "Applied with Exceptions"}:
-            frappe.throw("The Splink automation batch is not approved")
+        expected_type = (
+            "Development Hybrid Automation"
+            if origin == "Hybrid Automated"
+            else None
+        )
+        if (
+            not batch
+            or batch.status
+            not in {"Approved", "Queued", "Applying", "Applied", "Applied with Exceptions"}
+            or (expected_type and batch.batch_type != expected_type)
+            or (not expected_type and batch.batch_type == "Development Hybrid Automation")
+        ):
+            frappe.throw("The automation batch is not approved for this identity origin")
+        if origin == "Hybrid Automated":
+            run = frappe.db.get_value(
+                "CCD Match Evaluation Run",
+                values.automation_validation_run,
+                [
+                    "run_purpose",
+                    "status",
+                    "approval_status",
+                    "hybrid_holdout_status",
+                    "hybrid_second_approval_status",
+                    "hybrid_development_only",
+                    "authorization_stale",
+                ],
+                as_dict=True,
+            )
+            if (
+                not run
+                or str(batch.validation_run or "")
+                != str(values.automation_validation_run or "")
+                or run.run_purpose != "Hybrid Prospective Validation"
+                or run.status != "Completed"
+                or run.approval_status != "Approved"
+                or run.hybrid_holdout_status != "Completed"
+                or run.hybrid_second_approval_status != "Approved"
+                or not run.hybrid_development_only
+                or run.authorization_stale
+            ):
+                frappe.throw(
+                    "The Development Hybrid authorization is not current and approved"
+                )
         return dict(values)
     elif origin == "Component Review":
         if origin_doctype != "CCD Match Component Review":
@@ -548,12 +595,12 @@ def _validate_origin_plan(
         expected_type = "Same" if provenance.get("final_label") == "Same" else "Different"
         if decision_type != expected_type:
             frappe.throw("The identity plan contradicts the final Review Candidate label")
-    elif origin in {"Splink Validation", "Splink Automated"}:
+    elif origin in {"Splink Validation", "Splink Automated", "Hybrid Automated"}:
         origin_records = {
             str(provenance.get("left_record")),
             str(provenance.get("right_record")),
         }
-        if origin == "Splink Automated":
+        if origin in {"Splink Automated", "Hybrid Automated"}:
             candidate_names = sorted(
                 {
                     str(name)
@@ -562,7 +609,7 @@ def _validate_origin_plan(
                 }
             )
             if not candidate_names or origin_document not in candidate_names:
-                frappe.throw("Splink Automated requires its complete candidate component")
+                frappe.throw(f"{origin} requires its complete candidate component")
             candidates = frappe.get_all(
                 "CCD Match Review Candidate",
                 filters={"name": ["in", candidate_names]},
@@ -586,7 +633,8 @@ def _validate_origin_plan(
             frappe.throw("The identity plan does not match its frozen Splink pair")
         expected_type = (
             "Same"
-            if origin == "Splink Automated" or provenance.get("final_label") == "Same"
+            if origin in {"Splink Automated", "Hybrid Automated"}
+            or provenance.get("final_label") == "Same"
             else "Different"
         )
         if decision_type != expected_type:
@@ -661,8 +709,18 @@ def materialize_identity(
     is_demonstration: bool = False,
     require_enabled: bool = True,
 ) -> dict[str, Any]:
-    is_automated = origin in {"Tiered Evidence", "Splink Automated"}
-    channel = "splink" if origin == "Splink Automated" else "tiered"
+    is_automated = origin in {
+        "Tiered Evidence",
+        "Splink Automated",
+        "Hybrid Automated",
+    }
+    channel = (
+        "hybrid"
+        if origin == "Hybrid Automated"
+        else "splink"
+        if origin == "Splink Automated"
+        else "tiered"
+    )
     if require_enabled and not materialization_enabled(automated=is_automated, channel=channel):
         frappe.throw(
             "Live identity materialization is disabled"

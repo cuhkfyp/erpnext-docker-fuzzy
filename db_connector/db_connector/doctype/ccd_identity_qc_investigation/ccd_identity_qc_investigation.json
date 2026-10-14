@@ -6,7 +6,7 @@
  "field_order": ["investigation_key", "automation_channel", "canary_run", "recommendation", "splink_candidate", "splink_validation_run", "identity_decision", "identity_group", "source_population_status", "source_retirement_run", "source_retired_at", "pause_scope", "status", "reason", "opened_at", "opened_by", "resolution_action", "resolved_at", "resolved_by", "resolution_notes", "resolution_event"],
  "fields": [
   {"fieldname": "investigation_key", "fieldtype": "Data", "hidden": 1, "label": "Investigation Key", "read_only": 1, "reqd": 1, "unique": 1},
-  {"default": "Recommendation", "fieldname": "automation_channel", "fieldtype": "Select", "in_list_view": 1, "label": "Automation Channel", "options": "Recommendation\nSplink", "read_only": 1, "reqd": 1},
+  {"default": "Recommendation", "fieldname": "automation_channel", "fieldtype": "Select", "in_list_view": 1, "label": "Automation Channel", "options": "Recommendation\nSplink\nHybrid Development", "read_only": 1, "reqd": 1},
   {"fieldname": "canary_run", "fieldtype": "Link", "in_list_view": 1, "label": "Canary Run", "options": "CCD Match Canary Run", "read_only": 1},
   {"fieldname": "recommendation", "fieldtype": "Link", "in_list_view": 1, "label": "QC Recommendation", "options": "CCD Match Recommendation", "read_only": 1},
   {"fieldname": "splink_candidate", "fieldtype": "Link", "in_list_view": 1, "label": "Splink QC Candidate", "options": "CCD Match Review Candidate", "read_only": 1},

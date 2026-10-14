@@ -42,6 +42,7 @@ SUPPORTED_SOURCE_ORIGINS = {
     "Splink Human Review",
     "Splink Validation",
     "Splink Automated",
+    "Hybrid Automated",
     "Governance Override",
 }
 
@@ -546,7 +547,7 @@ def _mark_origin_corrected(
                     "materialization_error": None,
                 },
             )
-        elif origin in {"Splink Human Review", "Splink Automated"} and frappe.db.exists(
+        elif origin in {"Splink Human Review", "Splink Automated", "Hybrid Automated"} and frappe.db.exists(
             CANDIDATE_DOCTYPE, origin_document
         ):
             _set_existing_fields(

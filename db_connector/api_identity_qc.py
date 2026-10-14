@@ -914,9 +914,14 @@ def resolve_qc_investigation(
     )
     if not investigation_scope:
         frappe.throw("The QC Investigation no longer exists")
-    is_splink = str(investigation_scope.automation_channel or "Recommendation") == "Splink"
+    automation_channel = str(
+        investigation_scope.automation_channel or "Recommendation"
+    )
+    is_splink = automation_channel == "Splink"
+    is_hybrid = automation_channel == "Hybrid Development"
+    is_probabilistic = is_splink or is_hybrid
     canary_run = str(investigation_scope.canary_run or "")
-    if not is_splink and not canary_run:
+    if not is_probabilistic and not canary_run:
         frappe.throw("The QC Investigation has no Canary Run")
     if canary_run:
         _lock_named_rows(RUN_DOCTYPE, (canary_run,))
@@ -929,6 +934,8 @@ def resolve_qc_investigation(
             qc_rollup = _refresh_holdout_qc(
                 str(investigation.splink_validation_run or "")
             )
+        elif is_hybrid:
+            qc_rollup = {"channel": "Hybrid Development"}
         else:
             qc_rollup = refresh_qc_monitor(canary_run)
         frappe.db.commit()
@@ -993,6 +1000,8 @@ def resolve_qc_investigation(
         qc_rollup = _refresh_holdout_qc(
             str(investigation.splink_validation_run or "")
         )
+    elif is_hybrid:
+        qc_rollup = {"channel": "Hybrid Development"}
     else:
         qc_rollup = refresh_qc_monitor(canary_run)
     frappe.db.commit()

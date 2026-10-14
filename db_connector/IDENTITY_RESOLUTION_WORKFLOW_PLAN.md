@@ -1503,3 +1503,38 @@ Run-ID confirmation. Even an Approved decision remains zero-write: it creates
 no rollout batch, identity decision, group, membership, exclusion, or automatic
 control, and does not authorize UAT/Production. A separate default-off capped
 rollout must be designed and approved later.
+
+### 27.11 Development-only capped hybrid automation
+
+After the second Hybrid holdout decision is Approved, a System Manager may use
+**Authorize Approved Hybrid Evidence** in Identity Resolution Settings. This
+records the exact Evaluation Run, queue, policy, authorization fingerprint,
+`0.95 <= score < 0.999148140` bounds, rule version, source scope, and two-route
+scope. Adoption leaves Development Hybrid materialization and its daily
+schedule disabled. It does not change the ultra-high Splink authorization.
+
+**Preview Development Hybrid Cycle** is always zero-write and may be used
+before adoption. After adoption, management can choose **Maximum Hybrid
+Components per Run** from 1–100, beginning with one. Only untouched isolated
+two-record components are eligible. Selection is deterministic by current
+score and Candidate ID and excludes every exploratory/validation/holdout pair,
+prior review or assignment, stale fingerprint/timestamp, existing group,
+active exclusion, same-source pair, hard corroboration conflict, or candidate
+outside the frozen source/route/score scope.
+
+Enabling requires Live Identity Materialization, automatic QC assignment,
+current exact authorization, and an unpaused Hybrid breaker. **Run One
+Development Hybrid Cycle Now** freezes and reserves the bounded selection,
+then applies it on the long worker component-atomically and idempotently with a
+dedicated `Hybrid Automated` origin. Daily scheduling has its own default-off
+confirmation. A scheduled Hybrid cycle is deferred whenever the preceding
+ultra-high Splink cycle queued work, so Hybrid selection sees refreshed identity
+state on a later cycle.
+
+Every applied pair is mandatory masked two-reviewer QC under the shared weekly
+capacity. A confirmed `Different` pauses only Hybrid, suspends its group, and
+opens a Hybrid Development investigation; overdue QC and a completed rolling
+window below 0.95 also pause only Hybrid. This remains a Development-only
+demonstration path. UAT/Production still require their own backup, code-only
+deployment, fresh data-local validation, holdout approval, and explicit
+authorization; Development data or authorization must not be copied.

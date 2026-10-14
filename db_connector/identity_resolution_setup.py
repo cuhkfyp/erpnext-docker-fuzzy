@@ -51,6 +51,11 @@ def _backfill_fail_closed_automation_defaults() -> dict[str, int]:
         "splink_control_revision": 0,
         "maximum_splink_component_size": 2,
         "automatic_splink_components_per_run": 10,
+        "automatic_hybrid_enabled": 0,
+        "automatic_hybrid_scheduling_enabled": 0,
+        "hybrid_automation_paused": 0,
+        "hybrid_automation_control_revision": 0,
+        "automatic_hybrid_components_per_run": 1,
         "operational_provenance_allowlist": (
             "Human Confirmed\n"
             "Validated Deterministic Automation\n"
@@ -66,6 +71,7 @@ def _backfill_fail_closed_automation_defaults() -> dict[str, int]:
     for fieldname, value in {
         "maximum_splink_component_size": 2,
         "automatic_splink_components_per_run": 10,
+        "automatic_hybrid_components_per_run": 1,
     }.items():
         if int(frappe.db.get_single_value(SETTINGS_DOCTYPE, fieldname) or 0) <= 0:
             frappe.db.set_single_value(SETTINGS_DOCTYPE, fieldname, value)
@@ -358,6 +364,7 @@ def _backfill_identity_provenance_classes() -> dict[str, int]:
         "Component Review": "Human Confirmed",
         "Tiered Evidence": "Validated Deterministic Automation",
         "Splink Automated": "Validated Probabilistic Automation",
+        "Hybrid Automated": "Validated Probabilistic Automation",
         "Governance Override": "Governance Correction/Override",
     }
     decisions = 0
