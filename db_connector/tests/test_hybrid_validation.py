@@ -7,6 +7,7 @@ from fuzzy_matching.hybrid_validation import (
     HYBRID_HOLDOUT_SIZE,
     HYBRID_VALIDATION_SIZE,
     dynamic_source_allocations,
+    hybrid_holdout_gate,
     select_dynamic_hybrid_cohorts,
 )
 
@@ -79,6 +80,23 @@ class HybridValidationSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "215 required"):
             dynamic_source_allocations({"HMSSHP::SHP-UAT": 214})
 
+    def test_holdout_requires_45_valid_and_combined_wilson_gate(self):
+        passing = hybrid_holdout_gate(["Same"] * 165, ["Same"] * 45)
+        self.assertTrue(passing["combined"]["passed"])
+        self.assertEqual(passing["holdout"]["valid"], 45)
+
+        too_small = hybrid_holdout_gate(["Same"] * 165, ["Same"] * 44)
+        self.assertFalse(too_small["combined"]["passed"])
+        self.assertIn(
+            "insufficient_holdout_pairs:44:45", too_small["combined"]["reasons"]
+        )
+
+        unresolved = hybrid_holdout_gate(
+            ["Same"] * 165, ["Same"] * 45, holdout_unresolved_count=1
+        )
+        self.assertFalse(unresolved["combined"]["passed"])
+        self.assertIn("unresolved_holdout_pairs:1", unresolved["combined"]["reasons"])
+
 
 class HybridValidationIntegrationContractTests(unittest.TestCase):
     def setUp(self):
@@ -100,7 +118,19 @@ class HybridValidationIntegrationContractTests(unittest.TestCase):
         self.assertIn("Review Next Validation Pair", evaluation)
         self.assertIn("finalize_hybrid_prospective_validation", evaluation)
         self.assertIn("record_hybrid_development_decision", evaluation)
+        self.assertIn("Create Blinded Hybrid Holdout QC", evaluation)
+        self.assertIn("Review Next Holdout Pair", evaluation)
+        self.assertIn("finalize_hybrid_holdout_qc", evaluation)
+        self.assertIn("record_hybrid_holdout_development_decision", evaluation)
         self.assertIn("Development-only prospective evidence", evaluation)
+
+        settings = (
+            self.app
+            / "db_connector/doctype/ccd_identity_resolution_settings/ccd_identity_resolution_settings.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Development Hybrid Holdout", settings)
+        self.assertIn("get_hybrid_holdout_dashboard", settings)
+        self.assertIn("Create Blinded Hybrid Holdout QC", settings)
 
     def test_schema_exposes_hybrid_provenance_without_reviewer_write_access(self):
         run_schema = json.loads(
@@ -127,6 +157,10 @@ class HybridValidationIntegrationContractTests(unittest.TestCase):
                 "hybrid_rule_version",
                 "hybrid_eligible_manifest_digest",
                 "hybrid_development_only",
+                "hybrid_holdout_status",
+                "hybrid_holdout_manifest_digest",
+                "hybrid_holdout_metrics_json",
+                "hybrid_second_approval_status",
             }.issubset(run_fields)
         )
         self.assertTrue(
@@ -147,6 +181,7 @@ class HybridValidationIntegrationContractTests(unittest.TestCase):
     def test_hybrid_reviews_are_masked_and_always_require_two_reviewers(self):
         source = (self.app / "api_fuzzy_evaluation.py").read_text(encoding="utf-8")
         self.assertGreaterEqual(source.count("hybrid_prospective_validation"), 2)
+        self.assertGreaterEqual(source.count("hybrid_blinded_holdout_qc"), 2)
         self.assertIn(
             '{"Splink Automatic Validation", "Hybrid Prospective Validation"}',
             source,
@@ -164,6 +199,9 @@ class HybridValidationIntegrationContractTests(unittest.TestCase):
             'method = "db_connector.api_hybrid_validation.prepare_hybrid_validation_proposal"',
             source,
         )
+        self.assertIn("The exact frozen holdout contains", source)
+        self.assertIn("HYBRID_MINIMUM_ELIGIBLE_HOLDOUT", source)
+        self.assertIn("authorizes_identity_writes", source)
 
 
 if __name__ == "__main__":

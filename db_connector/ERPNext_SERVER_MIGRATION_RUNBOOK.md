@@ -1412,6 +1412,34 @@ old manifest. Approval creates no identity state and does not unlock the 50
 holdout pairs for materialization; that requires a later, separately developed
 and approved holdout/QC workflow.
 
+### 11.10 Development-only hybrid holdout QC
+
+After the run's first Development evidence decision is Approved:
+
+1. open either the approved Evaluation Run or the **Development-only
+   Lower-Score Hybrid** section in Identity Resolution Settings;
+2. click **Create Blinded Hybrid Holdout QC** and wait for `Reviewing`;
+3. verify that the service reused the exact 50 reserved candidates, reported
+   every current-state exclusion, created no replacement, and retained at
+   least 45 eligible persistent Evaluation Pairs;
+4. have two independent reviewers use **Review Next Holdout Pair**; do not
+   disclose score, route, candidate identity, or either reviewer's label;
+5. adjudicate every disagreement, `Unsure`, and unanimous `Different` case
+   with manager notes;
+6. click **Finalize Hybrid Holdout QC** only when every created pair is final;
+7. inspect holdout and combined precision, Wilson intervals, source/route/
+   score subgroups, stale counts, and the combined 195-valid/0.95-lower gate;
+8. record Approved or Rejected as the second Development-only decision using
+   a reason and the exact Run ID; and
+9. confirm that no Identity Decision, Group, Membership, Exclusion, rollout
+   batch, or automation-control change occurred.
+
+`Failed` before pair creation may be retried on the same run after correction;
+the retry uses the same reserved candidates and no seed. Never manually top up
+an ineligible holdout or resample it. `Stale` provenance requires a new governed
+proposal. Approval is evidence only and is not permission to deploy to UAT or
+to implement or enable a lower-score materialization path.
+
 ## 12. Sign-off checklist
 
 Before declaring transfer complete, record:

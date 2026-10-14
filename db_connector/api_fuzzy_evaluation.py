@@ -2008,7 +2008,11 @@ def submit_review(pair_name: str, label: str, notes: str = "") -> dict[str, str]
     required = 2 if pair.needs_double_review else 1
     if (
         pair.double_review_reason
-        in {"splink_automatic_validation", "hybrid_prospective_validation"}
+        in {
+            "splink_automatic_validation",
+            "hybrid_prospective_validation",
+            "hybrid_blinded_holdout_qc",
+        }
         and len(ordinary) < 2
     ):
         pair.review_status = "Partially Reviewed"
@@ -2016,6 +2020,15 @@ def submit_review(pair_name: str, label: str, notes: str = "") -> dict[str, str]
         pair.review_status = "Needs Adjudication"
     elif len(ordinary) < required:
         pair.review_status = "Partially Reviewed"
+    elif (
+        pair.double_review_reason == "hybrid_blinded_holdout_qc"
+        and set(ordinary) == {"Different"}
+    ):
+        # A possible false match in the blinded holdout is an investigation,
+        # even when both ordinary reviewers independently agree.  Management
+        # must adjudicate it with notes before the evidence can be finalized.
+        pair.review_status = "Needs Adjudication"
+        pair.final_label = ""
     elif len(set(ordinary)) == 1:
         pair.review_status = "Agreed"
         pair.final_label = ordinary[0]
@@ -2040,6 +2053,7 @@ def adjudicate_review(pair_name: str, label: str, notes: str = "") -> dict[str, 
     if pair.double_review_reason in {
         "splink_automatic_validation",
         "hybrid_prospective_validation",
+        "hybrid_blinded_holdout_qc",
     }:
         ordinary_reviewers = {
             str(row.reviewer)
@@ -2875,6 +2889,6 @@ def get_pair_evidence(pair_name: str) -> dict[str, Any]:
     if sensitive:
         payload["left_record"] = pair.left_record
         payload["right_record"] = pair.right_record
-    if "System Manager" in frappe.get_roles():
+    if "System Manager" in frappe.get_roles() and not validation_masked:
         payload["reason_codes"] = json.loads(pair.reason_codes_json or "{}")
     return payload

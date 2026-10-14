@@ -79,8 +79,8 @@ function continue_hybrid_review_or_reload(frm) {
 				return;
 			}
 			frappe.call({
-				method: "db_connector.api_hybrid_validation.get_next_hybrid_validation_pair",
-				args: { run_name: frm.doc.evaluation_run },
+				method: "db_connector.api_hybrid_validation.get_next_hybrid_review_pair",
+				args: { pair_name: frm.doc.name },
 				callback(nextResponse) {
 					const pair = nextResponse.message?.pair;
 					if (pair) frappe.set_route("Form", "CCD Match Evaluation Pair", pair);

@@ -128,6 +128,104 @@ function add_hybrid_validation_actions(frm) {
 			callback: () => frm.reload_doc(),
 		}), __("Hybrid Validation"));
 	}
+	add_hybrid_holdout_actions(frm, { manager, reviewer });
+}
+
+function add_hybrid_holdout_actions(frm, { manager, reviewer }) {
+	if (frm.doc.status !== "Completed" || frm.doc.approval_status !== "Approved") return;
+	const status = frm.doc.hybrid_holdout_status || "Not Created";
+	if (status === "Building") {
+		setTimeout(() => {
+			if (window.cur_frm === frm) frm.reload_doc();
+		}, 4000);
+	}
+	if (status === "Not Created" && manager) {
+		frm.add_custom_button(
+			__("Create Blinded Hybrid Holdout QC"),
+			() => frappe.confirm(
+				__("Use exactly the 50 already-reserved holdout pairs, recheck current eligibility, and create persistent masked two-reviewer QC? This makes no identity writes."),
+				() => frappe.call({
+					method: "db_connector.api_hybrid_validation.start_hybrid_holdout_qc",
+					args: { run_name: frm.doc.name },
+					freeze: true,
+					callback: () => frm.reload_doc(),
+				}),
+			),
+			__("Hybrid Holdout QC"),
+		);
+	}
+	if (status === "Reviewing") {
+		frm.add_custom_button(
+			__("View Holdout Pairs"),
+			() => frappe.set_route("List", "CCD Match Evaluation Pair", {
+				evaluation_run: frm.doc.name,
+				automation_cohort: "Blinded Rollout Holdout",
+			}),
+			__("Hybrid Holdout QC"),
+		);
+		if (reviewer) {
+			frm.add_custom_button(
+				__("Review Next Holdout Pair"),
+				() => open_next_hybrid_holdout(frm.doc.name),
+				__("Hybrid Holdout QC"),
+			);
+		}
+		if (manager) {
+			frm.add_custom_button(
+				__("Finalize Hybrid Holdout QC"),
+				() => frappe.call({
+					method: "db_connector.api_hybrid_validation.finalize_hybrid_holdout_qc",
+					args: { run_name: frm.doc.name },
+					freeze: true,
+					callback: () => frm.reload_doc(),
+				}),
+				__("Hybrid Holdout QC"),
+			);
+		}
+	}
+	if (status === "Awaiting Management Approval" && manager) {
+		for (const decision of ["Approved", "Rejected"]) {
+			frm.add_custom_button(__(decision), () => prompt_hybrid_holdout_decision(frm.doc.name, decision, () => frm.reload_doc()), __("Hybrid Holdout Decision"));
+		}
+	}
+	if (status === "Failed" && manager) {
+		frm.add_custom_button(
+			__("Retry Hybrid Holdout Build"),
+			() => frappe.call({
+				method: "db_connector.api_hybrid_validation.retry_hybrid_holdout_job",
+				args: { run_name: frm.doc.name },
+				callback: () => frm.reload_doc(),
+			}),
+			__("Hybrid Holdout QC"),
+		);
+	}
+}
+
+function open_next_hybrid_holdout(runName) {
+	frappe.call({
+		method: "db_connector.api_hybrid_validation.get_next_hybrid_holdout_pair",
+		args: { run_name: runName },
+		callback(response) {
+			const pair = response.message?.pair;
+			if (pair) frappe.set_route("Form", "CCD Match Evaluation Pair", pair);
+			else frappe.msgprint(__("You have no remaining ordinary review in this blinded holdout."));
+		},
+	});
+}
+
+function prompt_hybrid_holdout_decision(runName, decision, callback) {
+	frappe.prompt(
+		[
+			{ fieldname: "reason", fieldtype: "Small Text", label: __("Development holdout decision reason"), reqd: 1 },
+			{ fieldname: "confirm_run_name", fieldtype: "Data", label: __("Type the exact Validation Run ID"), description: runName, reqd: 1 },
+		],
+		(values) => frappe.call({
+			method: "db_connector.api_hybrid_validation.record_hybrid_holdout_development_decision",
+			args: { run_name: runName, decision, ...values },
+			callback,
+		}),
+		__(`${decision} Development holdout evidence`),
+	);
 }
 
 function secure_hex_seed() {
@@ -156,13 +254,24 @@ function render_hybrid_validation_progress(frm) {
 	const sourceRows = sources.length
 		? sources.map((source) => `<tr><td>${frappe.utils.escape_html(source)}</td><td>${Number(available[source] || 0)}</td><td>${Number(validation[source] || 0)}</td><td>${Number(holdout[source] || 0)}</td></tr>`).join("")
 		: `<tr><td colspan="4" class="text-muted">${__("The background profile has not completed yet.")}</td></tr>`;
+	const holdoutMetrics = parse_json(frm.doc.hybrid_holdout_metrics_json);
+	const holdoutGate = holdoutMetrics.holdout || {};
+	const combinedGate = holdoutMetrics.combined_authorization_gate || {};
+	const holdoutStatus = frm.doc.hybrid_holdout_status || "Not Created";
 	field.$wrapper.html(
 		`<p><strong>${__("Frozen proposal")}</strong>: 0.95 ≤ ${__("Splink score")} &lt; ${Number(frm.doc.frozen_automatic_cutoff || 0).toFixed(12)}; ` +
 		`${__("eligible unseen pairs")}: ${Number(frm.doc.candidate_count || 0)}; ${__("excluded exploratory pairs")}: ${Number(frm.doc.hybrid_excluded_exploratory_count || 0)}.</p>` +
 		`<table class="table table-bordered table-condensed"><thead><tr><th>${__("Source pair")}</th><th>${__("Available")}</th><th>${__("Validation")}</th><th>${__("Holdout")}</th></tr></thead><tbody>${sourceRows}</tbody></table>` +
 		`<p>${__("Validation progress")}: ${Number(frm.doc.validation_valid_count || 0)} ${__("valid")}, ${Number(frm.doc.validation_unresolved_count || 0)} ${__("unresolved")}, ${Number(frm.doc.validation_stale_count || 0)} ${__("stale")}; ` +
 		`${__("Same")}: ${Number(frm.doc.validation_same_count || 0)}, ${__("Different")}: ${Number(frm.doc.validation_different_count || 0)}, ${__("Wilson 95% lower")}: ${Number(frm.doc.validation_wilson_lower || 0).toFixed(2)}%.</p>` +
-		`<p class="text-muted"><strong>${__("The 50-pair holdout stays reserved and hidden from this validation review. It is not materialized by this workflow.")}</strong></p>`,
+		`<p class="text-muted"><strong>${__("The 50-pair holdout stays reserved and hidden until its persistent QC workflow is created. This workflow never materializes identities.")}</strong></p>` +
+		`<hr><p><strong>${__("Blinded holdout QC")}</strong>: ${frappe.utils.escape_html(holdoutStatus)}; ` +
+		`${__("eligible / reviewed / Same / Different")}: ${Number(frm.doc.holdout_eligible_count || 0)} / ${Number(frm.doc.holdout_qc_complete_count || 0)} / ${Number(frm.doc.holdout_qc_same_count || 0)} / ${Number(frm.doc.holdout_qc_different_count || 0)}.</p>` +
+		(holdoutGate.valid !== undefined
+			? `<p>${__("Holdout precision")}: ${(Number(holdoutGate.precision || 0) * 100).toFixed(2)}%; ${__("Wilson 95% lower")}: ${(Number((holdoutGate.wilson_95 || [0])[0]) * 100).toFixed(2)}%. ` +
+				`${__("Combined valid / Different / Wilson lower")}: ${Number(combinedGate.valid || 0)} / ${Number(combinedGate.different || 0)} / ${(Number((combinedGate.wilson_95 || [0])[0]) * 100).toFixed(2)}%.</p>`
+			: "") +
+		`<p class="text-muted"><strong>${__("A second Development approval records evidence only. It does not enable lower-score automation or authorize UAT/Production.")}</strong></p>`,
 	);
 }
 

@@ -1016,3 +1016,48 @@ source pairs if they are present in a future unchanged eligible manifest.
 Deployment created zero Hybrid Prospective Validation runs and zero new cohort
 reservations; the operator must start the proposal from Desk. Existing Live,
 Tiered, and Splink control states were observed but deliberately left unchanged.
+
+## Development-only blinded hybrid holdout QC — 2026-10-14
+
+Development now implements the four post-validation evidence steps without a
+lower-score write path. The approved Evaluation Run and the new
+**Development-only Lower-Score Hybrid** section in Identity Resolution Settings
+both provide Desk actions to create the blinded holdout, resume masked review,
+finalize holdout plus combined metrics, and record the second Development-only
+management decision. The service reuses exactly the 50 candidates reserved by
+the original seed and never resamples or tops up an ineligible pair.
+
+The holdout build is an idempotent long-worker job. It rechecks frozen
+provenance, candidate lifecycle, record fingerprints, the two approved routes,
+score range, isolated-pair metadata, exclusions, and current Group overlap
+under locks. At least 45 pairs must remain eligible. Every persistent holdout
+Evaluation Pair requires two distinct masked reviewers; disagreement, `Unsure`,
+and unanimous `Different` all require manager adjudication before finalization.
+The final Desk report records holdout and combined global/subgroup metrics and
+requires at least 195 current labels with a combined 95% Wilson lower bound of
+0.95. The second approval is evidence only and cannot create an Identity
+Decision, Group, Membership, Exclusion, rollout batch, or automatic setting.
+
+The migration followed full backup `20261014_122741`. Its site-configuration
+JSON, 452.6 MiB compressed database, 1.6 GiB public-files archive, and 30.4 MiB
+private-files archive all passed format/archive checks and were SHA-256 hashed.
+After verification, the three older local backup sets were deleted at the
+operator's request; the new verified set is the only local set retained and the
+operator's off-machine backup was not touched.
+
+Post-deploy checks show run `mt1ab9l6pv` remains `Completed / Approved`, with
+165 Validation Evaluation Pairs and zero holdout Evaluation Pairs. Exactly 50
+candidates remain `Blinded Rollout Holdout / Reserved Holdout`. A read-only
+current-state check reports all 50 still eligible, while the persisted holdout
+state is deliberately `Not Created / Not Requested` until a System Manager
+uses the Desk action. Existing materialization, QC, Tiered, Splink, and breaker
+controls were not changed.
+
+Python compilation, DocType JSON validation, deployed JavaScript syntax,
+module import, live dashboard API, schema columns, and 50 focused hybrid,
+Splink, automation, and policy tests pass. Two pre-existing service-test
+modules still cannot initialize through the application package because the
+unrelated application `__init__` imports an unavailable Google module in that
+standalone harness; the deployed Frappe module and changed contracts load and
+pass independently. Scheduler/queue processes are healthy and Redis reports a
+successful current persistence state.

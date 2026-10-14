@@ -33,10 +33,12 @@ from db_connector.fuzzy_matching.hybrid_research import (
 )
 from db_connector.fuzzy_matching.hybrid_validation import (
     HYBRID_HOLDOUT_SIZE,
+    HYBRID_MINIMUM_ELIGIBLE_HOLDOUT,
     HYBRID_MINIMUM_SCORE,
     HYBRID_PROPOSAL_ROUTES,
     HYBRID_VALIDATION_SIZE,
     dynamic_source_allocations,
+    hybrid_holdout_gate,
     select_dynamic_hybrid_cohorts,
 )
 from db_connector.fuzzy_matching.identity import identity_fingerprint
@@ -56,6 +58,7 @@ PAIR_DOCTYPE = "CCD Match Evaluation Pair"
 LABEL_DOCTYPE = "CCD Match Review Label"
 RUN_PURPOSE = "Hybrid Prospective Validation"
 DOUBLE_REVIEW_REASON = "hybrid_prospective_validation"
+HOLDOUT_DOUBLE_REVIEW_REASON = "hybrid_blinded_holdout_qc"
 FINAL_REVIEW_STATUSES = {"Agreed", "Adjudicated"}
 
 
@@ -1114,3 +1117,679 @@ def retry_hybrid_validation_job(run_name: str) -> dict[str, str]:
     frappe.db.commit()
     _enqueue(method, run.name)
     return {"run": run.name, "status": status}
+
+
+def _reserved_holdout_candidates(run: Any) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in frappe.get_all(
+            CANDIDATE_DOCTYPE,
+            filters={
+                "automation_validation_run": run.name,
+                "automation_cohort": "Blinded Rollout Holdout",
+                "automation_reserved": 1,
+            },
+            fields=[
+                "name",
+                "queue_run",
+                "pair_key",
+                "pair_fingerprint",
+                "left_record",
+                "right_record",
+                "left_source",
+                "right_source",
+                "left_modified_at",
+                "right_modified_at",
+                "left_identity_fingerprint",
+                "right_identity_fingerprint",
+                "source_pair",
+                "blocking_routes",
+                "probabilistic_score",
+                "review_status",
+                "final_label",
+                "stale",
+                "assigned_review_batch",
+                "automation_status",
+                "automation_batch",
+                "automation_component_fingerprint",
+                "automation_component_size",
+                "automation_complete_clique",
+                "materialization_status",
+            ],
+            order_by="name asc",
+            limit_page_length=1_000,
+        )
+    ]
+
+
+def _holdout_current_eligibility(
+    run: Any, rows: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
+    queue = frappe.get_doc(QUEUE_DOCTYPE, run.validation_queue_run)
+    policy = MatchingPolicy.from_dict(json.loads(queue.policy_snapshot_json or "{}"))
+    record_ids = {
+        str(record)
+        for row in rows
+        for record in (row.get("left_record"), row.get("right_record"))
+        if record
+    }
+    records = _load_records(record_ids, policy)
+    memberships = _current_membership_records(record_ids)
+    exclusions = _active_exclusion_pairs(record_ids)
+    allowed_routes = set(HYBRID_PROPOSAL_ROUTES)
+    eligible: list[dict[str, Any]] = []
+    ineligible: dict[str, list[str]] = {}
+
+    for row in rows:
+        reasons: list[str] = []
+        left_id = str(row.get("left_record") or "")
+        right_id = str(row.get("right_record") or "")
+        left = records.get(left_id)
+        right = records.get(right_id)
+        if str(row.get("queue_run") or "") != str(run.validation_queue_run):
+            reasons.append("queue_changed")
+        if row.get("stale"):
+            reasons.append("candidate_marked_stale")
+        if str(row.get("review_status") or "") != "Unreviewed" or row.get("final_label"):
+            reasons.append("prior_human_review")
+        if row.get("assigned_review_batch"):
+            reasons.append("assigned_optional_review")
+        if str(row.get("automation_status") or "") != "Reserved Holdout":
+            reasons.append("holdout_reservation_changed")
+        if row.get("automation_batch"):
+            reasons.append("automation_batch_started")
+        if str(row.get("materialization_status") or "Not Final") != "Not Final":
+            reasons.append("materialization_started")
+        score = float(row.get("probabilistic_score") or 0)
+        if not float(run.hybrid_minimum_score or 0) <= score < float(
+            run.frozen_automatic_cutoff or 0
+        ):
+            reasons.append("outside_frozen_score_range")
+        expected_component = hashlib.sha256(
+            "\x1f".join(sorted((left_id, right_id))).encode()
+        ).hexdigest()
+        if (
+            int(row.get("automation_component_size") or 0) != 2
+            or not int(row.get("automation_complete_clique") or 0)
+            or str(row.get("automation_component_fingerprint") or "")
+            != expected_component
+        ):
+            reasons.append("frozen_component_not_isolated_pair")
+        if not left or not right:
+            reasons.append("record_missing")
+        else:
+            if str(left.get("source") or "") == str(right.get("source") or ""):
+                reasons.append("same_source")
+            if (
+                str(left.get("modified") or "")
+                != str(row.get("left_modified_at") or "")
+                or str(right.get("modified") or "")
+                != str(row.get("right_modified_at") or "")
+            ):
+                reasons.append("source_modified_after_freeze")
+            if (
+                identity_fingerprint(left, policy)
+                != str(row.get("left_identity_fingerprint") or "")
+                or identity_fingerprint(right, policy)
+                != str(row.get("right_identity_fingerprint") or "")
+            ):
+                reasons.append("identity_fingerprint_changed")
+            classification = _classify_pair(left, right, policy)
+            if classification["hard_conflicts"]:
+                reasons.extend(str(item) for item in classification["hard_conflicts"])
+            routes = tuple(sorted(allowed_routes.intersection(classification["routes"])))
+            if not routes:
+                reasons.append("outside_frozen_route_scope")
+            else:
+                row["routes"] = routes
+                row["primary_route"] = (
+                    "exact_name+unverified_identifier_exact"
+                    if "exact_name+unverified_identifier_exact" in routes
+                    else "name_support+unverified_identifier+secondary_exact"
+                )
+                row["score_band"] = lower_score_band(
+                    score, float(run.frozen_automatic_cutoff or 0)
+                )
+                row["birthday_status"] = str(classification["birthday_status"])
+        if left_id in memberships or right_id in memberships:
+            reasons.append("existing_group_overlap")
+        if tuple(sorted((left_id, right_id))) in exclusions:
+            reasons.append("active_human_exclusion")
+        if reasons:
+            ineligible[str(row["name"])] = sorted(set(reasons))
+        else:
+            row["source_pair"] = canonical_source_pair(row.get("source_pair"))
+            eligible.append(row)
+    return eligible, dict(sorted(ineligible.items()))
+
+
+def _holdout_allocation(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "source_pair": dict(sorted(Counter(str(row["source_pair"]) for row in rows).items())),
+        "primary_route": dict(sorted(Counter(str(row["primary_route"]) for row in rows).items())),
+        "score_band": dict(sorted(Counter(str(row["score_band"]) for row in rows).items())),
+        "birthday_status": dict(sorted(Counter(str(row["birthday_status"]) for row in rows).items())),
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def start_hybrid_holdout_qc(run_name: str) -> dict[str, str]:
+    """Queue current-state checks for the exact already-reserved holdout."""
+    _require_manager()
+    _lock_rows(RUN_DOCTYPE, (run_name,))
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    status = str(run.hybrid_holdout_status or "Not Created")
+    if (
+        run.run_purpose != RUN_PURPOSE
+        or run.status != "Completed"
+        or run.approval_status != "Approved"
+        or not run.hybrid_development_only
+    ):
+        frappe.throw("Approve the Development hybrid validation before creating holdout QC")
+    if status in {"Building", "Reviewing", "Awaiting Management Approval", "Completed"}:
+        return {"run": run.name, "status": status, "existing": "1"}
+    if status not in {"Not Created", "Failed"}:
+        frappe.throw("This Development holdout cannot be created in its current state")
+    if _provenance_reasons(run):
+        frappe.throw("The frozen Development validation provenance is stale")
+    metrics = json.loads(run.metrics_json or "{}")
+    if not (metrics.get("authorization_gate") or {}).get("passed"):
+        frappe.throw("The approved prospective validation precision gate is missing")
+    if frappe.db.count(
+        PAIR_DOCTYPE,
+        {"evaluation_run": run.name, "automation_cohort": "Blinded Rollout Holdout"},
+    ):
+        frappe.throw("This run already has persistent holdout Evaluation Pairs")
+    frappe.db.set_value(
+        RUN_DOCTYPE,
+        run.name,
+        {
+            "hybrid_holdout_status": "Building",
+            "hybrid_holdout_error": "",
+            "hybrid_second_approval_status": "Not Requested",
+        },
+        update_modified=False,
+    )
+    frappe.db.commit()
+    _enqueue("db_connector.api_hybrid_validation.build_hybrid_holdout_qc", run.name)
+    return {"run": run.name, "status": "Building", "existing": "0"}
+
+
+def build_hybrid_holdout_qc(run_name: str) -> None:
+    _lock_rows(RUN_DOCTYPE, (run_name,))
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if run.run_purpose != RUN_PURPOSE or run.hybrid_holdout_status != "Building":
+        return
+    try:
+        provenance_reasons = _provenance_reasons(run)
+        if provenance_reasons:
+            frappe.throw("Frozen provenance changed: " + ", ".join(provenance_reasons))
+        reserved = _reserved_holdout_candidates(run)
+        if len(reserved) != HYBRID_HOLDOUT_SIZE:
+            frappe.throw(
+                f"The exact frozen holdout contains {len(reserved)} reserved pairs; "
+                f"{HYBRID_HOLDOUT_SIZE} required"
+            )
+        _lock_rows(CANDIDATE_DOCTYPE, [row["name"] for row in reserved])
+        _lock_rows(
+            "CCD Master",
+            [
+                str(record)
+                for row in reserved
+                for record in (row["left_record"], row["right_record"])
+            ],
+        )
+        eligible, ineligible = _holdout_current_eligibility(run, reserved)
+        if len(eligible) < HYBRID_MINIMUM_ELIGIBLE_HOLDOUT:
+            frappe.db.set_value(
+                RUN_DOCTYPE,
+                run.name,
+                {
+                    "hybrid_holdout_status": "Failed",
+                    "holdout_eligible_count": len(eligible),
+                    "hybrid_holdout_ineligibility_json": _json(ineligible),
+                    "hybrid_holdout_error": (
+                        f"eligible_holdout_below_floor:{len(eligible)}:"
+                        f"{HYBRID_MINIMUM_ELIGIBLE_HOLDOUT}"
+                    ),
+                },
+                update_modified=False,
+            )
+            frappe.db.commit()
+            return
+        if frappe.db.count(
+            PAIR_DOCTYPE,
+            {"evaluation_run": run.name, "automation_cohort": "Blinded Rollout Holdout"},
+        ):
+            frappe.throw("This run already has persistent holdout Evaluation Pairs")
+        for row in sorted(eligible, key=lambda item: str(item["name"])):
+            frappe.get_doc(
+                {
+                    "doctype": PAIR_DOCTYPE,
+                    "evaluation_run": run.name,
+                    "review_candidate": row["name"],
+                    "automation_cohort": "Blinded Rollout Holdout",
+                    "source_pair": row["source_pair"],
+                    "left_record": row["left_record"],
+                    "right_record": row["right_record"],
+                    "left_source": row["left_source"],
+                    "right_source": row["right_source"],
+                    "left_modified_at": row["left_modified_at"],
+                    "right_modified_at": row["right_modified_at"],
+                    "blocking_routes": row["blocking_routes"],
+                    "probabilistic_score": row["probabilistic_score"],
+                    "probabilistic_available": 1,
+                    "needs_double_review": 1,
+                    "double_review_reason": HOLDOUT_DOUBLE_REVIEW_REASON,
+                    "review_status": "Unreviewed",
+                    "hybrid_primary_route": row["primary_route"],
+                    "hybrid_routes_json": _json(row["routes"]),
+                    "hybrid_score_band": row["score_band"],
+                    "hybrid_birthday_status": row["birthday_status"],
+                    "reason_codes_json": _json(
+                        {
+                            "development_only": True,
+                            "zero_identity_writes": True,
+                            "hybrid_rule_version": HYBRID_RESEARCH_RULE_VERSION,
+                            "primary_route": row["primary_route"],
+                            "routes": row["routes"],
+                            "score_band": row["score_band"],
+                            "birthday_status": row["birthday_status"],
+                        }
+                    ),
+                }
+            ).insert(ignore_permissions=True)
+        manifest = _eligible_manifest_digest(eligible)
+        allocation = _holdout_allocation(eligible)
+        frappe.db.set_value(
+            RUN_DOCTYPE,
+            run.name,
+            {
+                "hybrid_holdout_status": "Reviewing",
+                "hybrid_holdout_manifest_digest": manifest,
+                "hybrid_holdout_allocation_json": _json(allocation),
+                "hybrid_holdout_ineligibility_json": _json(ineligible),
+                "holdout_eligible_count": len(eligible),
+                "holdout_qc_complete_count": 0,
+                "holdout_qc_same_count": 0,
+                "holdout_qc_different_count": 0,
+                "hybrid_holdout_metrics_json": "",
+                "hybrid_holdout_error": "",
+                "hybrid_second_approval_status": "Not Requested",
+            },
+            update_modified=False,
+        )
+        from db_connector.api_identity_resolution import _append_event
+
+        _append_event(
+            entity_doctype=RUN_DOCTYPE,
+            entity_name=run.name,
+            event_type="QC Assign",
+            reason="development_hybrid_blinded_holdout_qc_created",
+            nonce=manifest,
+            from_status="Approved Development Validation",
+            to_status="Holdout Reviewing",
+            metadata={
+                "development_only": True,
+                "identity_writes": 0,
+                "reserved_count": len(reserved),
+                "eligible_count": len(eligible),
+                "ineligible_count": len(ineligible),
+                "allocation": allocation,
+            },
+        )
+        frappe.db.commit()
+    except Exception as exc:
+        frappe.db.rollback()
+        frappe.db.set_value(
+            RUN_DOCTYPE,
+            run_name,
+            {
+                "hybrid_holdout_status": "Failed",
+                "hybrid_holdout_error": f"hybrid_holdout_build_failed:{type(exc).__name__}",
+            },
+            update_modified=False,
+        )
+        frappe.log_error(traceback.format_exc(), "CCD Hybrid Holdout Build Failure")
+        frappe.db.commit()
+        raise
+
+
+def _cohort_pairs(run_name: str, cohort: str) -> list[Any]:
+    return frappe.get_all(
+        PAIR_DOCTYPE,
+        filters={"evaluation_run": run_name, "automation_cohort": cohort},
+        fields=[
+            "name",
+            "review_candidate",
+            "review_status",
+            "final_label",
+            "stale",
+            "left_record",
+            "right_record",
+            "left_modified_at",
+            "right_modified_at",
+            "source_pair",
+            "hybrid_primary_route",
+            "hybrid_score_band",
+        ],
+        order_by="creation asc, name asc",
+        limit_page_length=1_000,
+    )
+
+
+def _reviewed_cohort(rows: list[Any]) -> dict[str, Any]:
+    pair_names = [str(row.name) for row in rows]
+    labels_by_pair: dict[str, set[str]] = defaultdict(set)
+    if pair_names:
+        for label in frappe.get_all(
+            LABEL_DOCTYPE,
+            filters={
+                "parent": ["in", pair_names],
+                "parenttype": PAIR_DOCTYPE,
+                "is_adjudication": 0,
+            },
+            fields=["parent", "reviewer"],
+            limit_page_length=5_000,
+        ):
+            labels_by_pair[str(label.parent)].add(str(label.reviewer))
+    stale = 0
+    unresolved = 0
+    final_labels: list[str] = []
+    valid_rows: list[Any] = []
+    for row in rows:
+        if row.stale or _pair_stale(row):
+            stale += 1
+            if not row.stale:
+                frappe.db.set_value(PAIR_DOCTYPE, row.name, "stale", 1, update_modified=False)
+                row.stale = 1
+            continue
+        if (
+            row.review_status not in FINAL_REVIEW_STATUSES
+            or row.final_label not in {"Same", "Different"}
+            or len(labels_by_pair[str(row.name)]) < 2
+        ):
+            unresolved += 1
+            continue
+        final_labels.append(str(row.final_label))
+        valid_rows.append(row)
+    return {
+        "labels": final_labels,
+        "rows": valid_rows,
+        "stale": stale,
+        "unresolved": unresolved,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def finalize_hybrid_holdout_qc(run_name: str) -> dict[str, Any]:
+    _require_manager()
+    _lock_rows(RUN_DOCTYPE, (run_name,))
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if run.run_purpose != RUN_PURPOSE or run.hybrid_holdout_status not in {
+        "Reviewing",
+        "Awaiting Management Approval",
+    }:
+        frappe.throw("Only a reviewing Development hybrid holdout can be finalized")
+    provenance_reasons = _provenance_reasons(run)
+    if provenance_reasons:
+        frappe.db.set_value(
+            RUN_DOCTYPE,
+            run.name,
+            {
+                "hybrid_holdout_status": "Stale",
+                "hybrid_holdout_error": ",".join(provenance_reasons)[:140],
+                "authorization_stale": 1,
+                "authorization_stale_reason": ",".join(provenance_reasons)[:140],
+            },
+            update_modified=False,
+        )
+        frappe.db.commit()
+        frappe.throw("Hybrid holdout provenance is stale: " + ", ".join(provenance_reasons))
+    validation = _reviewed_cohort(_cohort_pairs(run.name, "Validation"))
+    holdout = _reviewed_cohort(
+        _cohort_pairs(run.name, "Blinded Rollout Holdout")
+    )
+    if validation["unresolved"] or holdout["unresolved"]:
+        frappe.throw(
+            "Finish every independent review and required adjudication before finalizing "
+            f"(validation unresolved: {validation['unresolved']}; "
+            f"holdout unresolved: {holdout['unresolved']})"
+        )
+    gates = hybrid_holdout_gate(
+        validation["labels"],
+        holdout["labels"],
+        validation_stale_count=validation["stale"],
+        validation_unresolved_count=validation["unresolved"],
+        holdout_stale_count=holdout["stale"],
+        holdout_unresolved_count=holdout["unresolved"],
+    )
+    combined_rows = validation["rows"] + holdout["rows"]
+    metrics = {
+        "run_purpose": RUN_PURPOSE,
+        "development_only": True,
+        "authorizes_identity_writes": False,
+        "reserved_holdout_target": HYBRID_HOLDOUT_SIZE,
+        "eligible_holdout": int(run.holdout_eligible_count or 0),
+        "stale_counts": {
+            "validation": validation["stale"],
+            "holdout": holdout["stale"],
+        },
+        "unresolved_counts": {
+            "validation": validation["unresolved"],
+            "holdout": holdout["unresolved"],
+        },
+        "validation": validation_gate(
+            validation["labels"],
+            stale_count=validation["stale"],
+            unresolved_count=validation["unresolved"],
+        ),
+        "holdout": gates["holdout"],
+        "combined_authorization_gate": gates["combined"],
+        "holdout_subgroup_precision": _subgroup_metrics(holdout["rows"]),
+        "combined_subgroup_precision": _subgroup_metrics(combined_rows),
+    }
+    passed = bool(gates["combined"]["passed"])
+    frappe.db.set_value(
+        RUN_DOCTYPE,
+        run.name,
+        {
+            "hybrid_holdout_status": (
+                "Awaiting Management Approval" if passed else "Completed"
+            ),
+            "holdout_qc_complete_count": gates["holdout"]["valid"],
+            "holdout_qc_same_count": gates["holdout"]["same"],
+            "holdout_qc_different_count": gates["holdout"]["different"],
+            "hybrid_holdout_metrics_json": _json(metrics),
+            "hybrid_holdout_error": (
+                "" if passed else ";".join(gates["combined"]["reasons"])[:140]
+            ),
+            "hybrid_second_approval_status": (
+                "Pending Management Review" if passed else "Rejected"
+            ),
+        },
+        update_modified=False,
+    )
+    frappe.db.commit()
+    return {
+        "run": run.name,
+        "status": "Awaiting Management Approval" if passed else "Completed",
+        **gates,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def record_hybrid_holdout_development_decision(
+    run_name: str, decision: str, reason: str, confirm_run_name: str
+) -> dict[str, str]:
+    _require_manager()
+    if str(confirm_run_name or "").strip() != str(run_name or "").strip():
+        frappe.throw("Type the exact Validation Run ID to confirm the holdout decision")
+    if decision not in {"Approved", "Rejected"}:
+        frappe.throw("Decision must be Approved or Rejected")
+    if not str(reason or "").strip():
+        frappe.throw("A Development holdout decision reason is required")
+    _lock_rows(RUN_DOCTYPE, (run_name,))
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if (
+        run.run_purpose != RUN_PURPOSE
+        or run.hybrid_holdout_status != "Awaiting Management Approval"
+    ):
+        frappe.throw("This hybrid holdout is not awaiting a Development decision")
+    metrics = json.loads(run.hybrid_holdout_metrics_json or "{}")
+    gate = metrics.get("combined_authorization_gate") or {}
+    if decision == "Approved":
+        if _provenance_reasons(run):
+            frappe.throw("The frozen Development holdout provenance is stale")
+        if not gate.get("passed"):
+            frappe.throw("The combined validation and holdout precision gate did not pass")
+    frappe.db.set_value(
+        RUN_DOCTYPE,
+        run.name,
+        {
+            "hybrid_holdout_status": "Completed",
+            "hybrid_second_approval_status": decision,
+            "hybrid_second_approved_at": frappe.utils.now_datetime(),
+            "hybrid_second_approved_by": frappe.session.user,
+        },
+        update_modified=False,
+    )
+    from db_connector.api_identity_resolution import _append_event
+
+    _append_event(
+        entity_doctype=RUN_DOCTYPE,
+        entity_name=run.name,
+        event_type="Approve" if decision == "Approved" else "Withdraw",
+        reason="development_only_hybrid_holdout:" + str(reason).strip(),
+        nonce=hashlib.sha256(
+            f"{run.name}\x1fholdout\x1f{decision}\x1f{reason}".encode()
+        ).hexdigest(),
+        from_status="Holdout Awaiting Management Approval",
+        to_status=decision,
+        metadata={
+            "development_only": True,
+            "authorizes_identity_writes": False,
+            "combined_gate": gate,
+        },
+    )
+    frappe.db.commit()
+    return {"run": run.name, "status": "Completed", "decision": decision}
+
+
+@frappe.whitelist()
+def get_next_hybrid_holdout_pair(run_name: str) -> dict[str, str]:
+    _require_reviewer()
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if run.run_purpose != RUN_PURPOSE or run.hybrid_holdout_status != "Reviewing":
+        frappe.throw("The Development hybrid holdout is not open for review")
+    rows = frappe.get_all(
+        PAIR_DOCTYPE,
+        filters={
+            "evaluation_run": run.name,
+            "automation_cohort": "Blinded Rollout Holdout",
+            "stale": 0,
+            "review_status": [
+                "in",
+                ["Unreviewed", "Partially Reviewed", "Positive Confirmation Required"],
+            ],
+        },
+        fields=["name", "creation"],
+        order_by="creation asc, name asc",
+        limit_page_length=1_000,
+    )
+    names = [str(row.name) for row in rows]
+    already_reviewed = {
+        str(parent)
+        for parent in frappe.get_all(
+            LABEL_DOCTYPE,
+            filters={
+                "parent": ["in", names],
+                "parenttype": PAIR_DOCTYPE,
+                "reviewer": frappe.session.user,
+                "is_adjudication": 0,
+            },
+            pluck="parent",
+            limit_page_length=1_000,
+        )
+    } if names else set()
+    pair_name = next((name for name in names if name not in already_reviewed), "")
+    return {"run": run.name, "pair": pair_name}
+
+
+@frappe.whitelist()
+def get_next_hybrid_review_pair(pair_name: str) -> dict[str, str]:
+    _require_reviewer()
+    pair = frappe.get_doc(PAIR_DOCTYPE, pair_name)
+    if pair.automation_cohort == "Blinded Rollout Holdout":
+        return get_next_hybrid_holdout_pair(pair.evaluation_run)
+    return get_next_hybrid_validation_pair(pair.evaluation_run)
+
+
+@frappe.whitelist(methods=["POST"])
+def retry_hybrid_holdout_job(run_name: str) -> dict[str, str]:
+    _require_manager()
+    _lock_rows(RUN_DOCTYPE, (run_name,))
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    if run.run_purpose != RUN_PURPOSE or run.hybrid_holdout_status != "Failed":
+        frappe.throw("Only a failed Development hybrid holdout build can be retried")
+    if frappe.db.count(
+        PAIR_DOCTYPE,
+        {"evaluation_run": run.name, "automation_cohort": "Blinded Rollout Holdout"},
+    ):
+        frappe.throw("A failed holdout with persistent pairs requires investigation")
+    run.db_set("hybrid_holdout_status", "Building", update_modified=False)
+    run.db_set("hybrid_holdout_error", "", update_modified=False)
+    frappe.db.commit()
+    _enqueue("db_connector.api_hybrid_validation.build_hybrid_holdout_qc", run.name)
+    return {"run": run.name, "status": "Building"}
+
+
+@frappe.whitelist()
+def get_hybrid_holdout_dashboard() -> dict[str, Any]:
+    _require_manager()
+    rows = frappe.get_all(
+        RUN_DOCTYPE,
+        filters={
+            "run_purpose": RUN_PURPOSE,
+            "status": "Completed",
+            "approval_status": "Approved",
+            "hybrid_development_only": 1,
+        },
+        fields=["name"],
+        order_by="creation desc",
+        limit_page_length=1,
+    )
+    if not rows:
+        return {
+            "available": False,
+            "message": "No approved Development hybrid prospective validation exists.",
+        }
+    run = frappe.get_doc(RUN_DOCTYPE, rows[0].name)
+    holdout_status = str(run.hybrid_holdout_status or "Not Created")
+    metrics = json.loads(run.hybrid_holdout_metrics_json or "{}")
+    allocation = json.loads(run.hybrid_holdout_allocation_json or "{}")
+    ineligibility = json.loads(run.hybrid_holdout_ineligibility_json or "{}")
+    return {
+        "available": True,
+        "run": run.name,
+        "status": holdout_status,
+        "second_approval_status": str(
+            run.hybrid_second_approval_status or "Not Requested"
+        ),
+        "reserved_target": int(run.holdout_target_count or HYBRID_HOLDOUT_SIZE),
+        "eligible": int(run.holdout_eligible_count or 0),
+        "complete": int(run.holdout_qc_complete_count or 0),
+        "same": int(run.holdout_qc_same_count or 0),
+        "different": int(run.holdout_qc_different_count or 0),
+        "ineligible": len(ineligibility),
+        "allocation": allocation,
+        "metrics": metrics,
+        "error": str(run.hybrid_holdout_error or ""),
+        "can_create": holdout_status == "Not Created",
+        "can_retry": holdout_status == "Failed",
+        "can_review": holdout_status == "Reviewing",
+        "can_finalize": holdout_status == "Reviewing",
+        "can_decide": holdout_status == "Awaiting Management Approval",
+        "zero_identity_writes": True,
+        "development_only": True,
+    }

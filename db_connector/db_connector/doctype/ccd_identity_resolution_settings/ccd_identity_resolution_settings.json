@@ -6,6 +6,7 @@
   "materialization_enabled", "automation_controls_section", "automatic_tiered_enabled", "automation_paused", "pause_scope", "pause_reason", "automation_control_revision",
   "automatic_tiered_canary", "automatic_tiered_policy", "automatic_tiered_components_per_run", "automatic_tiered_schedule", "automatic_tiered_authorization_event", "last_automatic_run_at", "last_automatic_batch", "last_automatic_status", "last_automatic_error",
   "splink_automation_controls_section", "automatic_splink_enabled", "splink_automation_paused", "splink_pause_reason", "splink_control_revision", "authorized_splink_validation_run", "authorized_splink_queue", "authorized_splink_policy", "authorized_splink_cutoff", "maximum_splink_component_size", "automatic_splink_components_per_run", "splink_automation_authorization_event", "last_splink_run_at", "last_splink_batch", "last_splink_status", "last_splink_error", "operational_provenance_allowlist",
+  "hybrid_development_controls_section", "hybrid_development_status_html",
   "qc_controls_section", "automatic_qc_assignment_enabled", "qc_cases_per_week", "qc_assignment_interval_days", "rolling_qc_window", "qc_sla_days",
   "notification_controls_section", "automation_notifications_enabled", "automation_notification_recipients",
   "manual_defaults_section", "initial_pilot_wave_components", "demo_holdout_components", "default_review_batch_size"
@@ -44,6 +45,8 @@
   {"fieldname": "last_splink_status", "fieldtype": "Data", "label": "Last Splink Status", "read_only": 1},
   {"fieldname": "last_splink_error", "fieldtype": "Small Text", "label": "Last Splink Error", "read_only": 1},
   {"default": "Human Confirmed\nValidated Deterministic Automation\nValidated Probabilistic Automation\nGovernance Correction/Override", "description": "One governed provenance class per line. Operational consumers should use this allowlist; current analytics continue to use every active identity.", "fieldname": "operational_provenance_allowlist", "fieldtype": "Small Text", "label": "Operational Identity Provenance Allowlist"},
+  {"fieldname": "hybrid_development_controls_section", "fieldtype": "Section Break", "label": "Development-only Lower-Score Hybrid"},
+  {"description": "Persistent zero-write holdout evidence. This section cannot materialize identities or authorize UAT/Production.", "fieldname": "hybrid_development_status_html", "fieldtype": "HTML", "label": "Development Hybrid Holdout Status"},
   {"fieldname": "qc_controls_section", "fieldtype": "Section Break", "label": "Continuous QC Controls"},
   {"default": "0", "description": "Default-off scheduled release/replenishment of QC work. Disabling this also prevents unattended Tiered writes.", "fieldname": "automatic_qc_assignment_enabled", "fieldtype": "Check", "label": "Automatic QC Assignment Enabled", "read_only": 1},
   {"default": "100", "fieldname": "initial_pilot_wave_components", "fieldtype": "Int", "label": "Initial Pilot Wave Components"},

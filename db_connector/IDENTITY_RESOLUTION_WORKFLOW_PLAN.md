@@ -1472,3 +1472,34 @@ identity group or exclusion, or authorize UAT/Production. The separately
 reserved holdout, full two-reviewer holdout QC, correction path, and a new
 governed authorization remain necessary before any lower-score hybrid write
 path can be proposed.
+
+### 27.10 Development-only blinded hybrid holdout QC
+
+After the prospective validation is approved, the Evaluation Run and Identity
+Resolution Settings expose **Create Blinded Hybrid Holdout QC**. The action
+uses exactly the 50 candidates already reserved by the original seed. It does
+not draw replacements, accept another seed, or reveal an ineligible pair. A
+long worker locks the run, candidates, and CCD records; rechecks queue/policy/
+model/runtime/rule/cutoff provenance, record timestamps and fingerprints,
+frozen isolated-pair metadata, route and score scope, candidate lifecycle,
+same-source state, active exclusions, and current identity-group overlap; and
+records every exclusion reason. At least 45 of the 50 must remain eligible.
+
+Eligible pairs become persistent `CCD Match Evaluation Pair` rows in the
+`Blinded Rollout Holdout` cohort. They remain masked and require two distinct
+ordinary reviewers. Disagreement or `Unsure` requires adjudication. Two
+ordinary `Different` labels also require manager adjudication with notes so
+every possible false match has an explicit investigation before finalization.
+Closing Desk or retrying the request cannot change the cohort or duplicate
+pairs. No label in this workflow changes Review Candidate or identity state.
+
+**Finalize Hybrid Holdout QC** requires all created pairs to be resolved and
+at least 45 current valid holdout labels. The run records holdout precision and
+source/route/score subgroups, then combines the current validation and holdout
+labels. The combined evidence requires at least 195 current valid labels, no
+unresolved cases, and a 95% Wilson lower bound of at least 0.95. A second
+Development management decision records that evidence with a reason and exact
+Run-ID confirmation. Even an Approved decision remains zero-write: it creates
+no rollout batch, identity decision, group, membership, exclusion, or automatic
+control, and does not authorize UAT/Production. A separate default-off capped
+rollout must be designed and approved later.

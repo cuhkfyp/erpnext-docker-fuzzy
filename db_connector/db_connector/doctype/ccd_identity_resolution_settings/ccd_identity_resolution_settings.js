@@ -6,6 +6,7 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		add_breaker_control(frm);
 		add_splink_control(frm);
 		add_hybrid_research_control(frm);
+		add_hybrid_holdout_control(frm);
 		add_integrity_control(frm);
 		add_unified_person_control(frm);
 		add_notification_control(frm);
@@ -200,6 +201,133 @@ function add_hybrid_research_control(frm) {
 			__("Persistent Hybrid Exploratory Review"),
 		),
 		__("Splink Automation"),
+	);
+}
+
+function add_hybrid_holdout_control(frm) {
+	const field = frm.get_field("hybrid_development_status_html");
+	if (!field?.$wrapper) return;
+	field.$wrapper.html(`<div class="text-muted">${__("Loading the latest approved Development hybrid evidence…")}</div>`);
+	frappe.call({
+		method: "db_connector.api_hybrid_validation.get_hybrid_holdout_dashboard",
+		callback(response) {
+			const result = response.message || {};
+			render_hybrid_holdout_dashboard(field.$wrapper, result);
+			if (!result.available) return;
+			const run = result.run;
+			frm.add_custom_button(
+				__("Open Hybrid Validation Run"),
+				() => frappe.set_route("Form", "CCD Match Evaluation Run", run),
+				__("Development Hybrid Holdout"),
+			);
+			if (result.can_create) {
+				frm.add_custom_button(
+					__("Create Blinded Hybrid Holdout QC"),
+					() => frappe.confirm(
+						__("Use exactly the 50 already-reserved pairs and create persistent masked QC after current-state checks? No identity records will be written."),
+						() => call_hybrid_holdout_action(frm, "start_hybrid_holdout_qc", run),
+					),
+					__("Development Hybrid Holdout"),
+				);
+			}
+			if (result.can_review) {
+				frm.add_custom_button(
+					__("Review Next Hybrid Holdout Pair"),
+					() => frappe.call({
+						method: "db_connector.api_hybrid_validation.get_next_hybrid_holdout_pair",
+						args: { run_name: run },
+						callback(nextResponse) {
+							const pair = nextResponse.message?.pair;
+							if (pair) frappe.set_route("Form", "CCD Match Evaluation Pair", pair);
+							else frappe.msgprint(__("You have no remaining ordinary holdout review."));
+						},
+					}),
+					__("Development Hybrid Holdout"),
+				);
+				frm.add_custom_button(
+					__("View Hybrid Holdout Pairs"),
+					() => frappe.set_route("List", "CCD Match Evaluation Pair", {
+						evaluation_run: run,
+						automation_cohort: "Blinded Rollout Holdout",
+					}),
+					__("Development Hybrid Holdout"),
+				);
+				frm.add_custom_button(
+					__("Finalize Hybrid Holdout QC"),
+					() => call_hybrid_holdout_action(frm, "finalize_hybrid_holdout_qc", run),
+					__("Development Hybrid Holdout"),
+				);
+			}
+			if (result.can_retry) {
+				frm.add_custom_button(
+					__("Retry Hybrid Holdout Build"),
+					() => call_hybrid_holdout_action(frm, "retry_hybrid_holdout_job", run),
+					__("Development Hybrid Holdout"),
+				);
+			}
+			if (result.can_decide) {
+				for (const decision of ["Approved", "Rejected"]) {
+					frm.add_custom_button(
+						__(`${decision} Hybrid Holdout Evidence`),
+						() => prompt_settings_hybrid_holdout_decision(frm, run, decision),
+						__("Development Hybrid Holdout"),
+					);
+				}
+			}
+			if (result.status === "Building") {
+				setTimeout(() => {
+					if (window.cur_frm === frm) frm.reload_doc();
+				}, 4000);
+			}
+		},
+	});
+}
+
+function call_hybrid_holdout_action(frm, method, run) {
+	frappe.call({
+		method: `db_connector.api_hybrid_validation.${method}`,
+		args: { run_name: run },
+		freeze: true,
+		callback: () => frm.reload_doc(),
+	});
+}
+
+function prompt_settings_hybrid_holdout_decision(frm, run, decision) {
+	frappe.prompt(
+		[
+			{ fieldname: "reason", fieldtype: "Small Text", label: __("Development holdout decision reason"), reqd: 1 },
+			{ fieldname: "confirm_run_name", fieldtype: "Data", label: __("Type the exact Validation Run ID"), description: run, reqd: 1 },
+		],
+		(values) => frappe.call({
+			method: "db_connector.api_hybrid_validation.record_hybrid_holdout_development_decision",
+			args: { run_name: run, decision, ...values },
+			callback: () => frm.reload_doc(),
+		}),
+		__(`${decision} Development holdout evidence`),
+	);
+}
+
+function render_hybrid_holdout_dashboard(wrapper, result) {
+	if (!result.available) {
+		wrapper.html(`<div class="alert alert-warning">${esc(result.message || __("No approved Development hybrid validation exists."))}</div>`);
+		return;
+	}
+	const holdout = result.metrics?.holdout || {};
+	const combined = result.metrics?.combined_authorization_gate || {};
+	const runLink = `<a href="/app/ccd-match-evaluation-run/${encodeURIComponent(result.run)}">${esc(result.run)}</a>`;
+	wrapper.html(
+		`<div class="alert alert-info">` +
+			`<p><strong>${__("Development evidence only — zero identity writes")}</strong></p>` +
+			`<p>${__("Validation run")}: ${runLink}<br>${__("Holdout status")}: ${esc(result.status)}<br>${__("Second Development decision")}: ${esc(result.second_approval_status)}</p>` +
+			`<p>${__("Reserved / eligible / reviewed")}: ${esc(String(result.reserved_target ?? 0))} / ${esc(String(result.eligible ?? 0))} / ${esc(String(result.complete ?? 0))}<br>` +
+			`${__("Same / Different / current-state exclusions")}: ${esc(String(result.same ?? 0))} / ${esc(String(result.different ?? 0))} / ${esc(String(result.ineligible ?? 0))}</p>` +
+			(holdout.valid !== undefined
+				? `<p>${__("Holdout precision / Wilson lower")}: ${(Number(holdout.precision || 0) * 100).toFixed(2)}% / ${(Number((holdout.wilson_95 || [0])[0]) * 100).toFixed(2)}%<br>` +
+					`${__("Combined valid / Different / Wilson lower")}: ${esc(String(combined.valid ?? 0))} / ${esc(String(combined.different ?? 0))} / ${(Number((combined.wilson_95 || [0])[0]) * 100).toFixed(2)}%</p>`
+				: "") +
+			(result.error ? `<p class="text-danger">${esc(result.error)}</p>` : "") +
+			`<p class="small">${__("Approval here records Development evidence only. It does not add an automation session, lower the 0.999148140 authorization, materialize identities, or authorize UAT/Production.")}</p>` +
+		`</div>`,
 	);
 }
 

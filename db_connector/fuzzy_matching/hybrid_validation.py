@@ -6,14 +6,60 @@ import hashlib
 from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
+from .splink_automation import validation_gate
+
 
 HYBRID_VALIDATION_SIZE = 165
 HYBRID_HOLDOUT_SIZE = 50
+HYBRID_MINIMUM_ELIGIBLE_HOLDOUT = 45
+HYBRID_MINIMUM_COMBINED_VALID = 195
 HYBRID_MINIMUM_SCORE = 0.95
 HYBRID_PROPOSAL_ROUTES = (
     "exact_name+unverified_identifier_exact",
     "name_support+unverified_identifier+secondary_exact",
 )
+
+
+def hybrid_holdout_gate(
+    validation_labels: Iterable[str],
+    holdout_labels: Iterable[str],
+    *,
+    validation_stale_count: int = 0,
+    validation_unresolved_count: int = 0,
+    holdout_stale_count: int = 0,
+    holdout_unresolved_count: int = 0,
+) -> dict[str, Any]:
+    """Evaluate the Development-only holdout and combined evidence gates."""
+    validation = tuple(str(label) for label in validation_labels)
+    holdout = tuple(str(label) for label in holdout_labels)
+    holdout_result = validation_gate(
+        holdout,
+        stale_count=holdout_stale_count,
+        unresolved_count=holdout_unresolved_count,
+        minimum_valid=HYBRID_MINIMUM_ELIGIBLE_HOLDOUT,
+        lower_target=0.0,
+    )
+    combined = validation_gate(
+        validation + holdout,
+        stale_count=validation_stale_count + holdout_stale_count,
+        unresolved_count=validation_unresolved_count + holdout_unresolved_count,
+        minimum_valid=HYBRID_MINIMUM_COMBINED_VALID,
+        lower_target=0.95,
+    )
+    reasons = list(combined["reasons"])
+    if holdout_result["valid"] < HYBRID_MINIMUM_ELIGIBLE_HOLDOUT:
+        reason = (
+            f"insufficient_holdout_pairs:{holdout_result['valid']}:"
+            f"{HYBRID_MINIMUM_ELIGIBLE_HOLDOUT}"
+        )
+        if reason not in reasons:
+            reasons.append(reason)
+    if holdout_unresolved_count:
+        reason = f"unresolved_holdout_pairs:{int(holdout_unresolved_count)}"
+        if reason not in reasons:
+            reasons.append(reason)
+    combined = {**combined, "passed": not reasons, "reasons": tuple(reasons)}
+    return {"holdout": holdout_result, "combined": combined}
 
 
 def _rank(seed: str, cohort: str, value: str) -> tuple[str, str]:
