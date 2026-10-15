@@ -289,7 +289,9 @@ function update_hybrid_batch_progress(dialog, result) {
 			`<p>${__("Batch")}: ${batchLink}<br>` +
 			`${__("Selected isolated components")}: ${esc(result.selected_components || 0)}</p>` +
 			(terminal
-				? `<p>${__("Applied / exceptions / stale")}: ${esc(result.applied || 0)} / ${esc(result.exceptions || 0)} / ${esc(result.stale || 0)}</p>`
+				? `<p>${__("Applied")}: ${esc(String(result.applied ?? 0))}<br>` +
+					`${__("Exceptions")}: ${esc(String(result.exceptions ?? 0))}<br>` +
+					`${__("Stale")}: ${esc(String(result.stale ?? 0))}</p>`
 				: `<p>${result.status === "Applying" ? __("The long worker is applying component-atomic writes…") : __("Waiting for the long-queue worker…")}</p>`) +
 			(result.error ? `<p class="text-danger">${esc(result.error)}</p>` : "") +
 			`<p class="text-muted small">${__("The batch continues independently if you close this dialog or leave this page.")}</p>` +

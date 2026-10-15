@@ -163,6 +163,8 @@ class HybridAutomationDeskContractTests(unittest.TestCase):
         self.assertIn("Run One Development Hybrid Cycle Now", source)
         self.assertIn("get_hybrid_batch_status", source)
         self.assertIn("poll_hybrid_batch_status", source)
+        self.assertIn('${__("Exceptions")}: ${esc(String(result.exceptions ?? 0))}', source)
+        self.assertIn('${__("Stale")}: ${esc(String(result.stale ?? 0))}', source)
         self.assertIn("automatic_hybrid_components_per_run", json.dumps(
             json.loads((self.app / "db_connector/doctype/ccd_identity_resolution_settings/ccd_identity_resolution_settings.json").read_text())
         ))
