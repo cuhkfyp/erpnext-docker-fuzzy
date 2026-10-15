@@ -295,6 +295,61 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertEqual(metadata["eligible_high_candidates"], 20)
         self.assertEqual(metadata["source_pair_counts"], {"A::B": 15, "C::D": 5})
 
+    def test_governed_policy_launcher_forces_full_high_tier_double_review(self):
+        with patch.object(self.module, "_require_manager"), patch.object(
+            self.module,
+            "_enqueue_evaluation",
+            return_value={"run": "run-1", "status": "Queued"},
+        ) as enqueue:
+            launcher = getattr(
+                self.module.enqueue_policy_evaluation,
+                "__wrapped__",
+                self.module.enqueue_policy_evaluation,
+            )
+            result = launcher(
+                "pilot-test",
+                self.module.HIGH_TIER_VALIDATION,
+                sample_size=125,
+                double_review_count=3,
+            )
+
+        self.assertEqual(result["run"], "run-1")
+        enqueue.assert_called_once_with(
+            "pilot-test",
+            125,
+            125,
+            run_purpose=self.module.HIGH_TIER_VALIDATION,
+        )
+
+    def test_evaluation_run_add_form_is_a_governed_additive_launcher(self):
+        app = Path(__file__).resolve().parents[1]
+        source = (
+            app
+            / "db_connector/doctype/ccd_match_evaluation_run/ccd_match_evaluation_run.js"
+        ).read_text(encoding="utf-8")
+        matching_policy = (
+            app
+            / "db_connector/doctype/ccd_matching_policy/ccd_matching_policy.js"
+        ).read_text(encoding="utf-8")
+        queue = (
+            app
+            / "db_connector/doctype/ccd_match_review_queue_run/ccd_match_review_queue_run.js"
+        ).read_text(encoding="utf-8")
+        exploratory = (
+            app
+            / "db_connector/doctype/ccd_hybrid_exploratory_batch/ccd_hybrid_exploratory_batch.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("setup_new_run_launcher", source)
+        self.assertIn("Create Governed Policy Evaluation", source)
+        self.assertIn("Threshold Evaluation\\nPositive Benchmark\\nHigh Tier Validation", source)
+        self.assertIn("enqueue_policy_evaluation", source)
+        self.assertIn("Open Ready Splink Queues", source)
+        self.assertIn("Open Hybrid Exploratory Batches", source)
+        self.assertIn("Start Shadow Evaluation", matching_policy)
+        self.assertIn("Create Splink Automatic Validation", queue)
+        self.assertIn("Prepare Development Validation Proposal", exploratory)
+
     def test_probability_calibration_distinguishes_missing_from_real_zero(self):
         class Pair(dict):
             __getattr__ = dict.get

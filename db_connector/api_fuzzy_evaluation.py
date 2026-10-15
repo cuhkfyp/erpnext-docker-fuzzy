@@ -1352,6 +1352,42 @@ def enqueue_evaluation(
     return _enqueue_evaluation(policy_name, sample_size, double_review_count)
 
 
+@frappe.whitelist()
+def enqueue_policy_evaluation(
+    policy_name: str,
+    run_purpose: str,
+    sample_size: int = 500,
+    double_review_count: int = 100,
+) -> dict[str, str]:
+    """Create one governed policy-based Evaluation Run from Desk.
+
+    Splink Automatic Validation and Hybrid Prospective Validation deliberately
+    remain on their source Queue and Exploratory Batch workflows because those
+    upstream documents are part of the frozen authorization provenance.
+    """
+    _require_manager()
+    purpose = str(run_purpose or "").strip()
+    if purpose not in {
+        THRESHOLD_EVALUATION,
+        POSITIVE_BENCHMARK,
+        HIGH_TIER_VALIDATION,
+    }:
+        frappe.throw(
+            "Use the governed Ready Review Queue or Hybrid Exploratory Batch "
+            "workflow for this Evaluation Run purpose"
+        )
+    requested_sample_size = int(sample_size)
+    requested_double_review_count = int(double_review_count)
+    if purpose == HIGH_TIER_VALIDATION:
+        requested_double_review_count = requested_sample_size
+    return _enqueue_evaluation(
+        policy_name,
+        requested_sample_size,
+        requested_double_review_count,
+        run_purpose=purpose,
+    )
+
+
 def install_evaluation_run(
     policy_name: str = DEFAULT_PILOT_POLICY_VERSION,
     sample_size: int = 500,

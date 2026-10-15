@@ -1,6 +1,9 @@
 frappe.ui.form.on("CCD Match Evaluation Run", {
 	refresh(frm) {
-		if (frm.is_new()) return;
+		if (frm.is_new()) {
+			setup_new_run_launcher(frm);
+			return;
+		}
 		frm.add_custom_button(__("Review Pairs"), () => {
 			frappe.set_route("List", "CCD Match Evaluation Pair", {
 				evaluation_run: frm.doc.name,
@@ -38,6 +41,141 @@ frappe.ui.form.on("CCD Match Evaluation Run", {
 		}
 	},
 });
+
+function setup_new_run_launcher(frm) {
+	frm.disable_save();
+	frm.set_intro(
+		__("Evaluation Runs are frozen by governed server actions and cannot be entered manually. This launcher creates policy-based runs. Splink Automatic Validation remains available from a Ready Review Queue, and Hybrid Prospective Validation remains available from a completed Hybrid Exploratory Batch."),
+		"blue",
+	);
+	if (!frappe.user.has_role("System Manager")) return;
+	frm.add_custom_button(
+		__("Create Policy Evaluation"),
+		() => open_policy_evaluation_launcher(frm),
+		__("Governed Creation"),
+	);
+	frm.add_custom_button(
+		__("Open Ready Splink Queues"),
+		() => frappe.set_route("List", "CCD Match Review Queue Run", { status: "Ready" }),
+		__("Governed Creation"),
+	);
+	frm.add_custom_button(
+		__("Open Hybrid Exploratory Batches"),
+		() => frappe.set_route("List", "CCD Hybrid Exploratory Batch", { status: "Completed" }),
+		__("Governed Creation"),
+	);
+	if (!frm.__evaluation_launcher_opened) {
+		frm.__evaluation_launcher_opened = true;
+		setTimeout(() => open_policy_evaluation_launcher(frm), 0);
+	}
+}
+
+function open_policy_evaluation_launcher(frm) {
+	const dialog = new frappe.ui.Dialog({
+		title: __("Create Governed Policy Evaluation"),
+		fields: [
+			{
+				fieldname: "run_purpose",
+				fieldtype: "Select",
+				label: __("Run Purpose"),
+				options: "Threshold Evaluation\nPositive Benchmark\nHigh Tier Validation",
+				default: "Threshold Evaluation",
+				reqd: 1,
+			},
+			{
+				fieldname: "matching_policy",
+				fieldtype: "Link",
+				label: __("Matching Policy"),
+				options: "CCD Matching Policy",
+				default: frm.doc.matching_policy || "",
+				get_query: () => ({ filters: { status: ["in", ["Draft", "Pilot"]] } }),
+				reqd: 1,
+			},
+			{
+				fieldname: "sample_size",
+				fieldtype: "Int",
+				label: __("Sample Size"),
+				default: 500,
+				reqd: 1,
+			},
+			{
+				fieldname: "double_review_count",
+				fieldtype: "Int",
+				label: __("Double Review Count"),
+				default: 100,
+				reqd: 1,
+				description: __("High Tier Validation always double-reviews the complete sample."),
+			},
+			{
+				fieldname: "purpose_guidance",
+				fieldtype: "HTML",
+			},
+		],
+		primary_action_label: __("Create and Queue"),
+		primary_action(values) {
+			const sampleSize = Number(values.sample_size || 0);
+			const doubleReviewCount = values.run_purpose === "High Tier Validation"
+				? sampleSize
+				: Number(values.double_review_count || 0);
+			if (sampleSize < 1 || sampleSize > 5000) {
+				frappe.msgprint(__("Sample Size must be between 1 and 5,000."));
+				return;
+			}
+			if (doubleReviewCount < 0 || doubleReviewCount > sampleSize) {
+				frappe.msgprint(__("Double Review Count must be between 0 and the Sample Size."));
+				return;
+			}
+			dialog.disable_primary_action();
+			frappe.call({
+				method: "db_connector.api_fuzzy_evaluation.enqueue_policy_evaluation",
+				args: {
+					policy_name: values.matching_policy,
+					run_purpose: values.run_purpose,
+					sample_size: sampleSize,
+					double_review_count: doubleReviewCount,
+				},
+				freeze: true,
+				freeze_message: __("Freezing the policy snapshot and queueing the evaluation…"),
+				callback(response) {
+					const run = response.message?.run;
+					if (run) {
+						dialog.hide();
+						frappe.set_route("Form", "CCD Match Evaluation Run", run);
+					} else {
+						dialog.enable_primary_action();
+					}
+				},
+				error() {
+					dialog.enable_primary_action();
+				},
+			});
+		},
+	});
+
+	const guidance = {
+		"Threshold Evaluation": __("Representative Splink calibration and held-out validation. Typical size: 500 with 100 double reviews."),
+		"Positive Benchmark": __("Optional positive-enriched diagnostic for blocking recall. It cannot authorize deployable thresholds."),
+		"High Tier Validation": __("Fresh deterministic High-tier precision validation. Every selected pair requires two reviewers."),
+	};
+	const applyPurpose = () => {
+		const purpose = dialog.get_value("run_purpose");
+		const highTier = purpose === "High Tier Validation";
+		const defaults = purpose === "Threshold Evaluation"
+			? { sample: 500, double: 100 }
+			: purpose === "Positive Benchmark"
+				? { sample: 100, double: 20 }
+				: { sample: 100, double: 100 };
+		dialog.set_value("sample_size", defaults.sample);
+		dialog.set_value("double_review_count", defaults.double);
+		dialog.set_df_property("double_review_count", "read_only", highTier ? 1 : 0);
+		dialog.get_field("purpose_guidance").$wrapper.html(
+			`<div class="alert alert-secondary">${frappe.utils.escape_html(guidance[purpose] || "")}</div>`,
+		);
+	};
+	dialog.get_field("run_purpose").df.onchange = applyPurpose;
+	dialog.show();
+	applyPurpose();
+}
 
 function add_hybrid_validation_actions(frm) {
 	render_hybrid_validation_progress(frm);
