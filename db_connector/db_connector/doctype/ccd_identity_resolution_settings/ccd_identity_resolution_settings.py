@@ -103,13 +103,14 @@ class CCDIdentityResolutionSettings(Document):
             "qc_sla_days",
             "automatic_tiered_components_per_run",
             "automatic_splink_components_per_run",
-            "automatic_hybrid_components_per_run",
         ):
             value = int(self.get(fieldname) or 0)
             if value < 1 or value > 100:
                 frappe.throw(
                     f"{self.meta.get_label(fieldname)} must be between 1 and 100"
                 )
+        if int(self.automatic_hybrid_components_per_run or 0) < 1:
+            frappe.throw("Maximum Hybrid Components per Run must be at least 1")
         if int(self.maximum_splink_component_size or 0) < 2 or int(
             self.maximum_splink_component_size or 0
         ) > 100:

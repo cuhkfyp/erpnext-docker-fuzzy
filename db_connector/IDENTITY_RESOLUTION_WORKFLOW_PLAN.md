@@ -1514,8 +1514,10 @@ scope. Adoption leaves Development Hybrid materialization and its daily
 schedule disabled. It does not change the ultra-high Splink authorization.
 
 **Preview Development Hybrid Cycle** is always zero-write and may be used
-before adoption. After adoption, management can choose **Maximum Hybrid
-Components per Run** from 1–100, beginning with one. Only untouched isolated
+before adoption. After adoption, management can choose a positive **Maximum
+Hybrid Components per Run**, beginning with one and scaling deliberately after
+successful small cycles. There is no artificial 100-component ceiling; the
+saved setting and the current frozen eligible inventory bound each cycle. Only untouched isolated
 two-record components are eligible. Selection is deterministic by current
 score and Candidate ID and excludes every exploratory/validation/holdout pair,
 prior review or assignment, stale fingerprint/timestamp, existing group,

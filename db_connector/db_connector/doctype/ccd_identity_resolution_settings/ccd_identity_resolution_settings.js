@@ -244,21 +244,78 @@ function run_automatic_hybrid_now(frm) {
 			frm.__ccd_hybrid_cycle_starting = false;
 			const result = response.message || {};
 			const batch = result.batch || "";
-			const batchLink = batch
-				? `<a href="/app/ccd-splink-automation-batch/${encodeURIComponent(batch)}">${esc(batch)}</a>`
-				: __("None");
-			frappe.msgprint({
+			if (!batch) {
+				frappe.msgprint({
+					title: __("Development Hybrid cycle"),
+					indicator: result.status === "No Eligible Work" ? "green" : "orange",
+					message: `<p>${__("Status")}: ${esc(result.status || "")}</p>` +
+						`<p>${__("Selected isolated components")}: ${esc(result.selected_component_count || result.selected_components || 0)}</p>`,
+				});
+				frm.reload_doc();
+				return;
+			}
+			const progress = new frappe.ui.Dialog({
 				title: __("Development Hybrid cycle"),
-				indicator: result.status === "Queued" ? "green" : "orange",
-				message: `<p>${__("Status")}: ${esc(result.status || "")}</p>` +
-					`<p>${__("Batch")}: ${batchLink}</p>` +
-					`<p>${__("Selected isolated components")}: ${esc(result.selected_component_count || result.selected_components || 0)}</p>` +
-					`<p class="text-muted">${__("A queued batch continues on the long worker after this dialog closes.")}</p>`,
+				fields: [{ fieldname: "hybrid_batch_status_html", fieldtype: "HTML" }],
 			});
-			frm.reload_doc();
+			progress.show();
+			update_hybrid_batch_progress(progress, {
+				batch,
+				status: result.status || "Queued",
+				selected_components: result.selected_component_count || result.selected_components || 0,
+			});
+			poll_hybrid_batch_status(frm, batch, progress);
 		},
 		error() {
 			frm.__ccd_hybrid_cycle_starting = false;
+		},
+	});
+}
+
+function update_hybrid_batch_progress(dialog, result) {
+	const field = dialog.get_field("hybrid_batch_status_html");
+	if (!field?.$wrapper) return;
+	const batch = result.batch || "";
+	const batchLink = batch
+		? `<a href="/app/ccd-splink-automation-batch/${encodeURIComponent(batch)}">${esc(batch)}</a>`
+		: __("None");
+	const terminal = ["Applied", "Applied with Exceptions", "Failed", "Stale", "Superseded"].includes(result.status);
+	const alert = result.status === "Applied"
+		? "success"
+		: (["Failed", "Stale"].includes(result.status) ? "danger" : "info");
+	field.$wrapper.html(
+		`<div class="alert alert-${alert}">` +
+			`<p><strong>${__("Status")}: ${esc(result.status || __("Unknown"))}</strong></p>` +
+			`<p>${__("Batch")}: ${batchLink}<br>` +
+			`${__("Selected isolated components")}: ${esc(result.selected_components || 0)}</p>` +
+			(terminal
+				? `<p>${__("Applied / exceptions / stale")}: ${esc(result.applied || 0)} / ${esc(result.exceptions || 0)} / ${esc(result.stale || 0)}</p>`
+				: `<p>${result.status === "Applying" ? __("The long worker is applying component-atomic writes…") : __("Waiting for the long-queue worker…")}</p>`) +
+			(result.error ? `<p class="text-danger">${esc(result.error)}</p>` : "") +
+			`<p class="text-muted small">${__("The batch continues independently if you close this dialog or leave this page.")}</p>` +
+		`</div>`,
+	);
+}
+
+function poll_hybrid_batch_status(frm, batch, dialog) {
+	frappe.call({
+		method: "db_connector.api_hybrid_automation.get_hybrid_batch_status",
+		args: { batch_name: batch },
+		callback(response) {
+			const result = response.message || {};
+			update_hybrid_batch_progress(dialog, result);
+			if (["Queued", "Applying"].includes(result.status)) {
+				setTimeout(() => poll_hybrid_batch_status(frm, batch, dialog), 4000);
+				return;
+			}
+			frm.reload_doc();
+		},
+		error() {
+			update_hybrid_batch_progress(dialog, {
+				batch,
+				status: __("Status check interrupted; retrying"),
+			});
+			setTimeout(() => poll_hybrid_batch_status(frm, batch, dialog), 4000);
 		},
 	});
 }

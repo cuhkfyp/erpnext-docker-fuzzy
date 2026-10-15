@@ -64,7 +64,7 @@
   {"fieldname": "authorized_hybrid_source_scope_json", "fieldtype": "Code", "label": "Authorized Hybrid Source Scope", "options": "JSON", "permlevel": 2, "read_only": 1},
   {"fieldname": "authorized_hybrid_route_scope_json", "fieldtype": "Code", "label": "Authorized Hybrid Corroboration Routes", "options": "JSON", "permlevel": 2, "read_only": 1},
   {"fieldname": "authorized_hybrid_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Authorized Hybrid Fingerprint", "read_only": 1},
-  {"default": "1", "description": "Bounded 1-100 isolated two-record components per Development Hybrid cycle. Start with one.", "fieldname": "automatic_hybrid_components_per_run", "fieldtype": "Int", "label": "Maximum Hybrid Components per Run"},
+  {"default": "1", "description": "Manager-selected positive cap on isolated two-record components per Development Hybrid cycle. Preview the exact selection and scale up deliberately after a small test.", "fieldname": "automatic_hybrid_components_per_run", "fieldtype": "Int", "label": "Maximum Hybrid Components per Run"},
   {"fieldname": "hybrid_automation_authorization_event", "fieldtype": "Link", "label": "Development Hybrid Authorization Event", "options": "CCD Identity Event", "read_only": 1},
   {"fieldname": "last_hybrid_automation_run_at", "fieldtype": "Datetime", "label": "Last Development Hybrid Run At", "read_only": 1},
   {"fieldname": "last_hybrid_automation_batch", "fieldtype": "Link", "label": "Last Development Hybrid Batch", "options": "CCD Splink Automation Batch", "read_only": 1},

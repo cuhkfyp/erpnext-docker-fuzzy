@@ -478,7 +478,11 @@ def _automatic_hybrid_selection(settings: Any, run: Any) -> dict[str, Any]:
         run.hybrid_exploratory_batch
     )
     inventory = _hybrid_inventory(batch, queue, floor, cutoff)
-    limit = min(max(int(settings.automatic_hybrid_components_per_run or 1), 1), 100)
+    # The governed setting is itself the per-cycle bound. Do not silently
+    # clamp it to 100: larger Development runs remain finite because selection
+    # cannot exceed the frozen eligible inventory, and apply commits each
+    # component independently.
+    limit = max(int(settings.automatic_hybrid_components_per_run or 1), 1)
     allowed_sources = _load_json_list(run.source_scope_json)
     scoped = bounded_hybrid_pairs(
         inventory["rows"],
@@ -672,6 +676,25 @@ def run_automatic_hybrid_cycle(*, requested_by: str = "Administrator") -> dict[s
 def run_automatic_hybrid_now() -> dict[str, Any]:
     _require_manager()
     return run_automatic_hybrid_cycle(requested_by=str(frappe.session.user))
+
+
+@frappe.whitelist()
+def get_hybrid_batch_status(batch_name: str) -> dict[str, Any]:
+    """Return the live batch state used by the Desk progress dialog."""
+    _require_manager()
+    batch = frappe.get_doc(BATCH_DOCTYPE, batch_name)
+    if str(batch.batch_type or "") != HYBRID_BATCH_TYPE:
+        frappe.throw("This is not a Development Hybrid Automation batch")
+    return {
+        "batch": str(batch.name),
+        "status": str(batch.status or ""),
+        "selected_components": int(batch.component_count or 0),
+        "applied": int(batch.applied_count or 0),
+        "exceptions": int(batch.exception_count or 0),
+        "stale": int(batch.stale_count or 0),
+        "error": str(batch.error_summary or ""),
+        "applied_at": batch.applied_at,
+    }
 
 
 @frappe.whitelist(methods=["POST"])

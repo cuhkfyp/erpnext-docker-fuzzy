@@ -103,6 +103,29 @@ class HybridAutomationAuthorizationTests(unittest.TestCase):
         self.assertIn("hybrid_holdout_second_approval_missing", blockers)
 
 
+class HybridAutomationBatchStatusTests(unittest.TestCase):
+    def test_live_batch_status_is_returned_for_desk_polling(self):
+        batch = types.SimpleNamespace(
+            name="hybrid-batch",
+            batch_type=service.HYBRID_BATCH_TYPE,
+            status="Applied with Exceptions",
+            component_count=150,
+            applied_count=149,
+            exception_count=1,
+            stale_count=0,
+            error_summary="",
+            applied_at="2026-10-15 01:00:00",
+        )
+        with patch.object(service, "_require_manager"), patch.object(
+            service.frappe, "get_doc", return_value=batch
+        ):
+            result = service.get_hybrid_batch_status.__wrapped__(batch.name)
+        self.assertEqual(result["status"], "Applied with Exceptions")
+        self.assertEqual(result["selected_components"], 150)
+        self.assertEqual(result["applied"], 149)
+        self.assertEqual(result["exceptions"], 1)
+
+
 class HybridAutomationDeskContractTests(unittest.TestCase):
     def setUp(self):
         self.app = Path(__file__).resolve().parents[1]
@@ -138,9 +161,34 @@ class HybridAutomationDeskContractTests(unittest.TestCase):
         self.assertIn("Authorize Approved Hybrid Evidence", source)
         self.assertIn("Preview Development Hybrid Cycle", source)
         self.assertIn("Run One Development Hybrid Cycle Now", source)
+        self.assertIn("get_hybrid_batch_status", source)
+        self.assertIn("poll_hybrid_batch_status", source)
         self.assertIn("automatic_hybrid_components_per_run", json.dumps(
             json.loads((self.app / "db_connector/doctype/ccd_identity_resolution_settings/ccd_identity_resolution_settings.json").read_text())
         ))
+
+    def test_hybrid_limit_is_manager_bounded_without_a_hidden_100_clamp(self):
+        automation = (self.app / "api_hybrid_automation.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "limit = max(int(settings.automatic_hybrid_components_per_run or 1), 1)",
+            automation,
+        )
+        self.assertNotIn(
+            "min(max(int(settings.automatic_hybrid_components_per_run or 1), 1), 100)",
+            automation,
+        )
+        schema = json.loads(
+            (
+                self.app
+                / "db_connector/doctype/ccd_identity_resolution_settings/ccd_identity_resolution_settings.json"
+            ).read_text(encoding="utf-8")
+        )
+        field = next(
+            item
+            for item in schema["fields"]
+            if item["fieldname"] == "automatic_hybrid_components_per_run"
+        )
+        self.assertNotIn("1-100", field["description"])
 
     def test_applied_hybrid_enters_sampling_pool_not_mandatory_qc(self):
         source = (self.app / "api_hybrid_automation.py").read_text(encoding="utf-8")

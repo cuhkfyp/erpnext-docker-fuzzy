@@ -1461,7 +1461,10 @@ the separate guarded controls below.
    enable its daily schedule for the first test.
 7. Repeat the preview, inspect the single selected Candidate, and use **Run One
    Development Hybrid Cycle Now**. The HTTP dialog may close; the idempotent
-   long-worker batch continues independently.
+   long-worker batch continues independently. While it remains open, the Desk
+   dialog polls the persistent batch and changes from `Queued` to `Applying`
+   and then its terminal status; switching browser tabs does not control the
+   worker.
 8. Confirm the batch and Candidate record the Hybrid channel, frozen route,
    score band, rule version, `Hybrid Automated` Identity Decision, and exactly
    one active two-record group. Disable Hybrid and Live Materialization after
