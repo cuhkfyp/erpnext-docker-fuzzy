@@ -8,6 +8,9 @@ frappe.ui.form.on("CCD Match Canary Run", {
 });
 
 function add_review_navigation(frm) {
+	frm.add_custom_button(__("Open Unified QC Workbench"), () => {
+		frappe.set_route("query-report", "CCD Unified QC Workbench");
+	}, __("Review"));
 	frm.add_custom_button(__("View All Recommendations"), () => {
 		frappe.set_route("List", "CCD Match Recommendation", { canary_run: frm.doc.name });
 	}, __("Review"));

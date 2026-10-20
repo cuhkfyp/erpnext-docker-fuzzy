@@ -1,6 +1,7 @@
 frappe.ui.form.on("CCD Identity Resolution Settings", {
 	refresh(frm) {
 		if (!frappe.user.has_role("System Manager")) return;
+		add_unified_qc_workbench(frm);
 		add_qc_control(frm);
 		add_tiered_control(frm);
 		add_breaker_control(frm);
@@ -31,6 +32,14 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		}
 	},
 });
+
+function add_unified_qc_workbench(frm) {
+	frm.add_custom_button(
+		__("Open Unified QC Workbench"),
+		() => frappe.set_route("query-report", "CCD Unified QC Workbench"),
+		__("Quality Control"),
+	);
+}
 
 function add_splink_control(frm) {
 	const desired = frm.doc.automatic_splink_enabled ? 0 : 1;

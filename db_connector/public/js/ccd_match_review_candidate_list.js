@@ -2,6 +2,9 @@ const CCD_SPLINK_BULK_LIMIT = 25;
 
 frappe.listview_settings["CCD Match Review Candidate"] = {
 	onload(listview) {
+		listview.page.add_inner_button(__("Unified QC Workbench"), () => {
+			frappe.set_route("query-report", "CCD Unified QC Workbench");
+		});
 		if (!frappe.user_roles.includes("System Manager")) return;
 		listview.page.add_actions_menu_item(
 			__("Preview Selected Identity Materialization"),

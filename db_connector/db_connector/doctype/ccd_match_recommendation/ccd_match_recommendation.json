@@ -69,7 +69,7 @@
  "permissions": [
   {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
   {"read": 1, "report": 1, "role": "CCD Match Reviewer"},
-  {"read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"},
   {"permlevel": 1, "read": 1, "role": "System Manager"},
   {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"},
   {"permlevel": 2, "read": 1, "role": "System Manager"}
