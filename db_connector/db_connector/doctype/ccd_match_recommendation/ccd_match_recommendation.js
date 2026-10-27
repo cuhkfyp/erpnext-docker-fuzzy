@@ -18,23 +18,26 @@ frappe.ui.form.on("CCD Match Recommendation", {
 			);
 		}
 		if (frm.doc.status === "Proposed" && !frm.doc.identity_decision) {
-			frm.add_custom_button(
-				__("Prepare Overlap Resolution Batch"),
-				() => frappe.confirm(
-					__("Freeze this complete Tiered component into a reviewed batch only if its sole safety problem is existing identity overlap? This creates no identity links."),
-					() => frappe.call({
-						method: "db_connector.api_identity_activation.create_overlap_resolution_batch",
-						args: { recommendation_name: frm.doc.name },
-						freeze: true,
-						callback(response) {
-							if (response.message?.batch) {
-								frappe.set_route("Form", "CCD Identity Activation Batch", response.message.batch);
-							}
-						},
-					}),
-				),
-				__("Identity Resolution"),
-			);
+			if (frm.doc.rollout_state === "Available") {
+				frm.add_custom_button(
+					__("Prepare Target Activation Batch"),
+					() => frappe.confirm(
+						__("Run fresh safety checks and freeze only this recommendation's complete Tiered component into a reviewed batch? If a current structural identity overlap exists, the server prepares an overlap-resolution batch instead. This creates no identity links."),
+						() => frappe.call({
+							method: "db_connector.api_identity_activation.create_target_activation_batch",
+							args: { recommendation_name: frm.doc.name },
+							freeze: true,
+							freeze_message: __("Checking and freezing the complete target component…"),
+							callback(response) {
+								if (response.message?.batch) {
+									frappe.set_route("Form", "CCD Identity Activation Batch", response.message.batch);
+								}
+							},
+						}),
+					),
+					__("Identity Resolution"),
+				);
+			}
 			frm.add_custom_button(__("Withdraw Recommendation"), () => {
 				frappe.prompt(
 					[{ fieldname: "reason", fieldtype: "Small Text", label: __("Withdrawal Reason"), reqd: 1 }],

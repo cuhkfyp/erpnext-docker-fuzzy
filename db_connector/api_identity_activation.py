@@ -1255,6 +1255,67 @@ def get_activation_batch_creation(operation_token: str) -> dict[str, Any]:
 
 
 @frappe.whitelist()
+def create_target_activation_batch(
+    recommendation_name: str,
+    is_demonstration: int | str = 0,
+) -> dict[str, Any]:
+    """Freeze exactly one recommendation's complete current component.
+
+    Desk starts from a recommendation, but activation must remain component
+    atomic. Resolve the hidden component server-side, run a fresh zero-write
+    safety preview, and select the normal or structural-overlap workflow
+    without exposing component fingerprints to the browser.
+    """
+    _require_manager()
+    recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, recommendation_name)
+    if (
+        recommendation.status != "Proposed"
+        or recommendation.rollout_state != "Available"
+        or recommendation.identity_decision
+    ):
+        frappe.throw("Select an available Proposed Tiered recommendation")
+    component_key = str(recommendation.cluster_fingerprint or "")
+    if not component_key:
+        frappe.throw("The selected recommendation has no complete component")
+
+    run = _run(str(recommendation.canary_run))
+    selected = _selected_components(run.name, component_keys=[component_key])
+    preview = _preview_components(run, selected)
+    allow_structural_overlap = False
+    selection_method = "Explicit Wave"
+    if preview["unsafe_component_count"]:
+        unsafe = [row for row in preview["components"] if not row["safe"]]
+        if (
+            len(selected) != 1
+            or len(unsafe) != 1
+            or not structural_overlap_only(
+                unsafe[0]["conflicts"], stale=bool(preview["stale_component_count"])
+            )
+        ):
+            frappe.throw(
+                "The target component is stale or unsafe and cannot be prepared for activation"
+            )
+        selection_method = "Overlap Resolution"
+        allow_structural_overlap = True
+
+    result = _create_activation_batch(
+        run.name,
+        selection_method,
+        None,
+        [component_key],
+        1,
+        is_demonstration,
+        allow_structural_overlap=allow_structural_overlap,
+    )
+    return {
+        **result,
+        "target_mode": (
+            "Structural Overlap" if allow_structural_overlap else "Safe Activation"
+        ),
+    }
+
+
+@frappe.whitelist()
 def create_overlap_resolution_batch(
     recommendation_name: str,
     is_demonstration: int | str = 0,

@@ -242,6 +242,129 @@ class ActivationBatchCreationOperationTests(unittest.TestCase):
         self.assertEqual(result, {})
         get_all.assert_not_called()
 
+    def test_target_recommendation_creates_only_its_safe_complete_component(self):
+        recommendation = SimpleNamespace(
+            status="Proposed",
+            rollout_state="Available",
+            identity_decision=None,
+            cluster_fingerprint="component-target",
+            canary_run="canary1",
+        )
+        run = SimpleNamespace(name="canary1")
+        selected = [("component-target", [SimpleNamespace(name="recommendation1")])]
+        preview = {
+            "unsafe_component_count": 0,
+            "stale_component_count": 0,
+            "components": [{"safe": True, "conflicts": []}],
+        }
+        with patch.object(activation, "_require_manager"), patch.object(
+            activation.frappe, "get_doc", return_value=recommendation
+        ), patch.object(activation, "_run", return_value=run), patch.object(
+            activation, "_selected_components", return_value=selected
+        ) as select, patch.object(
+            activation, "_preview_components", return_value=preview
+        ), patch.object(
+            activation,
+            "_create_activation_batch",
+            return_value={"batch": "batch-target", "status": "Reviewed"},
+        ) as create:
+            result = activation.create_target_activation_batch("recommendation1")
+        select.assert_called_once_with(
+            "canary1", component_keys=["component-target"]
+        )
+        create.assert_called_once_with(
+            "canary1",
+            "Explicit Wave",
+            None,
+            ["component-target"],
+            1,
+            0,
+            allow_structural_overlap=False,
+        )
+        self.assertEqual(result["batch"], "batch-target")
+        self.assertEqual(result["target_mode"], "Safe Activation")
+
+    def test_target_recommendation_routes_only_structural_overlap_to_resolution(self):
+        recommendation = SimpleNamespace(
+            status="Proposed",
+            rollout_state="Available",
+            identity_decision=None,
+            cluster_fingerprint="component-target",
+            canary_run="canary1",
+        )
+        run = SimpleNamespace(name="canary1")
+        selected = [("component-target", [SimpleNamespace(name="recommendation1")])]
+        preview = {
+            "unsafe_component_count": 1,
+            "stale_component_count": 0,
+            "components": [
+                {
+                    "safe": False,
+                    "conflicts": ["partial_existing_identity_group"],
+                }
+            ],
+        }
+        with patch.object(activation, "_require_manager"), patch.object(
+            activation.frappe, "get_doc", return_value=recommendation
+        ), patch.object(activation, "_run", return_value=run), patch.object(
+            activation, "_selected_components", return_value=selected
+        ), patch.object(
+            activation, "_preview_components", return_value=preview
+        ), patch.object(
+            activation, "structural_overlap_only", return_value=True
+        ), patch.object(
+            activation,
+            "_create_activation_batch",
+            return_value={"batch": "batch-overlap", "status": "Reviewed"},
+        ) as create:
+            result = activation.create_target_activation_batch("recommendation1")
+        create.assert_called_once_with(
+            "canary1",
+            "Overlap Resolution",
+            None,
+            ["component-target"],
+            1,
+            0,
+            allow_structural_overlap=True,
+        )
+        self.assertEqual(result["target_mode"], "Structural Overlap")
+
+    def test_target_recommendation_rejects_non_overlap_safety_failure(self):
+        recommendation = SimpleNamespace(
+            status="Proposed",
+            rollout_state="Available",
+            identity_decision=None,
+            cluster_fingerprint="component-target",
+            canary_run="canary1",
+        )
+        preview = {
+            "unsafe_component_count": 1,
+            "stale_component_count": 1,
+            "components": [
+                {"safe": False, "conflicts": ["identity_fingerprint_changed"]}
+            ],
+        }
+        with patch.object(activation, "_require_manager"), patch.object(
+            activation.frappe, "get_doc", return_value=recommendation
+        ), patch.object(
+            activation, "_run", return_value=SimpleNamespace(name="canary1")
+        ), patch.object(
+            activation,
+            "_selected_components",
+            return_value=[("component-target", [])],
+        ), patch.object(
+            activation, "_preview_components", return_value=preview
+        ), patch.object(
+            activation, "structural_overlap_only", return_value=False
+        ), patch.object(activation, "_create_activation_batch") as create, patch.object(
+            activation.frappe,
+            "throw",
+            side_effect=RuntimeError("target blocked"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "target blocked"):
+                activation.create_target_activation_batch("recommendation1")
+        create.assert_not_called()
+
     def test_already_materialized_component_is_not_selectable(self):
         row = SimpleNamespace(cluster_fingerprint="component-a", rollout_state="Available")
         with patch.object(
