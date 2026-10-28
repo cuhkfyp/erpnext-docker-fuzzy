@@ -9,13 +9,25 @@
 		return VALID_COMPONENT.test(component) ? component : "";
 	}
 
+	function selected_table_component(value) {
+		const table_name = String(value || "").trim();
+		if (!table_name || table_name === "*** Customize ***") {
+			return "";
+		}
+		return source_component(table_name.split(".").pop());
+	}
+
 	function generated_registration_name(frm) {
 		const physical_hostname = source_component(frm.doc.physical_hostname);
 		const database_name = source_component(frm.doc.db_database);
 		if (!physical_hostname || !database_name) {
 			return "";
 		}
-		return `${PREFIX}${physical_hostname}_${database_name}`;
+		const table_name = selected_table_component(frm.doc.ccd_table);
+		const suffix = [physical_hostname, database_name, table_name]
+			.filter(Boolean)
+			.join("_");
+		return `${PREFIX}${suffix}`;
 	}
 
 	function autofill_registration_name(frm, overwrite) {
@@ -38,6 +50,9 @@
 			return autofill_registration_name(frm, true);
 		},
 		db_database(frm) {
+			return autofill_registration_name(frm, true);
+		},
+		ccd_table(frm) {
 			return autofill_registration_name(frm, true);
 		},
 	});

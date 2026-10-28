@@ -9,19 +9,22 @@ class RegistrationAutoNameScriptTests(unittest.TestCase):
             self.app / "public/js/ccd_registration_auto_name.js"
         ).read_text(encoding="utf-8")
 
-    def test_uses_the_established_stable_source_format(self):
+    def test_uses_the_established_stable_source_formats(self):
         self.assertIn(
-            "`${PREFIX}${physical_hostname}_${database_name}`",
+            "[physical_hostname, database_name, table_name]",
             self.source,
         )
+        self.assertIn('table_name.split(".").pop()', self.source)
+        self.assertIn('table_name === "*** Customize ***"', self.source)
         self.assertNotIn("Math.random", self.source)
         self.assertNotIn("toUpperCase", self.source)
 
-    def test_updates_after_either_source_field_changes(self):
+    def test_updates_after_any_source_field_changes(self):
         self.assertIn("physical_hostname(frm)", self.source)
         self.assertIn("db_database(frm)", self.source)
+        self.assertIn("ccd_table(frm)", self.source)
         self.assertGreaterEqual(
-            self.source.count("autofill_registration_name(frm, true)"), 2
+            self.source.count("autofill_registration_name(frm, true)"), 3
         )
 
     def test_refresh_preserves_an_existing_manual_name(self):
