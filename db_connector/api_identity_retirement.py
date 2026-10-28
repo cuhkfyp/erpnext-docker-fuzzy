@@ -2591,15 +2591,32 @@ def on_cancel_registration(registration: Any, method: str | None = None) -> None
 def validate_registration_source_key(
     registration: Any, method: str | None = None
 ) -> None:
-    """Persist and protect the source key encoded by ccd_reg_doctype."""
-    source = registration_source_key(registration)
+    """Refresh a draft source key and protect it after submission."""
     if not frappe.get_meta("CCD Registration").has_field("ccd_stable_source_key"):
         return
-    existing = None
+
+    generated_source = stable_source_key(registration.get("ccd_reg_doctype"))
+    persisted = None
     if not registration.is_new():
-        existing = frappe.db.get_value(
-            "CCD Registration", registration.name, "ccd_stable_source_key"
+        persisted = frappe.db.get_value(
+            "CCD Registration",
+            registration.name,
+            ["docstatus", "ccd_stable_source_key"],
+            as_dict=True,
         )
+
+    persisted_docstatus = int((persisted or {}).get("docstatus") or 0)
+    is_editable_draft = (
+        int(registration.get("docstatus") or 0) == 0
+        or persisted is None
+        or persisted_docstatus == 0
+    )
+    if is_editable_draft:
+        registration.ccd_stable_source_key = generated_source
+        return
+
+    source = registration_source_key(registration)
+    existing = (persisted or {}).get("ccd_stable_source_key")
     if existing and str(existing) != source:
         frappe.throw("The stable CCD source key is immutable")
     registration.ccd_stable_source_key = source
