@@ -9,6 +9,7 @@ after_migrate = ["db_connector.identity_resolution_setup.after_migrate"]
 
 doctype_js = {
     "CCD Master": "public/js/ccd_master_identity_resolution.js",
+    "CCD Registration": "public/js/ccd_registration_auto_name.js",
     "CCD Unified Person": "public/js/ccd_unified_person.js",
 }
 
