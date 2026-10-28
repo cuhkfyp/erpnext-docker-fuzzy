@@ -27,6 +27,12 @@ class RegistrationAutoNameScriptTests(unittest.TestCase):
             self.source.count("autofill_registration_name(frm, true)"), 3
         )
 
+    def test_regenerates_immediately_before_validation(self):
+        self.assertIn("validate(frm)", self.source)
+        self.assertGreaterEqual(
+            self.source.count("autofill_registration_name(frm, true)"), 4
+        )
+
     def test_refresh_preserves_an_existing_manual_name(self):
         self.assertIn("(!overwrite && current_name)", self.source)
         self.assertIn("autofill_registration_name(frm, false)", self.source)

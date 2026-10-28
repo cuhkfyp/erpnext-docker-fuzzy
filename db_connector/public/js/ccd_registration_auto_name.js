@@ -55,5 +55,8 @@
 		ccd_table(frm) {
 			return autofill_registration_name(frm, true);
 		},
+		validate(frm) {
+			return autofill_registration_name(frm, true);
+		},
 	});
 })();
