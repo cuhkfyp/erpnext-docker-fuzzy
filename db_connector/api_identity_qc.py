@@ -791,6 +791,7 @@ def _resume_blockers() -> list[str]:
         RECOMMENDATION_DOCTYPE,
         {
             "qc_selected": 1,
+            "qc_assigned_at": ["is", "set"],
             "qc_stale": 0,
             "qc_due_at": ["<", now],
             "qc_review_status": ["not in", sorted(FINAL_STATUSES | {"Stale"})],

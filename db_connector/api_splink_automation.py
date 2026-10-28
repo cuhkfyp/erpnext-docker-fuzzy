@@ -2066,6 +2066,7 @@ def resume_splink_automation(reason: str, confirm_phrase: str) -> dict[str, Any]
     overdue_rows = frappe.get_all(
         CANDIDATE_DOCTYPE,
         filters={
+            "automated_qc_assigned_at": ["is", "set"],
             "automated_qc_due_at": ["<", now_datetime()],
             "automated_qc_stale": 0,
             "automated_qc_review_status": ["not in", ["Agreed", "Adjudicated", "Stale"]],
@@ -2350,6 +2351,7 @@ def monitor_splink_and_run_automatic() -> dict[str, Any]:
     overdue_rows = frappe.get_all(
         CANDIDATE_DOCTYPE,
         filters={
+            "automated_qc_assigned_at": ["is", "set"],
             "automated_qc_due_at": ["<", now],
             "automated_qc_stale": 0,
             "automated_qc_review_status": ["not in", ["Agreed", "Adjudicated", "Stale"]],

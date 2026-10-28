@@ -102,6 +102,29 @@ class HybridAutomationAuthorizationTests(unittest.TestCase):
             blockers = service._authorization_blockers(self._settings(), run)
         self.assertIn("hybrid_holdout_second_approval_missing", blockers)
 
+    def test_resume_only_treats_assigned_qc_as_overdue(self):
+        settings = types.SimpleNamespace(
+            automatic_hybrid_enabled=0,
+            hybrid_automation_control_revision=4,
+        )
+        with patch.object(service, "_require_manager"), patch.object(
+            service, "_lock_settings"
+        ), patch.object(service, "frappe") as frappe, patch.object(
+            service, "now_datetime", return_value="2026-10-28 10:00:00"
+        ), patch.object(
+            service, "_append_event", return_value="event"
+        ), patch.object(service, "_set_settings"):
+            frappe.get_single.return_value = settings
+            frappe.db.count.return_value = 0
+            frappe.get_all.return_value = []
+            service.resume_hybrid_automation.__wrapped__(
+                "verified", "RESUME DEVELOPMENT HYBRID AUTOMATION"
+            )
+        self.assertEqual(
+            frappe.get_all.call_args.kwargs["filters"]["automated_qc_assigned_at"],
+            ["is", "set"],
+        )
+
 
 class HybridAutomationBatchStatusTests(unittest.TestCase):
     def test_live_batch_status_is_returned_for_desk_polling(self):

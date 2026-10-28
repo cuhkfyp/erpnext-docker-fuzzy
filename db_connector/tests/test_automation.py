@@ -1,5 +1,9 @@
 import unittest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from db_connector import api_identity_qc
 
 from fuzzy_matching.automation import (
     cadence_due,
@@ -144,6 +148,28 @@ class AutomationHelperTests(unittest.TestCase):
                 maximum_count=10,
                 maximum_age_seconds=86400,
             )
+        )
+
+    def test_tiered_resume_only_treats_assigned_qc_as_overdue(self):
+        settings = SimpleNamespace(
+            automatic_tiered_enabled=0,
+            automatic_tiered_policy="",
+            rolling_qc_window=100,
+        )
+        with patch.object(api_identity_qc, "frappe") as frappe, patch.object(
+            api_identity_qc, "now_datetime", return_value="2026-10-28 10:00:00"
+        ):
+            frappe.get_single.return_value = settings
+            frappe.db.count.return_value = 0
+            frappe.get_all.return_value = []
+            self.assertEqual(api_identity_qc._resume_blockers(), [])
+        recommendation_call = next(
+            call
+            for call in frappe.db.count.call_args_list
+            if call.args[0] == api_identity_qc.RECOMMENDATION_DOCTYPE
+        )
+        self.assertEqual(
+            recommendation_call.args[1]["qc_assigned_at"], ["is", "set"]
         )
 
 

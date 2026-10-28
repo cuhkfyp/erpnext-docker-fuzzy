@@ -392,6 +392,7 @@ def resume_hybrid_automation(reason: str, confirm_phrase: str) -> dict[str, Any]
         CANDIDATE_DOCTYPE,
         filters={
             "automation_channel": HYBRID_CHANNEL,
+            "automated_qc_assigned_at": ["is", "set"],
             "automated_qc_due_at": ["<", now_datetime()],
             "automated_qc_stale": 0,
             "automated_qc_review_status": ["not in", ["Agreed", "Adjudicated", "Stale"]],
@@ -1054,6 +1055,7 @@ def monitor_hybrid_and_run_scheduled(*, allow_schedule: bool = True) -> dict[str
         CANDIDATE_DOCTYPE,
         {
             "automation_channel": HYBRID_CHANNEL,
+            "automated_qc_assigned_at": ["is", "set"],
             "automated_qc_due_at": ["<", now],
             "automated_qc_stale": 0,
             "automated_qc_review_status": ["not in", ["Agreed", "Adjudicated", "Stale"]],
