@@ -100,6 +100,8 @@ for container in "${containers[@]}"; do
 			db_connector/api_identity_resolution.py \
 			db_connector/api_identity_review_batch.py \
 			db_connector/api_splink_automation.py \
+			db_connector/agent_sync_setup.py \
+			db_connector/ccd_registration_provisioning.py \
 			db_connector/identity_resolution_setup.py \
 			db_connector/identity_snapshot_backfill.py \
 			db_connector/notification_utils.py \

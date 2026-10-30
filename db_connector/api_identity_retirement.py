@@ -2583,6 +2583,13 @@ def on_cancel_registration(registration: Any, method: str | None = None) -> None
             f"{label} web page",
             str(registration.get("url") or "") or None,
         )
+    # Compatibility cleanup for shortcuts created by the legacy After Submit
+    # Server Script before managed provisioning used the retirement-safe label.
+    remove_shortcut_from_workspace(
+        "Common Client Database",
+        f"Go to {registration.name}",
+        str(registration.get("url") or "") or None,
+    )
     frappe.delete_doc(
         "DocType", target_doctype, ignore_permissions=True, force=True
     )

@@ -5,7 +5,10 @@ app_description = "Database connector for other datasource"
 app_email = "kit.ho@rehabsociety.org.hk"
 app_license = "mit"
 
-after_migrate = ["db_connector.identity_resolution_setup.after_migrate"]
+after_migrate = [
+    "db_connector.identity_resolution_setup.after_migrate",
+    "db_connector.agent_sync_setup.after_migrate",
+]
 
 doctype_js = {
     "CCD Master": "public/js/ccd_master_identity_resolution.js",
@@ -31,8 +34,12 @@ doc_events = {
         "on_update": "db_connector.api_identity_resolution.handle_ccd_master_update",
     },
     "CCD Registration": {
+        "on_submit": "db_connector.ccd_registration_provisioning.provision_registration_on_submit",
         "validate": "db_connector.api_identity_retirement.validate_registration_source_key",
-        "before_submit": "db_connector.api_identity_retirement.before_submit_registration",
+        "before_submit": [
+            "db_connector.ccd_registration_provisioning.prepare_registration_before_submit",
+            "db_connector.api_identity_retirement.before_submit_registration",
+        ],
         "before_cancel": "db_connector.api_identity_retirement.before_cancel_registration",
         "on_cancel": "db_connector.api_identity_retirement.on_cancel_registration",
     },
