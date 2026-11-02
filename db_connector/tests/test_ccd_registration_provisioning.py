@@ -7,6 +7,26 @@ from frappe import _dict
 from db_connector import ccd_registration_provisioning as provisioning
 
 
+class FakeWorkspace:
+    def __init__(self, fail_url_save=False):
+        self.links = [_dict(type="Card Break", label="Applications", idx=1)]
+        self.shortcuts = []
+        self.fail_url_save = fail_url_save
+        self.save_attempts = 0
+        self.successful_saves = 0
+
+    def append(self, fieldname, value):
+        row = _dict(value)
+        getattr(self, fieldname).append(row)
+        return row
+
+    def save(self, **kwargs):
+        self.save_attempts += 1
+        if self.fail_url_save and any(row.type == "URL" for row in self.shortcuts):
+            raise RuntimeError("simulated optional URL failure")
+        self.successful_saves += 1
+
+
 class CCDRegistrationProvisioningTests(unittest.TestCase):
     def registration(self, **overrides):
         values = {
@@ -127,6 +147,73 @@ class CCDRegistrationProvisioningTests(unittest.TestCase):
         self.assertFalse(created)
         self.assertIn("birthday", {field.fieldname for field in existing.fields})
         self.assertIn("ccd_source_key", {field.fieldname for field in existing.fields})
+
+    def test_workspace_application_link_is_created_when_url_is_blank(self):
+        registration = self.registration(url="", sc_label="HMSGRH")
+        workspace = FakeWorkspace()
+        database = SimpleNamespace(exists=lambda doctype, name: True)
+        with patch.object(provisioning.frappe, "db", database), patch.object(
+            provisioning.frappe, "get_doc", return_value=workspace
+        ), patch.object(provisioning, "_clear_workspace_cache"):
+            provisioning._ensure_workspace_links(
+                registration, registration.ccd_reg_doctype
+            )
+
+        self.assertEqual(workspace.successful_saves, 1)
+        self.assertEqual(len(workspace.shortcuts), 0)
+        self.assertTrue(
+            any(
+                row.link_to == registration.ccd_reg_doctype
+                for row in workspace.links
+                if row.type == "Link"
+            )
+        )
+
+    def test_workspace_url_uses_dedicated_url_field(self):
+        registration = self.registration(
+            url="https://client.example.test/", sc_label="HMSGRH"
+        )
+        workspace = FakeWorkspace()
+        database = SimpleNamespace(exists=lambda doctype, name: True)
+        with patch.object(provisioning.frappe, "db", database), patch.object(
+            provisioning.frappe, "get_doc", return_value=workspace
+        ), patch.object(provisioning, "_clear_workspace_cache"):
+            provisioning._ensure_workspace_links(
+                registration, registration.ccd_reg_doctype
+            )
+
+        self.assertEqual(workspace.successful_saves, 2)
+        self.assertEqual(len(workspace.shortcuts), 1)
+        self.assertEqual(workspace.shortcuts[0].type, "URL")
+        self.assertEqual(
+            workspace.shortcuts[0].url, "https://client.example.test/"
+        )
+        self.assertFalse(workspace.shortcuts[0].get("link_to"))
+
+    def test_optional_url_failure_does_not_lose_application_link(self):
+        registration = self.registration(
+            url="https://client.example.test/", sc_label="HMSGRH"
+        )
+        workspace = FakeWorkspace(fail_url_save=True)
+        database = SimpleNamespace(exists=lambda doctype, name: True)
+        with patch.object(provisioning.frappe, "db", database), patch.object(
+            provisioning.frappe, "get_doc", return_value=workspace
+        ), patch.object(provisioning, "_clear_workspace_cache"), patch.object(
+            provisioning.frappe, "log_error"
+        ) as log_error:
+            provisioning._ensure_workspace_links(
+                registration, registration.ccd_reg_doctype
+            )
+
+        self.assertEqual(workspace.successful_saves, 1)
+        self.assertTrue(
+            any(
+                row.link_to == registration.ccd_reg_doctype
+                for row in workspace.links
+                if row.type == "Link"
+            )
+        )
+        log_error.assert_called_once()
 
 
 if __name__ == "__main__":

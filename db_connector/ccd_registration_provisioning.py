@@ -389,6 +389,87 @@ def _ensure_generated_doctype(registration: Any) -> tuple[str, bool]:
     return name, True
 
 
+def _clear_workspace_cache(generated_doctype: str | None = None) -> None:
+    if generated_doctype:
+        frappe.clear_cache(doctype=generated_doctype)
+    frappe.clear_cache(doctype="Workspace")
+    frappe.cache().delete_value(f"workspace:{WORKSPACE_NAME}")
+
+
+def _ensure_workspace_application_link(
+    registration: Any, generated_doctype: str
+) -> bool:
+    """Publish the staging DocType independently of any optional URL."""
+    workspace = frappe.get_doc("Workspace", WORKSPACE_NAME)
+    if any(
+        row.type == "Link" and row.link_to == generated_doctype
+        for row in workspace.links
+    ):
+        return False
+
+    target_index = len(workspace.links)
+    for index, row in enumerate(workspace.links):
+        if row.type == "Card Break" and row.label == "Applications":
+            target_index = index + 1
+            while (
+                target_index < len(workspace.links)
+                and workspace.links[target_index].type != "Card Break"
+            ):
+                target_index += 1
+            break
+    new_row = workspace.append(
+        "links",
+        {
+            "type": "Link",
+            "link_type": "DocType",
+            "link_to": generated_doctype,
+            "label": f"{registration.get('sc_label') or registration.name} ({registration.name})",
+        },
+    )
+    workspace.links.remove(new_row)
+    workspace.links.insert(target_index, new_row)
+    for index, row in enumerate(workspace.links):
+        row.idx = index + 1
+    workspace.save(ignore_permissions=True)
+    _clear_workspace_cache(generated_doctype)
+    return True
+
+
+def _ensure_workspace_url_shortcut(registration: Any) -> bool:
+    """Publish the optional external URL using Workspace Shortcut's URL field."""
+    url = str(registration.get("url") or "").strip()
+    if not url:
+        return False
+
+    workspace = frappe.get_doc("Workspace", WORKSPACE_NAME)
+    workspace_label = str(registration.get("sc_label") or registration.name)
+    shortcut_label = f"{workspace_label} ({registration.name}) web page"
+    if any(
+        row.type == "URL"
+        and row.label == shortcut_label
+        and str(row.get("url") or "").strip() == url
+        for row in workspace.shortcuts
+    ):
+        return False
+
+    workspace.append(
+        "shortcuts",
+        {
+            "label": shortcut_label,
+            "type": "URL",
+            # Workspace Shortcut.link_to is a Dynamic Link.  For type URL,
+            # Frappe requires the dedicated Data field instead.
+            "url": url,
+            "icon": "icon-project-2",
+            "color": "Grey",
+            "is_query_report": 0,
+        },
+    )
+    workspace.save(ignore_permissions=True)
+    _clear_workspace_cache()
+    return True
+
+
 def _ensure_workspace_links(registration: Any, generated_doctype: str) -> None:
     if not frappe.db.exists("Workspace", WORKSPACE_NAME):
         frappe.log_error(
@@ -396,61 +477,17 @@ def _ensure_workspace_links(registration: Any, generated_doctype: str) -> None:
             message=f"Workspace {WORKSPACE_NAME} does not exist",
         )
         return
-    workspace = frappe.get_doc("Workspace", WORKSPACE_NAME)
-    changed = False
 
-    if not any(
-        row.type == "Link" and row.link_to == generated_doctype
-        for row in workspace.links
-    ):
-        target_index = len(workspace.links)
-        for index, row in enumerate(workspace.links):
-            if row.type == "Card Break" and row.label == "Applications":
-                target_index = index + 1
-                while (
-                    target_index < len(workspace.links)
-                    and workspace.links[target_index].type != "Card Break"
-                ):
-                    target_index += 1
-                break
-        new_row = workspace.append(
-            "links",
-            {
-                "type": "Link",
-                "link_type": "DocType",
-                "link_to": generated_doctype,
-                "label": f"{registration.get('sc_label') or registration.name} ({registration.name})",
-            },
+    # The required application link is saved first and independently.  A blank
+    # or malformed optional URL must never prevent the staging link appearing.
+    _ensure_workspace_application_link(registration, generated_doctype)
+    try:
+        _ensure_workspace_url_shortcut(registration)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            "CCD Registration optional URL shortcut provisioning failed",
         )
-        workspace.links.remove(new_row)
-        workspace.links.insert(target_index, new_row)
-        changed = True
-
-    url = str(registration.get("url") or "").strip()
-    if url:
-        workspace_label = str(registration.get("sc_label") or registration.name)
-        shortcut_label = f"{workspace_label} ({registration.name}) web page"
-        if not any(
-            row.label == shortcut_label and row.link_to == url
-            for row in workspace.shortcuts
-        ):
-            workspace.append(
-                "shortcuts",
-                {
-                    "label": shortcut_label,
-                    "type": "URL",
-                    "link_to": url,
-                    "icon": "icon-project-2",
-                    "color": "Grey",
-                    "is_query_report": 0,
-                },
-            )
-            changed = True
-
-    if changed:
-        for index, row in enumerate(workspace.links):
-            row.idx = index + 1
-        workspace.save(ignore_permissions=True)
 
 
 def provision_registration_on_submit(
