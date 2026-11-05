@@ -1,7 +1,7 @@
 import inspect
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from db_connector import api_agent_sync
 from db_connector import ccd_dashboard_snapshot as snapshot
@@ -16,6 +16,29 @@ class SnapshotHttpOverrideTests(unittest.TestCase):
             "The finish_sync override must itself be whitelisted because Frappe "
             "authorizes the replacement method after resolving the hook override.",
         )
+
+    def test_finish_sync_override_consumes_frappe_cmd_metadata(self):
+        finish_result = {"state": "Succeeded"}
+        finish_sync = MagicMock(return_value=finish_result)
+        with patch(
+            "db_connector.api_agent_sync.finish_sync", finish_sync
+        ), patch.object(snapshot, "mark_dirty_after_commit") as mark_dirty:
+            result = inspect.unwrap(snapshot.finish_agent_sync_with_snapshot)(
+                registration="R1",
+                source_id="SOURCE",
+                lease_token="lease",
+                run_id="run",
+                cmd="db_connector.api_agent_sync.finish_sync",
+            )
+
+        self.assertEqual(result, finish_result)
+        finish_sync.assert_called_once_with(
+            registration="R1",
+            source_id="SOURCE",
+            lease_token="lease",
+            run_id="run",
+        )
+        mark_dirty.assert_called_once_with(reason="agent-bulk-sync-completed")
 
     def test_agent_postprocess_defers_intermediate_snapshot_markers(self):
         flags = SimpleNamespace(

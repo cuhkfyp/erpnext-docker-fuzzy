@@ -1283,6 +1283,10 @@ def finish_agent_sync_with_snapshot(*args: Any, **kwargs: Any) -> dict[str, Any]
     """HTTP override that marks the completed agent ingestion transaction."""
     from db_connector.api_agent_sync import finish_sync
 
+    # Frappe keeps the originally requested method in ``form_dict.cmd`` while
+    # dispatching an ``override_whitelisted_methods`` target.  It is routing
+    # metadata, not part of the governed finish_sync API.
+    kwargs.pop("cmd", None)
     result = finish_sync(*args, **kwargs)
     mark_dirty_after_commit(reason="agent-bulk-sync-completed")
     return result
