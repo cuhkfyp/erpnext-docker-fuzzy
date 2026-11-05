@@ -226,6 +226,126 @@ def _validate_source(registration_doc: Any, source_id: str) -> str:
     return expected
 
 
+def _validate_sync_generation(
+    registration_doc: Any,
+    source_id: str,
+    sync_generation: str,
+    *,
+    required: bool = True,
+) -> str:
+    """Fence one client daemon to the exact submitted Registration revision."""
+    expected = _sync_generation(registration_doc, source_id)
+    supplied = str(sync_generation or "").strip()
+    if required and not supplied:
+        frappe.throw(
+            "Agent V3 synchronization generation is required",
+            frappe.PermissionError,
+        )
+    if supplied and supplied != expected:
+        frappe.throw(
+            "The CCD Registration synchronization generation is stale; stop this "
+            "daemon and rediscover the active submitted Registration.",
+            frappe.PermissionError,
+        )
+    return expected
+
+
+def _staging_scope(
+    registration: str,
+    source_id: str,
+    sync_generation: str,
+    *,
+    lock: bool = False,
+) -> tuple[Any, str, str, str]:
+    """Resolve and fence one generated staging target.
+
+    Mutations lock the Registration row for the request transaction. A manager
+    placing a retirement hold therefore cannot complete until the in-flight
+    staging batch has finished, and every later batch observes the hold.
+    """
+    if lock:
+        locked = frappe.db.sql(
+            "SELECT name FROM `tabCCD Registration` WHERE name=%s FOR UPDATE",
+            (str(registration or ""),),
+        )
+        if not locked:
+            frappe.throw("A valid CCD Registration is required", frappe.DoesNotExistError)
+    doc = _registration(registration)
+    source = _validate_source(doc, source_id)
+    hold_owner = str(
+        _decode_redis_result(frappe.cache.get(_retirement_hold_key(source))) or ""
+    )
+    if hold_owner:
+        frappe.throw(
+            "CCD Registration is under a governed retirement hold. Agent staging "
+            "synchronization is disabled.",
+            frappe.PermissionError,
+        )
+    generation = _validate_sync_generation(doc, source, sync_generation)
+    staging_doctype = str(doc.get("ccd_reg_doctype") or "").strip()
+    if not staging_doctype or not frappe.db.exists("DocType", staging_doctype):
+        frappe.throw(
+            "The generated CCD staging DocType is unavailable for this Registration",
+            frappe.PermissionError,
+        )
+    return doc, source, generation, staging_doctype
+
+
+def _staging_batch_rows(
+    registration: Any,
+    rows: Any,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Validate one bounded staging payload without accepting internal fields."""
+    raw_rows = _json_list(rows, "rows")
+    maximum = max(1, cint(_settings().get("maximum_batch_size") or 1000))
+    if not raw_rows or len(raw_rows) > maximum:
+        frappe.throw(
+            f"Staging batches require 1 to {maximum} rows",
+            frappe.ValidationError,
+        )
+    field_types = _staging_baseline_fields(registration)
+    allowed = set(field_types)
+    validated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    invalid: list[str] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            invalid.append("<non-object>")
+            continue
+        incoming = {str(key).lower(): value for key, value in raw_row.items()}
+        unknown = sorted(set(incoming) - allowed)
+        key = str(incoming.get("ccd_source_key") or "").strip()
+        if not key:
+            invalid.append("<blank>:ccd_source_key")
+        elif key in seen:
+            invalid.append(f"{key}:duplicate")
+        elif unknown:
+            invalid.append(f"{key}:unauthorized " + ",".join(unknown[:5]))
+        seen.add(key)
+        incoming["ccd_source_key"] = key
+        validated.append(incoming)
+        if len(invalid) >= 5:
+            break
+    if invalid or len(validated) != len(raw_rows):
+        frappe.throw(
+            "Invalid governed staging batch: " + "; ".join(invalid[:5]),
+            frappe.ValidationError,
+        )
+    return validated, field_types
+
+
+def _staging_rows_match(
+    incoming: dict[str, Any],
+    stored: Any,
+    field_types: dict[str, str],
+) -> bool:
+    return all(
+        _normalize_baseline_value(field_types[fieldname], value)
+        == _normalize_baseline_value(field_types[fieldname], stored.get(fieldname))
+        for fieldname, value in incoming.items()
+    )
+
+
 def _source_digest(source_id: str) -> str:
     return hashlib.sha256(source_id.encode("utf-8")).hexdigest()
 
@@ -739,11 +859,39 @@ def _config(registration_doc: Any) -> dict[str, Any]:
 
 
 @frappe.whitelist()
+def guard_legacy_agent_bulk_sync(doctype: str = "") -> dict[str, Any]:
+    """Reject only legacy CCD-REG writes after the V3 rollout is activated.
+
+    This method is called by the existing ``agent_bulk_sync`` Server Script.
+    It deliberately remains a no-op by default so V2 clients can operate while
+    client machines are upgraded. Agent V3 never uses that endpoint for staging.
+    """
+    _require_writer()
+    target = str(doctype or "").strip()
+    strict = bool(
+        cint(_settings().get("enforce_agent_v3_staging_fence") or 0)
+    )
+    legacy_staging_target = target.upper().startswith("CCD-REG-")
+    if strict and legacy_staging_target:
+        frappe.throw(
+            "This site requires CCD Agent V3 for Registration staging. Stop the "
+            "legacy daemon, install the current governed agent, and restart it.",
+            frappe.PermissionError,
+        )
+    return {
+        "allowed": True,
+        "strict": strict,
+        "legacy_staging_target": legacy_staging_target,
+    }
+
+
+@frappe.whitelist()
 def get_sync_config(
     registration: str,
     source_id: str,
     physical_hostname: str = "",
     database_name: str = "",
+    sync_generation: str = "",
 ) -> dict[str, Any]:
     """Return effective settings without exposing database credentials."""
     _require_writer()
@@ -756,18 +904,256 @@ def get_sync_config(
             frappe.PermissionError,
         )
     source = _validate_source(doc, source_id)
+    generation = _validate_sync_generation(
+        doc,
+        source,
+        sync_generation,
+        required=False,
+    )
     config = _config(doc)
     config.update(
         {
             "registration": doc.name,
             "amended_from": str(doc.get("amended_from") or ""),
             "source_id": source,
-            "sync_generation": _sync_generation(doc, source),
+            "sync_generation": generation,
+            "agent_protocol": 3,
+            "governed_staging": True,
+            "staging_doctype": str(doc.get("ccd_reg_doctype") or ""),
             "physical_hostname": str(physical_hostname or ""),
             "database_name": str(database_name or ""),
         }
     )
     return config
+
+
+@frappe.whitelist()
+def inspect_registration_target(
+    registration: str,
+    source_id: str,
+    sync_generation: str,
+) -> dict[str, Any]:
+    """Inspect only the staging DocType owned by this active revision."""
+    _require_writer()
+    _doc, source, generation, staging_doctype = _staging_scope(
+        registration, source_id, sync_generation
+    )
+    count = cint(frappe.db.count(staging_doctype))
+    return {
+        "registration": str(registration),
+        "source_id": source,
+        "sync_generation": generation,
+        "staging_doctype": staging_doctype,
+        "target_has_rows": count > 0,
+        "count": count,
+    }
+
+
+@frappe.whitelist()
+def get_registration_rows(
+    registration: str,
+    source_id: str,
+    sync_generation: str,
+    source_keys: Any,
+    fields: Any,
+) -> dict[str, Any]:
+    """Return a bounded, generation-fenced staging comparison batch."""
+    _require_writer()
+    doc, source, generation, staging_doctype = _staging_scope(
+        registration, source_id, sync_generation
+    )
+    keys = [str(key or "").strip() for key in _json_list(source_keys, "source_keys")]
+    maximum = max(1, cint(_settings().get("maximum_batch_size") or 1000))
+    if not keys or len(keys) > maximum or any(not key for key in keys):
+        frappe.throw(
+            f"source_keys must contain 1 to {maximum} non-blank values",
+            frappe.ValidationError,
+        )
+    requested = [str(field or "").strip().lower() for field in _json_list(fields, "fields")]
+    allowed = set(_staging_baseline_fields(doc)) | {"name"}
+    invalid = sorted(set(requested) - allowed)
+    if invalid:
+        frappe.throw(
+            "Unauthorized staging fields: " + ", ".join(invalid[:5]),
+            frappe.PermissionError,
+        )
+    output_fields = list(dict.fromkeys(["name", "ccd_source_key", *requested]))
+    rows = frappe.get_all(
+        staging_doctype,
+        filters={"ccd_source_key": ["in", list(dict.fromkeys(keys))]},
+        fields=output_fields,
+        limit_page_length=len(keys) + 1,
+    )
+    return {
+        "registration": str(registration),
+        "source_id": source,
+        "sync_generation": generation,
+        "rows": [dict(row) for row in rows],
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def insert_registration_batch(
+    registration: str,
+    source_id: str,
+    sync_generation: str,
+    rows: Any,
+) -> dict[str, Any]:
+    """Insert or exactly confirm one active-revision staging batch."""
+    _require_writer()
+    doc, source, generation, staging_doctype = _staging_scope(
+        registration, source_id, sync_generation, lock=True
+    )
+    validated, field_types = _staging_batch_rows(doc, rows)
+    explicit_fields = sorted({field for row in validated for field in row})
+    keys = [row["ccd_source_key"] for row in validated]
+    existing_rows = frappe.get_all(
+        staging_doctype,
+        filters={"ccd_source_key": ["in", keys]},
+        fields=["name", *explicit_fields],
+        limit_page_length=len(keys) + 1,
+    )
+    existing_by_key: dict[str, list[Any]] = {}
+    for existing in existing_rows:
+        existing_by_key.setdefault(
+            str(existing.get("ccd_source_key") or "").strip(), []
+        ).append(existing)
+    inserted = 0
+    confirmed_existing = 0
+    errors: list[str] = []
+    for position, row in enumerate(validated):
+        key = row["ccd_source_key"]
+        existing = existing_by_key.get(key, [])
+        if len(existing) > 1:
+            errors.append(f"{key}:duplicate existing staging rows")
+            continue
+        if existing:
+            if _staging_rows_match(row, existing[0], field_types):
+                confirmed_existing += 1
+            else:
+                errors.append(f"{key}:existing staging values differ")
+            continue
+        savepoint = f"agent_staging_insert_{position}"
+        frappe.db.savepoint(savepoint)
+        try:
+            staging_row = frappe.new_doc(staging_doctype)
+            staging_row.update(row)
+            staging_row.insert(ignore_permissions=True)
+            inserted += 1
+        except Exception as exc:
+            frappe.db.rollback(save_point=savepoint)
+            errors.append(f"{key}:{str(exc)[:180]}")
+    return {
+        "registration": str(registration),
+        "source_id": source,
+        "sync_generation": generation,
+        "inserted": inserted,
+        "confirmed_existing": confirmed_existing,
+        "accepted": inserted + confirmed_existing,
+        "errors": errors,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def update_registration_batch(
+    registration: str,
+    source_id: str,
+    sync_generation: str,
+    rows: Any,
+) -> dict[str, Any]:
+    """Update only rows in the exact active-revision staging DocType."""
+    _require_writer()
+    doc, source, generation, staging_doctype = _staging_scope(
+        registration, source_id, sync_generation, lock=True
+    )
+    validated, field_types = _staging_batch_rows(doc, rows)
+    updated = 0
+    confirmed_existing = 0
+    errors: list[str] = []
+    for row in validated:
+        key = row["ccd_source_key"]
+        fields = {field: value for field, value in row.items() if field != "ccd_source_key"}
+        existing = frappe.get_all(
+            staging_doctype,
+            filters={"ccd_source_key": key},
+            fields=["name", "ccd_source_key", *sorted(fields)],
+            limit_page_length=2,
+        )
+        if len(existing) != 1:
+            errors.append(
+                f"{key}:" + ("missing" if not existing else "duplicate existing rows")
+            )
+            continue
+        if _staging_rows_match(row, existing[0], field_types):
+            confirmed_existing += 1
+            continue
+        frappe.db.set_value(
+            staging_doctype,
+            existing[0].name,
+            fields,
+        )
+        updated += 1
+    return {
+        "registration": str(registration),
+        "source_id": source,
+        "sync_generation": generation,
+        "updated": updated,
+        "confirmed_existing": confirmed_existing,
+        "accepted": updated + confirmed_existing,
+        "errors": errors,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def delete_registration_source_keys(
+    registration: str,
+    source_id: str,
+    sync_generation: str,
+    source_keys: Any,
+) -> dict[str, Any]:
+    """Delete a bounded key set only from the active revision's staging target."""
+    _require_writer()
+    _doc, source, generation, staging_doctype = _staging_scope(
+        registration, source_id, sync_generation, lock=True
+    )
+    keys = [str(key or "").strip() for key in _json_list(source_keys, "source_keys")]
+    maximum = max(1, cint(_settings().get("maximum_batch_size") or 1000))
+    if not keys or len(keys) > maximum or any(not key for key in keys):
+        frappe.throw(
+            f"source_keys must contain 1 to {maximum} non-blank values",
+            frappe.ValidationError,
+        )
+    rows = frappe.get_all(
+        staging_doctype,
+        filters={"ccd_source_key": ["in", list(dict.fromkeys(keys))]},
+        fields=["name", "ccd_source_key"],
+        limit_page_length=len(keys) + 1,
+    )
+    by_key: dict[str, list[str]] = {}
+    for row in rows:
+        by_key.setdefault(str(row.ccd_source_key or "").strip(), []).append(row.name)
+    deleted = 0
+    confirmed_absent = 0
+    errors: list[str] = []
+    for key in dict.fromkeys(keys):
+        names = by_key.get(key, [])
+        if not names:
+            confirmed_absent += 1
+            continue
+        if len(names) > 1:
+            errors.append(f"{key}:duplicate existing rows")
+            continue
+        frappe.delete_doc(staging_doctype, names[0], ignore_permissions=True)
+        deleted += 1
+    return {
+        "registration": str(registration),
+        "source_id": source,
+        "sync_generation": generation,
+        "deleted": deleted,
+        "confirmed_absent": confirmed_absent,
+        "accepted": deleted + confirmed_absent,
+        "errors": errors,
+    }
 
 
 @frappe.whitelist()
@@ -1624,11 +2010,15 @@ def confirm_registration_baseline_batch(
     registration: str,
     source_id: str,
     rows: Any,
+    sync_generation: str = "",
 ) -> dict[str, Any]:
     """Confirm an exact existing staging batch without writing any server row."""
     _require_writer()
     doc = _registration(registration)
     source = _validate_source(doc, source_id)
+    _validate_sync_generation(
+        doc, source, sync_generation, required=bool(sync_generation)
+    )
     adoption = _active_baseline_adoption(doc, source)
     if not adoption:
         frappe.throw("No active governed baseline adoption is authorized")
@@ -1716,11 +2106,15 @@ def confirm_registration_baseline_batch(
 def complete_registration_baseline_adoption(
     registration: str,
     source_id: str,
+    sync_generation: str = "",
 ) -> dict[str, Any]:
     """Finalize exact staging confirmation before a local cache is created."""
     _require_writer()
     doc = _registration(registration)
     source = _validate_source(doc, source_id)
+    _validate_sync_generation(
+        doc, source, sync_generation, required=bool(sync_generation)
+    )
     adoption = _active_baseline_adoption(doc, source)
     if not adoption:
         frappe.throw("No active governed baseline adoption is authorized")

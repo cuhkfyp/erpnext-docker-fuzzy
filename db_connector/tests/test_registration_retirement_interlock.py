@@ -387,6 +387,64 @@ class RegistrationRetirementInterlockTests(unittest.TestCase):
         enqueue.assert_not_called()
         database.set_value.assert_called_once()
 
+    def test_v3_generation_is_bound_to_the_exact_registration_revision(self):
+        first = FakeDoc(name="R1")
+        amended = FakeDoc(name="R1-1")
+        first_generation = agent_sync._sync_generation(first, "SOURCE")
+        amended_generation = agent_sync._sync_generation(amended, "SOURCE")
+        self.assertEqual(len(first_generation), 64)
+        self.assertNotEqual(first_generation, amended_generation)
+        self.assertEqual(
+            agent_sync._validate_sync_generation(
+                first, "SOURCE", first_generation
+            ),
+            first_generation,
+        )
+        with patch.object(
+            agent_sync.frappe, "throw", side_effect=RuntimeError("stale")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "stale"):
+                agent_sync._validate_sync_generation(
+                    amended, "SOURCE", first_generation
+                )
+
+    def test_governed_staging_scope_rejects_atomic_retirement_marker(self):
+        cache = MagicMock()
+        cache.get.return_value = b"R1"
+        doc = FakeDoc(name="R1", ccd_reg_doctype="CCD-REG-R1")
+        with patch.object(agent_sync, "_registration", return_value=doc), patch.object(
+            agent_sync, "_validate_source", return_value="SOURCE"
+        ), patch.object(
+            agent_sync, "_retirement_hold_key", return_value=b"hold"
+        ), patch.object(agent_sync.frappe, "cache", cache), patch.object(
+            agent_sync.frappe, "throw", side_effect=RuntimeError("held")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "held"):
+                agent_sync._staging_scope(
+                    "R1", "SOURCE", "generation"
+                )
+
+    def test_legacy_staging_guard_is_default_off_then_fail_closed(self):
+        with patch.object(agent_sync, "_require_writer"), patch.object(
+            agent_sync, "_settings", return_value={"enforce_agent_v3_staging_fence": 0}
+        ):
+            allowed = inspect.unwrap(agent_sync.guard_legacy_agent_bulk_sync)(
+                "CCD-REG-R1"
+            )
+        self.assertTrue(allowed["allowed"])
+        self.assertFalse(allowed["strict"])
+        self.assertTrue(allowed["legacy_staging_target"])
+
+        with patch.object(agent_sync, "_require_writer"), patch.object(
+            agent_sync, "_settings", return_value={"enforce_agent_v3_staging_fence": 1}
+        ), patch.object(
+            agent_sync.frappe, "throw", side_effect=RuntimeError("V3 required")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "V3 required"):
+                inspect.unwrap(agent_sync.guard_legacy_agent_bulk_sync)(
+                    "CCD-REG-R1"
+                )
+
     def test_agent_api_rejects_a_held_registration(self):
         database = MagicMock()
         database.exists.return_value = True

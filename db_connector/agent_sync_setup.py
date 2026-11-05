@@ -34,6 +34,9 @@ if doc.get("agent_os") in central_agent_templates:
     doc.agent_installation = central_template_content
 """
 
+LEGACY_AGENT_BULK_SYNC_SCRIPT = "Agent bulk sync"
+AGENT_V3_FENCE_MARKER = "# CCD Agent V3 governed staging fence"
+
 REGISTRATION_VALIDATION_BODY = """physical_hostname = str(doc.get("physical_hostname") or "").strip()
 database_name = str(doc.get("db_database") or "").strip()
 table_name = str(doc.get("ccd_table") or "").strip()
@@ -185,6 +188,17 @@ SETTINGS_FIELDS: list[dict[str, Any]] = [
         "label": "Enable Central Coordination",
         "default": "1",
         "description": "Coordinate agents across different hosts through Redis leases.",
+    },
+    {
+        "fieldname": "enforce_agent_v3_staging_fence",
+        "fieldtype": "Check",
+        "label": "Require Agent V3 for CCD Registration Staging",
+        "default": "0",
+        "description": (
+            "Transition switch. Leave disabled while any V2 client remains. "
+            "After every client machine is on Agent V3, enable this to reject "
+            "the legacy unfenced CCD-REG write endpoint."
+        ),
     },
     {
         "fieldname": "limits_column",
@@ -649,6 +663,7 @@ def _initialize_defaults() -> None:
     defaults = {
         "enabled": 0,
         "coordination_enabled": 1,
+        "enforce_agent_v3_staging_fence": 0,
         "max_parallel_master_syncs": 2,
         "lease_seconds": 1800,
         "postprocess_lease_seconds": 86400,
@@ -795,6 +810,54 @@ def _install_agent_template_guards() -> list[dict[str, Any]]:
                 server_script.save(ignore_permissions=True)
         results.append({"name": script_name, "created": created, "updated": changed})
     return results
+
+
+def _install_legacy_agent_v3_guard() -> dict[str, Any]:
+    """Place a default-off V3 transition guard in the legacy API script.
+
+    The original script body remains intact. While the setting is disabled this
+    call is a no-op, so existing V2 machines keep working during the rollout.
+    """
+    if not frappe.db.exists("Server Script", LEGACY_AGENT_BULK_SYNC_SCRIPT):
+        return {
+            "name": LEGACY_AGENT_BULK_SYNC_SCRIPT,
+            "found": False,
+            "updated": False,
+        }
+    server_script = frappe.get_doc("Server Script", LEGACY_AGENT_BULK_SYNC_SCRIPT)
+    source = str(server_script.get("script") or "")
+    if AGENT_V3_FENCE_MARKER in source:
+        return {"name": server_script.name, "found": True, "updated": False}
+
+    lines = source.splitlines()
+    assignment_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.strip().startswith("doctype")
+            and 'data.get("doctype"' in line
+        ),
+        None,
+    )
+    if assignment_index is None:
+        frappe.throw(
+            "The Agent bulk sync Server Script has an unknown layout; the V3 "
+            "transition guard was not installed"
+        )
+    indent_prefix = lines[assignment_index][
+        : len(lines[assignment_index]) - len(lines[assignment_index].lstrip())
+    ]
+    guard_lines = [
+        f"{indent_prefix}{AGENT_V3_FENCE_MARKER}",
+        f"{indent_prefix}frappe.call(",
+        f'{indent_prefix}    "db_connector.api_agent_sync.guard_legacy_agent_bulk_sync",',
+        f"{indent_prefix}    doctype=doctype,",
+        f"{indent_prefix})",
+    ]
+    lines[assignment_index + 1 : assignment_index + 1] = guard_lines
+    server_script.script = "\n".join(lines)
+    server_script.save(ignore_permissions=True)
+    return {"name": server_script.name, "found": True, "updated": True}
 
 
 def _install_registration_validation_scripts() -> dict[str, Any]:
@@ -964,6 +1027,7 @@ def _apply_setup() -> dict[str, Any]:
     agent_mail_defaults = _initialize_agent_mail_defaults()
     agent_templates = _install_agent_templates()
     agent_template_guards = _install_agent_template_guards()
+    legacy_agent_v3_guard = _install_legacy_agent_v3_guard()
     registration_validation = _install_registration_validation_scripts()
     refreshed_agent_installations = _refresh_active_agent_installations()
     legacy_after_submit = _disable_legacy_registration_after_submit()
@@ -986,6 +1050,7 @@ def _apply_setup() -> dict[str, Any]:
         "agent_mail_defaults": agent_mail_defaults,
         "agent_templates": agent_templates,
         "agent_template_guards": agent_template_guards,
+        "legacy_agent_v3_guard": legacy_agent_v3_guard,
         "registration_validation": registration_validation,
         "refreshed_agent_installations": refreshed_agent_installations,
         "legacy_after_submit": legacy_after_submit,

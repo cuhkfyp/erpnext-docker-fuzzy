@@ -1,0 +1,197 @@
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+cd /d "%~dp0"
+
+REM CCD Agent Windows installer for older managed computers.
+REM Requires curl.exe and otherwise uses only cmd.exe plus the Python runtime it
+REM installs. Existing daemon_logs and delta-cache files are never touched.
+
+set "PYTHON_INSTALLER_URL=https://www.python.org/ftp/python/3.13.10/python-3.13.10-amd64.exe"
+if not defined CCD_AGENT_ARTIFACT_BASE_URL set "CCD_AGENT_ARTIFACT_BASE_URL=https://raw.githubusercontent.com/cuhkfyp/agent_program_new_setting/main/agent"
+
+set "AGENT_SHA256=f76a992f730e74c573f87a7248c5ab773a345ef6dc34afc1f877b09c19094d49"
+set "CONFIGURE_SHA256=9d08dd3285a8021706f79af7b4629799e720eced079d0ac60033d110e6e3df3c"
+set "REQUIREMENTS_SHA256=ae5ff78ab54babe81b04653a244af8b2ae70c9a87a89f20c14de788a7ea40c87"
+set "STAGE_DIR=%TEMP%\ccd_agent_setup_%RANDOM%_%RANDOM%"
+set "PYTHON_EXE="
+set "CURL_EXE="
+
+echo ===========================================
+echo    CCD Agent Setup for Older Windows
+echo ===========================================
+echo This installer keeps existing logs and delta caches.
+echo.
+
+call :find_curl
+if not defined CURL_EXE (
+    echo ERROR: curl.exe is required by this installer but was not found.
+    echo Copy curl.exe to this folder or install it in the Windows PATH, then retry.
+    goto :failed
+)
+
+call :find_python
+if not defined PYTHON_EXE call :install_python
+if errorlevel 1 goto :failed
+if not defined PYTHON_EXE (
+    echo ERROR: A working Python 3 installation was not found.
+    goto :failed
+)
+
+if exist "%STAGE_DIR%" rmdir /s /q "%STAGE_DIR%"
+mkdir "%STAGE_DIR%"
+if errorlevel 1 (
+    echo ERROR: Could not create the temporary download directory.
+    goto :failed
+)
+
+echo [2/5] Downloading the verified CCD Agent package...
+call :download "%CCD_AGENT_ARTIFACT_BASE_URL%/agent_program.py" "%STAGE_DIR%\agent_program.py"
+if errorlevel 1 goto :download_failed
+call :download "%CCD_AGENT_ARTIFACT_BASE_URL%/configure_agent.py" "%STAGE_DIR%\configure_agent.py"
+if errorlevel 1 goto :download_failed
+call :download "%CCD_AGENT_ARTIFACT_BASE_URL%/requirements.txt" "%STAGE_DIR%\requirements.txt"
+if errorlevel 1 goto :download_failed
+
+echo [3/5] Verifying package checksums...
+call :verify_sha256 "%STAGE_DIR%\agent_program.py" "%AGENT_SHA256%" "agent_program.py"
+if errorlevel 1 goto :checksum_failed
+call :verify_sha256 "%STAGE_DIR%\configure_agent.py" "%CONFIGURE_SHA256%" "configure_agent.py"
+if errorlevel 1 goto :checksum_failed
+call :verify_sha256 "%STAGE_DIR%\requirements.txt" "%REQUIREMENTS_SHA256%" "requirements.txt"
+if errorlevel 1 goto :checksum_failed
+
+echo [4/5] Preparing the isolated Python environment...
+if not exist "venv\Scripts\python.exe" (
+    "%PYTHON_EXE%" -m venv venv
+    if errorlevel 1 (
+        echo ERROR: Could not create the Python virtual environment.
+        goto :failed
+    )
+)
+"venv\Scripts\python.exe" -m pip install --upgrade pip
+if errorlevel 1 goto :dependency_failed
+"venv\Scripts\python.exe" -m pip install -r "%STAGE_DIR%\requirements.txt"
+if errorlevel 1 goto :dependency_failed
+
+echo [5/5] Installing the CCD Agent files...
+if exist "agent_program.py" copy /y "agent_program.py" "agent_program.py.previous" >nul
+if exist "configure_agent.py" copy /y "configure_agent.py" "configure_agent.py.previous" >nul
+if exist "requirements.txt" copy /y "requirements.txt" "requirements.txt.previous" >nul
+copy /y "%STAGE_DIR%\agent_program.py" "agent_program.py" >nul
+if errorlevel 1 goto :install_failed
+copy /y "%STAGE_DIR%\configure_agent.py" "configure_agent.py" >nul
+if errorlevel 1 goto :install_failed
+copy /y "%STAGE_DIR%\requirements.txt" "requirements.txt" >nul
+if errorlevel 1 goto :install_failed
+
+set "NEED_CONFIGURATION=1"
+"venv\Scripts\python.exe" -c "import keyring,sys; values=[keyring.get_password('ccd_agent', key) for key in ('erpnext_url','erpnext_user','erpnext_pass')]; sys.exit(0 if all(values) else 1)" >nul 2>&1
+if not errorlevel 1 set "NEED_CONFIGURATION=0"
+
+if "%NEED_CONFIGURATION%"=="0" (
+    set "RECONFIGURE="
+    set /p "RECONFIGURE=Existing CCD Agent credentials found. Replace them? [y/N]: "
+    if /i "!RECONFIGURE!"=="Y" set "NEED_CONFIGURATION=1"
+    if /i "!RECONFIGURE!"=="YES" set "NEED_CONFIGURATION=1"
+)
+
+if "%NEED_CONFIGURATION%"=="1" (
+    "venv\Scripts\python.exe" configure_agent.py
+    if errorlevel 1 (
+        echo ERROR: Agent configuration was not completed.
+        goto :failed
+    )
+) else (
+    echo Existing Windows Credential Manager settings retained.
+)
+
+(
+    echo @echo off
+    echo setlocal
+    echo cd /d "%%~dp0"
+    echo "venv\Scripts\python.exe" agent_program.py
+    echo set "CCD_AGENT_EXIT_CODE=%%ERRORLEVEL%%"
+    echo echo.
+    echo echo CCD Agent exited with code %%CCD_AGENT_EXIT_CODE%%.
+    echo pause
+    echo exit /b %%CCD_AGENT_EXIT_CODE%%
+) > "Run_Agent.bat"
+
+rmdir /s /q "%STAGE_DIR%" 2>nul
+echo.
+echo Setup complete. Double-click Run_Agent.bat to start the agent.
+echo No inbound client port is required; the agent uses outbound HTTPS and WebSocket.
+endlocal
+exit /b 0
+
+:find_curl
+if exist "%~dp0curl.exe" set "CURL_EXE=%~dp0curl.exe"
+if defined CURL_EXE exit /b 0
+if exist "%SystemRoot%\System32\curl.exe" set "CURL_EXE=%SystemRoot%\System32\curl.exe"
+if defined CURL_EXE exit /b 0
+for /f "delims=" %%I in ('where curl.exe 2^>nul') do if not defined CURL_EXE set "CURL_EXE=%%I"
+exit /b 0
+
+:find_python
+set "PYTHON_EXE="
+for /f "delims=" %%I in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do if not defined PYTHON_EXE set "PYTHON_EXE=%%I"
+if defined PYTHON_EXE exit /b 0
+for /f "delims=" %%I in ('where python.exe 2^>nul') do if not defined PYTHON_EXE set "PYTHON_EXE=%%I"
+if defined PYTHON_EXE "%PYTHON_EXE%" -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" >nul 2>&1
+if errorlevel 1 set "PYTHON_EXE="
+exit /b 0
+
+:install_python
+echo [1/5] Python 3 was not found. Downloading Python 3.13...
+set "PYTHON_INSTALLER=%TEMP%\ccd_agent_python_%RANDOM%.exe"
+call :download "%PYTHON_INSTALLER_URL%" "%PYTHON_INSTALLER%"
+if errorlevel 1 (
+    echo ERROR: Could not download the Python installer.
+    exit /b 1
+)
+"%PYTHON_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0
+set "INSTALL_RESULT=%ERRORLEVEL%"
+del "%PYTHON_INSTALLER%" 2>nul
+if not "%INSTALL_RESULT%"=="0" (
+    echo ERROR: Python installation returned code %INSTALL_RESULT%.
+    exit /b 1
+)
+call :find_python
+if not defined PYTHON_EXE if exist "%LocalAppData%\Programs\Python\Python313\python.exe" set "PYTHON_EXE=%LocalAppData%\Programs\Python\Python313\python.exe"
+if not defined PYTHON_EXE (
+    echo ERROR: Python was installed but python.exe could not be located.
+    exit /b 1
+)
+exit /b 0
+
+:download
+"%CURL_EXE%" --fail --location --retry 3 --connect-timeout 30 "%~1" --output "%~2"
+exit /b %ERRORLEVEL%
+
+:verify_sha256
+"%PYTHON_EXE%" -c "import hashlib,sys; actual=hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest(); print(sys.argv[3]+': '+actual); raise SystemExit(0 if actual.lower()==sys.argv[2].lower() else 1)" "%~1" "%~2" "%~3"
+exit /b %ERRORLEVEL%
+
+:download_failed
+echo ERROR: The CCD Agent package could not be downloaded.
+goto :failed
+
+:checksum_failed
+echo ERROR: Package checksum validation failed. No downloaded file was installed.
+goto :failed
+
+:dependency_failed
+echo ERROR: A required Python package could not be installed.
+goto :failed
+
+:install_failed
+echo ERROR: The verified CCD Agent files could not be installed.
+goto :failed
+
+:failed
+if exist "%STAGE_DIR%" rmdir /s /q "%STAGE_DIR%" 2>nul
+echo.
+echo CCD Agent setup did not complete. Existing logs and delta caches were not removed.
+pause
+endlocal
+exit /b 1
