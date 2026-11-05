@@ -1250,6 +1250,7 @@ def mark_dirty_after_commit(doc: Any = None, method: str | None = None, reason: 
     frappe.db.after_commit.add(_mark_dirty_after_commit)
 
 
+@frappe.whitelist(methods=["POST"])
 def finish_agent_sync_with_snapshot(*args: Any, **kwargs: Any) -> dict[str, Any]:
     """HTTP override that marks the completed agent ingestion transaction."""
     from db_connector.api_agent_sync import finish_sync
