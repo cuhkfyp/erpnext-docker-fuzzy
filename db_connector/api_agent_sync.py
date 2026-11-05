@@ -13,6 +13,8 @@ import json
 import re
 import time
 import uuid
+from datetime import date as DateValue
+from datetime import datetime as DateTimeValue
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
@@ -1417,7 +1419,27 @@ def _normalize_baseline_value(fieldtype: str, value: Any) -> str:
     if normalized_type == "date":
         if not normalized.strip():
             return ""
-        return str(getdate(value))
+        # ``frappe.utils.getdate("0001-01-01")`` returns ``None`` even though
+        # MariaDB returns the same stored value as ``datetime.date(1, 1, 1)``.
+        # SQL Server sources can legitimately contain that sentinel.  Parse a
+        # strict ISO date prefix first so text and database-native values have
+        # identical canonical forms without treating different dates as equal.
+        if isinstance(value, DateTimeValue):
+            return value.date().isoformat()
+        if isinstance(value, DateValue):
+            return value.isoformat()
+        iso_match = re.match(
+            r"^(\d{4})-(\d{2})-(\d{2})(?:[ T].*)?$", normalized.strip()
+        )
+        if iso_match:
+            try:
+                return DateValue(
+                    *(int(part) for part in iso_match.groups())
+                ).isoformat()
+            except ValueError:
+                pass
+        parsed = getdate(value)
+        return parsed.isoformat() if parsed else ""
     if normalized_type == "datetime":
         if not normalized.strip():
             return ""

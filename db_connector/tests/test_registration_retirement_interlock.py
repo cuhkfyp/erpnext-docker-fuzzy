@@ -1,5 +1,6 @@
 import inspect
 import unittest
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -39,6 +40,14 @@ class RegistrationRetirementInterlockTests(unittest.TestCase):
         self.assertEqual(
             agent_sync._normalize_baseline_value("Int", ""),
             agent_sync._normalize_baseline_value("Int", 0),
+        )
+        self.assertEqual(
+            agent_sync._normalize_baseline_value("Date", "0001-01-01"),
+            agent_sync._normalize_baseline_value("Date", date(1, 1, 1)),
+        )
+        self.assertNotEqual(
+            agent_sync._normalize_baseline_value("Date", "0001-01-01"),
+            agent_sync._normalize_baseline_value("Date", "0001-01-02"),
         )
 
     def test_retirement_uses_the_actual_agent_source_override(self):
