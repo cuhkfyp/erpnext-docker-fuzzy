@@ -939,9 +939,13 @@ def _enqueue_postprocess(
     cursor: str = "",
     processed: int = 0,
     error_count: int = 0,
+    chain_nonce: str = "",
 ) -> None:
     config = _config(_registration(registration))
-    job_suffix = hashlib.sha256(f"{run_id}:{cursor}".encode()).hexdigest()[:16]
+    job_material = f"{run_id}:{cursor}"
+    if chain_nonce:
+        job_material = f"{job_material}:{chain_nonce}"
+    job_suffix = hashlib.sha256(job_material.encode()).hexdigest()[:16]
     frappe.enqueue(
         "db_connector.api_agent_sync.run_postprocess_batch",
         queue=config["postprocess_queue"],
@@ -959,6 +963,7 @@ def _enqueue_postprocess(
         cursor=cursor,
         processed=processed,
         error_count=error_count,
+        chain_nonce=str(chain_nonce or ""),
     )
 
 
@@ -1102,8 +1107,13 @@ def run_postprocess_batch(
     cursor: str = "",
     processed: int = 0,
     error_count: int = 0,
+    chain_nonce: str = "",
 ) -> dict[str, Any]:
     """Restartable chained job for work deliberately skipped by bulk SQL insert."""
+    # Each batch is one committed, restartable transaction.  Suppress the
+    # snapshot doc-event marker for intermediate batches so the long queue can
+    # process the complete source before rebuilding its derived dashboard once.
+    frappe.flags.ccd_dashboard_snapshot_defer_agent_postprocess = True
     doc = _registration(registration)
     source = _validate_source(doc, source_id)
     config = _config(doc)
@@ -1167,6 +1177,7 @@ def run_postprocess_batch(
             cursor=str(names[-1]),
             processed=processed,
             error_count=error_count,
+            chain_nonce=str(chain_nonce or ""),
         )
         return {
             "status": "continuing",
@@ -1204,6 +1215,10 @@ def run_postprocess_batch(
                 default=str,
             )[:2000],
         )
+        from db_connector.ccd_dashboard_snapshot import mark_dirty_after_commit
+
+        frappe.flags.ccd_dashboard_snapshot_defer_agent_postprocess = False
+        mark_dirty_after_commit(reason="agent-postprocessing-completed")
         return {
             "status": final_state,
             "processed": cint(processed),

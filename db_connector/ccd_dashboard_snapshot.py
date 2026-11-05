@@ -977,6 +977,18 @@ def _maintenance_should_yield() -> bool:
     )
 
 
+def _agent_postprocessing_active() -> bool:
+    """Keep dashboard work behind governed agent hook restoration."""
+    if not frappe.db.exists("DocType", "CCD Registration"):
+        return False
+    return bool(
+        frappe.db.exists(
+            "CCD Registration",
+            {"docstatus": 1, "agent_sync_state": "Post-processing"},
+        )
+    )
+
+
 def _cleanup_generations() -> dict[str, Any]:
     """Delete only obsolete generation keys in interruptible indexed chunks."""
     generation_rows = frappe.db.sql(
@@ -1232,6 +1244,22 @@ def _mark_dirty_after_commit() -> None:
 def mark_dirty_after_commit(doc: Any = None, method: str | None = None, reason: str | None = None) -> None:
     """Coalesce all mutations in one transaction into one dirty-version bump."""
     marker_reason = str(reason or method or getattr(doc, "doctype", "ccd-change"))
+    if getattr(
+        frappe.flags, "ccd_dashboard_snapshot_defer_agent_postprocess", False
+    ):
+        # Fast agent ingestion restores document hooks in many restartable
+        # transactions.  Rebuilding the complete dashboard between every
+        # post-processing batch blocks the next batch on the same long queue.
+        # The terminal batch registers one explicit marker after all rows and
+        # the portal adapter have completed.
+        reasons = getattr(
+            frappe.flags, "ccd_dashboard_snapshot_dirty_reasons", None
+        )
+        if reasons is None:
+            reasons = set()
+        reasons.add(marker_reason)
+        frappe.flags.ccd_dashboard_snapshot_dirty_reasons = reasons
+        return
     if getattr(frappe.flags, "ccd_dashboard_snapshot_marker_registered", False):
         reasons = getattr(
             frappe.flags, "ccd_dashboard_snapshot_dirty_reasons", set()
@@ -1264,6 +1292,8 @@ def run_snapshot_maintenance(generation_id: str | None = None) -> dict[str, Any]
     """Clean and warm outside the activation lock, yielding to fresh data."""
     if not schema_ready():
         return {"status": "Schema Missing"}
+    if _agent_postprocessing_active():
+        return {"status": "Deferred", "reason": "Agent post-processing active"}
     lock_rows = frappe.db.sql("SELECT GET_LOCK(%s,0)", (MAINTENANCE_LOCK_NAME,))
     if not lock_rows or int(lock_rows[0][0] or 0) != 1:
         return {"status": "Already Running"}
@@ -1295,6 +1325,8 @@ def refresh_snapshot(force: int | str = 0) -> dict[str, Any]:
     """Build, validate, and atomically activate one reporting generation."""
     if not schema_ready():
         return {"status": "Schema Missing"}
+    if _agent_postprocessing_active():
+        return {"status": "Deferred", "reason": "Agent post-processing active"}
     if not _lock_acquired():
         return {"status": "Already Running"}
     lock_held = True
@@ -1477,6 +1509,8 @@ def run_snapshot_safety_check() -> dict[str, Any]:
     """One-minute fallback for missed dirty events and stalled refresh jobs."""
     if not schema_ready():
         return {"status": "Schema Missing"}
+    if _agent_postprocessing_active():
+        return {"status": "Deferred", "reason": "Agent post-processing active"}
     rows = frappe.db.sql(
         f"SELECT state.active_generation,state.dirty_version,state.built_dirty_version,state.refresh_status,"
         "state.refresh_started_at,generation.started_at AS generation_started_at "
