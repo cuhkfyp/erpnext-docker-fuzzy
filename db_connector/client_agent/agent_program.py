@@ -15,7 +15,7 @@ from urllib.parse import quote as urlquote, urlsplit, urlunsplit
 import socketio
 import urllib3
 
-AGENT_PROGRAM_VERSION = "2026.11.05-staging-baseline-v1"
+AGENT_PROGRAM_VERSION = "2026.11.05-staging-baseline-v2"
 
 import truststore
 truststore.inject_into_ssl()
@@ -2171,6 +2171,18 @@ def execute_step(step, prev_result):
                         errors += len(_berrs)
                         if not _berrs:
                             checkpoint_master_rows(chunk)
+                        elif msg.get("baseline_adoption"):
+                            # The server compared the complete incoming payload
+                            # and explicitly rejected it.  Existing source keys
+                            # are not proof that these values match, so do not
+                            # let the existence-only ambiguous-write recovery
+                            # advance the local cache for this batch.
+                            write_log(
+                                "SYNC_TO_CCD_MASTER_BULK: baseline validation "
+                                "rejected the batch — local Master checkpoint "
+                                "was not advanced",
+                                "WARN",
+                            )
                         else:
                             reconcile_master_rows(chunk)
                         for be in _berrs[:3]:
