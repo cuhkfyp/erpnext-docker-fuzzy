@@ -25,6 +25,22 @@ class FakeDoc:
 
 
 class RegistrationRetirementInterlockTests(unittest.TestCase):
+    def test_baseline_normalization_matches_stored_field_semantics(self):
+        self.assertEqual(
+            agent_sync._normalize_baseline_value(
+                "Date", "1961-10-06 00:00:00"
+            ),
+            "1961-10-06",
+        )
+        self.assertEqual(
+            agent_sync._normalize_baseline_value("Float", "1.000"),
+            agent_sync._normalize_baseline_value("Float", 1.0),
+        )
+        self.assertEqual(
+            agent_sync._normalize_baseline_value("Int", ""),
+            agent_sync._normalize_baseline_value("Int", 0),
+        )
+
     def test_retirement_uses_the_actual_agent_source_override(self):
         registration = FakeDoc(
             ccd_stable_source_key="DISPLAY_SOURCE",
@@ -62,8 +78,174 @@ class RegistrationRetirementInterlockTests(unittest.TestCase):
         self.assertEqual(
             registration.get("agent_baseline_adoption_state"), "Not Requested"
         )
+        self.assertEqual(registration.get("agent_baseline_staging_progress"), 0)
         self.assertEqual(registration.get("agent_baseline_adoption_progress"), 0)
         self.assertEqual(registration.get("log_info"), [])
+
+    def test_existing_staging_baseline_compares_every_mapped_field(self):
+        registration = FakeDoc(name="R1", ccd_reg_doctype="CCD-REG-R1")
+        field_types = {
+            "ccd_source_key": "Data",
+            "chi_firstname": "Data",
+            "birthday": "Date",
+        }
+        meta = SimpleNamespace(
+            fields=[
+                SimpleNamespace(fieldname=name, fieldtype=fieldtype)
+                for name, fieldtype in field_types.items()
+            ]
+        )
+        mapping = [
+            SimpleNamespace(ccd_fieldname="chi_firstname", fieldtype="Data"),
+            SimpleNamespace(ccd_fieldname="birthday", fieldtype="Date"),
+        ]
+        incoming = {
+            "ccd_source_key": "1",
+            "chi_firstname": "大文",
+            "birthday": "1961-10-06",
+        }
+        stored = FakeDoc(name="ROW1", **incoming)
+
+        def get_all(doctype, **kwargs):
+            return mapping if doctype == "CCD Field Match" else [stored]
+
+        database = MagicMock()
+        database.exists.return_value = True
+        with patch.object(agent_sync.frappe, "db", database), patch.object(
+            agent_sync.frappe, "get_meta", return_value=meta
+        ), patch.object(agent_sync.frappe, "get_all", side_effect=get_all):
+            confirmed = agent_sync._confirm_existing_staging_baseline_rows(
+                registration, [incoming]
+            )
+            self.assertEqual(set(confirmed), {"1"})
+            self.assertEqual(len(confirmed["1"]), 64)
+
+        different = FakeDoc(name="ROW1", **{**incoming, "birthday": "1959-01-01"})
+
+        def get_different(doctype, **kwargs):
+            return mapping if doctype == "CCD Field Match" else [different]
+
+        with patch.object(agent_sync.frappe, "db", database), patch.object(
+            agent_sync.frappe, "get_meta", return_value=meta
+        ), patch.object(
+            agent_sync.frappe, "get_all", side_effect=get_different
+        ), patch.object(
+            agent_sync.frappe, "throw", side_effect=RuntimeError("blocked")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "blocked"):
+                agent_sync._confirm_existing_staging_baseline_rows(
+                    registration, [incoming]
+                )
+
+    def test_staging_baseline_batch_is_zero_write_and_tracks_unique_progress(self):
+        database = MagicMock()
+        doc = FakeDoc(name="R1")
+        adoption = {
+            "authorization_id": "auth-1",
+            "scope_fingerprint": "scope",
+            "snapshot": {
+                "mapping_fingerprint": "mapping",
+                "staging_count": 2,
+            },
+        }
+        snapshot = {"staging_count": 2}
+        rows = [{"ccd_source_key": "1", "chi_firstname": "大文"}]
+        with patch.object(agent_sync, "_require_writer"), patch.object(
+            agent_sync, "_registration", return_value=doc
+        ), patch.object(
+            agent_sync, "_validate_source", return_value="SOURCE"
+        ), patch.object(
+            agent_sync, "_active_baseline_adoption", return_value=adoption
+        ), patch.object(
+            agent_sync,
+            "_baseline_mapping_snapshot",
+            return_value={"mapping_fingerprint": "mapping"},
+        ), patch.object(
+            agent_sync, "_validated_baseline_population", return_value=snapshot
+        ), patch.object(
+            agent_sync, "_baseline_scope_fingerprint", return_value="scope"
+        ), patch.object(
+            agent_sync, "_settings", return_value={"maximum_batch_size": 1000}
+        ), patch.object(
+            agent_sync,
+            "_confirm_existing_staging_baseline_rows",
+            return_value={"1": "hash-1"},
+        ), patch.object(
+            agent_sync, "_record_staging_baseline_progress", return_value=1
+        ), patch.object(agent_sync.frappe, "db", database):
+            result = inspect.unwrap(agent_sync.confirm_registration_baseline_batch)(
+                "R1", "SOURCE", rows
+            )
+        self.assertEqual(result["confirmed_existing"], 1)
+        self.assertEqual(result["staging_progress"], 1)
+        self.assertFalse(result["complete"])
+        self.assertEqual(
+            result["writes_allowed"], {"insert": 0, "update": 0, "delete": 0}
+        )
+        database.set_value.assert_called_once()
+
+    def test_staging_baseline_completion_rechecks_every_confirmed_row(self):
+        database = MagicMock()
+        doc = FakeDoc(name="R1")
+        adoption = {
+            "authorization_id": "auth-1",
+            "scope_fingerprint": "scope",
+        }
+        snapshot = {"staging_count": 2}
+        hashes = {"1": "hash-1", "2": "hash-2"}
+        with patch.object(agent_sync, "_require_writer"), patch.object(
+            agent_sync, "_registration", return_value=doc
+        ), patch.object(
+            agent_sync, "_validate_source", return_value="SOURCE"
+        ), patch.object(
+            agent_sync, "_active_baseline_adoption", return_value=adoption
+        ), patch.object(
+            agent_sync, "_validated_baseline_population", return_value=snapshot
+        ), patch.object(
+            agent_sync, "_baseline_scope_fingerprint", return_value="scope"
+        ), patch.object(
+            agent_sync, "_staging_baseline_progress_hashes", return_value=hashes
+        ), patch.object(
+            agent_sync, "_current_staging_baseline_hashes", return_value=hashes
+        ), patch.object(agent_sync.frappe, "db", database):
+            result = inspect.unwrap(
+                agent_sync.complete_registration_baseline_adoption
+            )("R1", "SOURCE")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["staging_progress"], 2)
+        self.assertEqual(
+            result["writes_allowed"], {"insert": 0, "update": 0, "delete": 0}
+        )
+        database.set_value.assert_called_once()
+
+    def test_master_adoption_waits_for_complete_staging_confirmation(self):
+        database = MagicMock()
+        database.exists.return_value = True
+        doc = FakeDoc(name="R1", agent_sync_run_id="run-1")
+        adoption = {
+            "authorization_id": "auth-1",
+            "scope_fingerprint": "scope",
+        }
+        snapshot = {"staging_count": 2, "master_count": 2}
+        with patch.object(agent_sync, "_require_writer"), patch.object(
+            agent_sync, "_registration", return_value=doc
+        ), patch.object(
+            agent_sync, "_validate_source", return_value="SOURCE"
+        ), patch.object(agent_sync, "_require_lease"), patch.object(
+            agent_sync, "_active_baseline_adoption", return_value=adoption
+        ), patch.object(
+            agent_sync, "_validated_baseline_population", return_value=snapshot
+        ), patch.object(
+            agent_sync, "_baseline_scope_fingerprint", return_value="scope"
+        ), patch.object(
+            agent_sync, "_staging_baseline_progress_count", return_value=1
+        ), patch.object(agent_sync.frappe, "db", database), patch.object(
+            agent_sync.frappe, "throw", side_effect=RuntimeError("blocked")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "blocked"):
+                inspect.unwrap(agent_sync.inspect_master_source_state)(
+                    "R1", "SOURCE", "lease", "run-1"
+                )
 
     def test_existing_baseline_confirmation_compares_every_required_field(self):
         field_types = {

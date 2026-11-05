@@ -331,14 +331,14 @@ function start_registration_retirement_preview(frm) {
 function show_master_baseline_adoption_confirmation(frm, preview) {
 	const exact_confirmation = preview.required_confirmation || "";
 	const dialog = new frappe.ui.Dialog({
-		title: __("Adopt Exact Existing Master Baseline"),
+		title: __("Adopt Exact Existing Staging and Master Baseline"),
 		fields: [
 			{
 				fieldtype: "HTML",
 				options: `<div class="alert alert-warning">
 					<p><strong>${__("Zero-write recovery")}</strong></p>
-					<p>${__("This authorizes the current client agent to rebuild only its local CCD Master delta cache by proving that every incoming mapped value equals the existing Master row.")}</p>
-					<p>${__("Master inserts, updates, and deletions remain prohibited. Keep the client agent stopped until authorization completes; then start only the current agent.")}</p>
+					<p>${__("This authorizes the current client agent to rebuild its local staging and CCD Master delta caches only after proving that every incoming mapped value equals both existing server populations.")}</p>
+					<p>${__("Staging and Master inserts, updates, and deletions remain prohibited. Keep the client agent stopped until authorization completes; then start only the current agent.")}</p>
 					<ul>
 						<li>${__("Source")}: <code>${frappe.utils.escape_html(preview.source_id || "")}</code></li>
 						<li>${__("Staging / Master rows")}: ${preview.staging_count || 0} / ${preview.master_count || 0}</li>
@@ -381,8 +381,8 @@ function show_master_baseline_adoption_confirmation(frm, preview) {
 					const result = response.message || {};
 					dialog.hide();
 					frappe.msgprint({
-						title: __("Existing Master Baseline Authorized"),
-						message: __("Authorization covers {0} exact existing rows. Start only the current client agent. It will confirm all mapped values and rebuild its local cache without changing CCD Master or identity state.", [result.expected_count || 0]),
+						title: __("Existing Staging and Master Baseline Authorized"),
+						message: __("Authorization covers {0} exact existing rows. Start only the current client agent. It will first confirm staging, then Master, and rebuild both local caches without changing server rows or identity state.", [result.expected_count || 0]),
 						indicator: "green",
 					});
 					frm.reload_doc();
@@ -438,7 +438,7 @@ frappe.ui.form.on("CCD Registration", {
 			)
 		) {
 			frm.add_custom_button(
-				__("Adopt Existing Master Baseline"),
+				__("Adopt Existing Staging and Master Baseline"),
 				() => start_master_baseline_adoption_preview(frm),
 				__("Actions"),
 			);

@@ -592,11 +592,19 @@ def _custom_fields() -> dict[str, list[dict[str, Any]]]:
                 **common,
             },
             {
-                "fieldname": "agent_baseline_adoption_progress",
+                "fieldname": "agent_baseline_staging_progress",
                 "fieldtype": "Int",
-                "label": "Exact Rows Confirmed",
+                "label": "Staging Rows Confirmed",
                 "read_only": 1,
                 "insert_after": "agent_baseline_adoption_expected_count",
+                **common,
+            },
+            {
+                "fieldname": "agent_baseline_adoption_progress",
+                "fieldtype": "Int",
+                "label": "Master Rows Confirmed",
+                "read_only": 1,
+                "insert_after": "agent_baseline_staging_progress",
                 **common,
             },
             {

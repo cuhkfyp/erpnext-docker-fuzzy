@@ -13,10 +13,11 @@ import json
 import re
 import time
 import uuid
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
 import frappe
-from frappe.utils import cint, get_datetime, now_datetime
+from frappe.utils import cint, getdate, get_datetime, now_datetime
 
 
 SETTINGS_DOCTYPE = "CCD Agent Sync Settings"
@@ -133,6 +134,24 @@ return redis.call('SCARD', progress_key)
 
 BASELINE_PROGRESS_COUNT_LUA = """
 return redis.call('SCARD', KEYS[1])
+"""
+
+STAGING_BASELINE_PROGRESS_LUA = """
+local progress_key = KEYS[1]
+local ttl = tonumber(ARGV[1])
+for index = 2, #ARGV, 2 do
+  redis.call('HSET', progress_key, ARGV[index], ARGV[index + 1])
+end
+redis.call('EXPIRE', progress_key, ttl)
+return redis.call('HLEN', progress_key)
+"""
+
+STAGING_BASELINE_PROGRESS_COUNT_LUA = """
+return redis.call('HLEN', KEYS[1])
+"""
+
+STAGING_BASELINE_PROGRESS_VALUES_LUA = """
+return redis.call('HGETALL', KEYS[1])
 """
 
 
@@ -415,6 +434,13 @@ def _baseline_progress_key(authorization_id: str) -> bytes:
     )
 
 
+def _staging_baseline_progress_key(authorization_id: str) -> bytes:
+    return frappe.cache.make_key(
+        "ccd_agent_sync:staging_baseline_adoption:"
+        f"{str(authorization_id or '').strip()}"
+    )
+
+
 def _record_baseline_progress(authorization_id: str, keys: list[str]) -> int:
     if not authorization_id or not keys:
         return 0
@@ -440,6 +466,55 @@ def _baseline_progress_count(authorization_id: str) -> int:
         )
         or 0
     )
+
+
+def _record_staging_baseline_progress(
+    authorization_id: str, row_hashes: dict[str, str]
+) -> int:
+    if not authorization_id or not row_hashes:
+        return 0
+    arguments: list[Any] = [BASELINE_ADOPTION_PROGRESS_TTL]
+    for key, row_hash in row_hashes.items():
+        arguments.extend([key, row_hash])
+    return cint(
+        frappe.cache.eval(
+            STAGING_BASELINE_PROGRESS_LUA,
+            1,
+            _staging_baseline_progress_key(authorization_id),
+            *arguments,
+        )
+    )
+
+
+def _staging_baseline_progress_count(authorization_id: str) -> int:
+    if not authorization_id:
+        return 0
+    return cint(
+        frappe.cache.eval(
+            STAGING_BASELINE_PROGRESS_COUNT_LUA,
+            1,
+            _staging_baseline_progress_key(authorization_id),
+        )
+        or 0
+    )
+
+
+def _staging_baseline_progress_hashes(
+    authorization_id: str,
+) -> dict[str, str]:
+    if not authorization_id:
+        return {}
+    values = frappe.cache.eval(
+        STAGING_BASELINE_PROGRESS_VALUES_LUA,
+        1,
+        _staging_baseline_progress_key(authorization_id),
+    )
+    output: dict[str, str] = {}
+    for index in range(0, len(values or []), 2):
+        output[str(_decode_redis_result(values[index]) or "")] = str(
+            _decode_redis_result(values[index + 1]) or ""
+        )
+    return output
 
 
 def place_source_retirement_hold(source_id: str, registration: str) -> None:
@@ -482,6 +557,7 @@ AMENDED_OPERATIONAL_DEFAULTS: dict[str, Any] = {
     "agent_retirement_hold_note": None,
     "agent_baseline_adoption_state": "Not Requested",
     "agent_baseline_adoption_expected_count": 0,
+    "agent_baseline_staging_progress": 0,
     "agent_baseline_adoption_progress": 0,
     "agent_baseline_adoption_payload": None,
     "agent_baseline_adoption_event": None,
@@ -778,7 +854,9 @@ def authorize_master_baseline_adoption(
         "run_id": "",
     }
     progress_key = _baseline_progress_key(authorization_id)
+    staging_progress_key = _staging_baseline_progress_key(authorization_id)
     frappe.cache.delete(progress_key)
+    frappe.cache.delete(staging_progress_key)
     event = (
         f"Authorized by {frappe.session.user} at {now_datetime()}: "
         f"{snapshot['master_count']:,} exact existing rows; {reason_text}"
@@ -789,13 +867,14 @@ def authorize_master_baseline_adoption(
         {
             "agent_baseline_adoption_state": BASELINE_ADOPTION_AUTHORIZED,
             "agent_baseline_adoption_expected_count": snapshot["master_count"],
+            "agent_baseline_staging_progress": 0,
             "agent_baseline_adoption_progress": 0,
             "agent_baseline_adoption_payload": _canonical_json(payload),
             "agent_baseline_adoption_event": event[:1000],
             "agent_sync_rows_processed": 0,
             "agent_sync_last_result": (
-                "No-write Master baseline adoption authorized. Start only the "
-                "current client agent to rebuild its scoped cache."
+                "Zero-write staging and Master baseline adoption authorized. "
+                "Start only the current client agent to rebuild its scoped caches."
             ),
             "agent_sync_last_error": None,
         },
@@ -911,6 +990,25 @@ def inspect_master_source_state(
         ):
             frappe.throw(
                 "The authorized baseline population changed; run a fresh preview"
+            )
+        authorization_id = str(adoption.get("authorization_id") or "")
+        expected = cint(snapshot.get("staging_count") or 0)
+        staging_progress = _staging_baseline_progress_count(authorization_id)
+        if not expected or staging_progress != expected:
+            frappe.throw(
+                "The exact staging baseline must be confirmed before CCD Master "
+                f"adoption: confirmed {staging_progress:,} / {expected:,} rows"
+            )
+        if not str(adoption.get("staging_completed_at") or ""):
+            frappe.throw(
+                "The exact staging baseline has not completed its final stability check"
+            )
+        if _staging_baseline_value_fingerprint(doc) != str(
+            adoption.get("staging_value_fingerprint") or ""
+        ):
+            frappe.throw(
+                "The staging population changed after baseline confirmation; "
+                "run a fresh governed preview"
             )
         adoption["run_id"] = str(run_id or "")
         adoption["started_at"] = str(now_datetime())
@@ -1304,12 +1402,381 @@ def _normalize_baseline_value(fieldtype: str, value: Any) -> str:
             return "1"
         if normalized in {"", "0", "false", "no", "off", "none"}:
             return "0"
+    if normalized_type in {"int", "long int", "float", "currency", "percent"}:
+        normalized = str(value if value not in (None, "") else 0).strip()
+        try:
+            decimal_value = Decimal(normalized)
+        except (InvalidOperation, ValueError):
+            return normalized
+        if not decimal_value:
+            return "0"
+        return format(decimal_value.normalize(), "f")
     if value is None:
         return ""
     normalized = str(value)
-    if normalized_type in {"date", "datetime"}:
-        return normalized.strip().replace("T", " ")
+    if normalized_type == "date":
+        if not normalized.strip():
+            return ""
+        return str(getdate(value))
+    if normalized_type == "datetime":
+        if not normalized.strip():
+            return ""
+        return str(get_datetime(value))
     return normalized
+
+
+def _staging_baseline_fields(registration: Any) -> dict[str, str]:
+    """Return governed staging field types keyed by their actual fieldnames."""
+    staging_doctype = str(registration.get("ccd_reg_doctype") or "").strip()
+    if not staging_doctype or not frappe.db.exists("DocType", staging_doctype):
+        frappe.throw("The generated CCD staging DocType is unavailable")
+    meta = frappe.get_meta(staging_doctype)
+    scalar_types = {
+        str(field.fieldname).lower(): str(field.fieldtype or "Data")
+        for field in meta.fields
+        if field.fieldtype
+        not in {
+            "Table",
+            "Table MultiSelect",
+            "Section Break",
+            "Column Break",
+            "Tab Break",
+            "HTML",
+            "Button",
+            "Heading",
+            "Fold",
+        }
+    }
+    mapping_rows = frappe.get_all(
+        "CCD Field Match",
+        filters={"parent": registration.name},
+        fields=["ccd_fieldname", "fieldtype"],
+        order_by="idx asc",
+        limit_page_length=10_000,
+    )
+    field_types: dict[str, str] = {}
+    for row in mapping_rows:
+        fieldname = str(row.ccd_fieldname or "").strip().lower()
+        if not fieldname or fieldname not in scalar_types:
+            continue
+        field_types[fieldname] = str(
+            row.fieldtype or scalar_types.get(fieldname) or "Data"
+        )
+    if "ccd_source_key" not in scalar_types:
+        frappe.throw("The generated CCD staging DocType has no source key")
+    field_types["ccd_source_key"] = scalar_types["ccd_source_key"]
+    if len(field_types) <= 1:
+        frappe.throw("Baseline adoption requires active staging field mappings")
+    return field_types
+
+
+def _confirm_existing_staging_baseline_rows(
+    registration: Any,
+    raw_rows: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Require every mapped client value to equal its existing staging row."""
+    staging_doctype = str(registration.get("ccd_reg_doctype") or "").strip()
+    field_types = _staging_baseline_fields(registration)
+    compare_fields = sorted(field_types)
+    normalized_rows: list[dict[str, Any]] = []
+    keys: list[str] = []
+    seen: set[str] = set()
+    invalid: list[str] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            invalid.append("<non-object>")
+            continue
+        incoming = {str(key).lower(): value for key, value in raw_row.items()}
+        key = str(incoming.get("ccd_source_key") or "").strip()
+        missing = [fieldname for fieldname in compare_fields if fieldname not in incoming]
+        if not key:
+            invalid.append("<blank>:ccd_source_key")
+        elif key in seen:
+            invalid.append(f"{key}:duplicate")
+        elif missing:
+            invalid.append(f"{key}:missing " + ",".join(missing[:5]))
+        seen.add(key)
+        keys.append(key)
+        normalized_rows.append(incoming)
+        if len(invalid) >= 5:
+            break
+    if invalid or len(normalized_rows) != len(raw_rows):
+        frappe.throw(
+            "Staging baseline adoption requires unique complete rows: "
+            + "; ".join(invalid[:5]),
+            frappe.ValidationError,
+        )
+    stored_rows = frappe.get_all(
+        staging_doctype,
+        filters={"ccd_source_key": ["in", keys]},
+        fields=["name", *compare_fields],
+        limit_page_length=len(keys),
+    )
+    stored_by_key = {
+        str(row.get("ccd_source_key") or "").strip(): row for row in stored_rows
+    }
+    mismatches: list[str] = []
+    for incoming in normalized_rows:
+        key = str(incoming.get("ccd_source_key") or "").strip()
+        stored = stored_by_key.get(key)
+        if not stored:
+            mismatches.append(f"{key}:missing")
+            continue
+        for fieldname in compare_fields:
+            if _normalize_baseline_value(
+                field_types[fieldname], incoming.get(fieldname)
+            ) != _normalize_baseline_value(
+                field_types[fieldname], stored.get(fieldname)
+            ):
+                mismatches.append(f"{key}:{fieldname}")
+                break
+        if len(mismatches) >= 5:
+            break
+    if mismatches:
+        frappe.throw(
+            "Staging baseline adoption found missing or different existing rows: "
+            + ", ".join(mismatches),
+            frappe.ValidationError,
+        )
+    return {
+        str(incoming.get("ccd_source_key") or "").strip(): hashlib.sha256(
+            _canonical_json(
+                [
+                    [
+                        fieldname,
+                        _normalize_baseline_value(
+                            field_types[fieldname], incoming.get(fieldname)
+                        ),
+                    ]
+                    for fieldname in compare_fields
+                ]
+            ).encode("utf-8")
+        ).hexdigest()
+        for incoming in normalized_rows
+    }
+
+
+def _current_staging_baseline_hashes(registration: Any) -> dict[str, str]:
+    staging_doctype = str(registration.get("ccd_reg_doctype") or "").strip()
+    field_types = _staging_baseline_fields(registration)
+    compare_fields = sorted(field_types)
+    rows = frappe.get_all(
+        staging_doctype,
+        fields=compare_fields,
+        order_by="ccd_source_key asc",
+        limit_page_length=1_000_000,
+    )
+    output: dict[str, str] = {}
+    for row in rows:
+        key = str(row.get("ccd_source_key") or "").strip()
+        if not key or key in output:
+            frappe.throw(
+                "Staging baseline verification requires unique non-blank source keys"
+            )
+        output[key] = hashlib.sha256(
+            _canonical_json(
+                [
+                    [
+                        fieldname,
+                        _normalize_baseline_value(
+                            field_types[fieldname], row.get(fieldname)
+                        ),
+                    ]
+                    for fieldname in compare_fields
+                ]
+            ).encode("utf-8")
+        ).hexdigest()
+    return output
+
+
+def _staging_baseline_value_fingerprint(registration: Any) -> str:
+    return hashlib.sha256(
+        _canonical_json(
+            sorted(_current_staging_baseline_hashes(registration).items())
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+@frappe.whitelist(methods=["POST"])
+def confirm_registration_baseline_batch(
+    registration: str,
+    source_id: str,
+    rows: Any,
+) -> dict[str, Any]:
+    """Confirm an exact existing staging batch without writing any server row."""
+    _require_writer()
+    doc = _registration(registration)
+    source = _validate_source(doc, source_id)
+    adoption = _active_baseline_adoption(doc, source)
+    if not adoption:
+        frappe.throw("No active governed baseline adoption is authorized")
+    snapshot = adoption.get("snapshot") or {}
+    current_mapping = _baseline_mapping_snapshot(doc)
+    if str(current_mapping.get("mapping_fingerprint") or "") != str(
+        snapshot.get("mapping_fingerprint") or ""
+    ):
+        frappe.throw("The authorized field mapping changed; run a fresh preview")
+    raw_rows = _json_list(rows, "rows")
+    maximum = max(1, cint(_settings().get("maximum_batch_size") or 1000))
+    if not raw_rows or len(raw_rows) > maximum:
+        frappe.throw(
+            f"Staging baseline batches require 1 to {maximum} rows",
+            frappe.ValidationError,
+        )
+    authorization_id = str(adoption.get("authorization_id") or "")
+    expected = cint(snapshot.get("staging_count") or 0)
+    try:
+        confirmed_hashes = _confirm_existing_staging_baseline_rows(doc, raw_rows)
+    except Exception as exc:
+        failure = (
+            "Existing staging-baseline adoption rejected an unequal or incomplete "
+            f"batch: {str(exc)}"
+        )[:1000]
+        adoption["failed"] = True
+        adoption["failed_at"] = str(now_datetime())
+        adoption["failure"] = failure
+        frappe.db.set_value(
+            REGISTRATION_DOCTYPE,
+            doc.name,
+            {
+                "agent_baseline_adoption_state": "Failed",
+                "agent_baseline_adoption_payload": _canonical_json(adoption),
+                "agent_baseline_adoption_event": failure,
+                "agent_sync_last_error": failure,
+            },
+            update_modified=False,
+        )
+        return {
+            "confirmed_existing": 0,
+            "accepted": 0,
+            "errors": [failure],
+            "baseline_adoption": True,
+            "staging_progress": _staging_baseline_progress_count(authorization_id),
+            "staging_expected": expected,
+            "complete": False,
+            "writes_allowed": {"insert": 0, "update": 0, "delete": 0},
+        }
+    progress = _record_staging_baseline_progress(
+        authorization_id, confirmed_hashes
+    )
+    if not expected or progress > expected:
+        frappe.throw("Staging baseline-adoption progress exceeded its authorized scope")
+    event = (
+        f"Confirmed {progress:,} / {expected:,} exact existing staging rows; "
+        "zero staging writes"
+    )
+    frappe.db.set_value(
+        REGISTRATION_DOCTYPE,
+        doc.name,
+        {
+            "agent_baseline_adoption_state": BASELINE_ADOPTION_IN_PROGRESS,
+            "agent_baseline_staging_progress": progress,
+            "agent_baseline_adoption_event": event[:1000],
+            "agent_sync_last_result": event[:2000],
+            "agent_sync_last_error": None,
+        },
+        update_modified=False,
+    )
+    return {
+        "confirmed_existing": len(confirmed_hashes),
+        "accepted": len(confirmed_hashes),
+        "errors": [],
+        "baseline_adoption": True,
+        "staging_progress": progress,
+        "staging_expected": expected,
+        "ready_to_finalize": progress == expected,
+        "complete": False,
+        "writes_allowed": {"insert": 0, "update": 0, "delete": 0},
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def complete_registration_baseline_adoption(
+    registration: str,
+    source_id: str,
+) -> dict[str, Any]:
+    """Finalize exact staging confirmation before a local cache is created."""
+    _require_writer()
+    doc = _registration(registration)
+    source = _validate_source(doc, source_id)
+    adoption = _active_baseline_adoption(doc, source)
+    if not adoption:
+        frappe.throw("No active governed baseline adoption is authorized")
+    snapshot = _validated_baseline_population(doc, source)
+    if _baseline_scope_fingerprint(snapshot) != str(
+        adoption.get("scope_fingerprint") or ""
+    ):
+        frappe.throw("The authorized baseline population changed; run a fresh preview")
+    authorization_id = str(adoption.get("authorization_id") or "")
+    expected = cint(snapshot.get("staging_count") or 0)
+    progress_hashes = _staging_baseline_progress_hashes(authorization_id)
+    if not expected or len(progress_hashes) != expected:
+        frappe.throw(
+            f"Staging baseline adoption is incomplete: confirmed "
+            f"{len(progress_hashes):,} / {expected:,} exact rows"
+        )
+    current_hashes = _current_staging_baseline_hashes(doc)
+    if current_hashes != progress_hashes:
+        different = sorted(
+            key
+            for key in set(current_hashes) | set(progress_hashes)
+            if current_hashes.get(key) != progress_hashes.get(key)
+        )
+        failure = (
+            "Existing staging-baseline adoption changed during confirmation: "
+            + ", ".join(different[:5])
+        )[:1000]
+        adoption["failed"] = True
+        adoption["failed_at"] = str(now_datetime())
+        adoption["failure"] = failure
+        frappe.db.set_value(
+            REGISTRATION_DOCTYPE,
+            doc.name,
+            {
+                "agent_baseline_adoption_state": "Failed",
+                "agent_baseline_adoption_payload": _canonical_json(adoption),
+                "agent_baseline_adoption_event": failure,
+                "agent_sync_last_error": failure,
+            },
+            update_modified=False,
+        )
+        return {
+            "complete": False,
+            "errors": [failure],
+            "staging_progress": len(progress_hashes),
+            "staging_expected": expected,
+            "writes_allowed": {"insert": 0, "update": 0, "delete": 0},
+        }
+    value_fingerprint = hashlib.sha256(
+        _canonical_json(sorted(current_hashes.items())).encode("utf-8")
+    ).hexdigest()
+    adoption["staging_completed_at"] = str(now_datetime())
+    adoption["staging_value_fingerprint"] = value_fingerprint
+    event = (
+        f"Completed zero-write staging baseline: confirmed {expected:,} exact "
+        "existing rows; local cache creation authorized"
+    )
+    frappe.db.set_value(
+        REGISTRATION_DOCTYPE,
+        doc.name,
+        {
+            "agent_baseline_adoption_state": BASELINE_ADOPTION_IN_PROGRESS,
+            "agent_baseline_staging_progress": expected,
+            "agent_baseline_adoption_payload": _canonical_json(adoption),
+            "agent_baseline_adoption_event": event[:1000],
+            "agent_sync_last_result": event[:2000],
+            "agent_sync_last_error": None,
+        },
+        update_modified=False,
+    )
+    return {
+        "complete": True,
+        "errors": [],
+        "staging_progress": expected,
+        "staging_expected": expected,
+        "staging_value_fingerprint": value_fingerprint,
+        "writes_allowed": {"insert": 0, "update": 0, "delete": 0},
+    }
 
 
 def _confirm_existing_baseline_rows(
