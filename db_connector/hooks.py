@@ -30,10 +30,12 @@ app_include_js = [
 
 doc_events = {
     "CCD Master": {
+        "validate": "db_connector.api_agent_sync.reject_master_write_during_registration_retirement",
         "after_insert": "db_connector.api_unified_person.ensure_unified_person_after_insert",
         "on_update": "db_connector.api_identity_resolution.handle_ccd_master_update",
     },
     "CCD Registration": {
+        "before_insert": "db_connector.api_agent_sync.reset_amended_registration_operational_state",
         "on_submit": "db_connector.ccd_registration_provisioning.provision_registration_on_submit",
         "validate": "db_connector.api_identity_retirement.validate_registration_source_key",
         "before_submit": [

@@ -783,6 +783,11 @@ PYTHONPATH=.:./db_connector \
 - submitted CCD Registrations have stable source keys and current revision
   fingerprints, and ordinary cancellation fails closed when governed identity
   state would otherwise be orphaned;
+- Registration replacement requires the Desk agent-stop confirmation and
+  persisted retirement hold; a new agent lease or CCD Master document write is
+  rejected while held, cancellation is rejected until an existing lease drains,
+  and an amended revision has fresh `Idle` operational state before the client
+  agent is restarted;
 - CCD Master contains the Identity Resolution tab/custom HTML field;
 - an enabled **CCD Master Identity Resolution** Client Script exists when CCD
   Master is custom, and its source contains `load_identity_resolution`;

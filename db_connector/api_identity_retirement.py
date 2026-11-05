@@ -29,6 +29,8 @@ CHUNK_SIZE = 1_000
 REGISTRATION_OPERATION_TTL_SECONDS = 21_600
 REGISTRATION_PREVIEW_TIMEOUT_SECONDS = 1_800
 REGISTRATION_APPLY_TIMEOUT_SECONDS = 7_200
+REGISTRATION_STOP_CONFIRMATION_PREFIX = "AGENT STOPPED AND HELD: "
+REGISTRATION_RELEASE_CONFIRMATION_PREFIX = "RELEASE RETIREMENT HOLD: "
 
 
 def _require_manager() -> None:
@@ -1527,6 +1529,21 @@ def registration_source_key(registration: Any) -> str:
     return stable_source_key(generated_doctype)
 
 
+def registration_retirement_source_key(registration: Any) -> str:
+    """Return the source actually written to CCD Master by this agent revision."""
+    agent_source = str(
+        (
+            registration.get("agent_sync_source_id")
+            if hasattr(registration, "get")
+            else getattr(registration, "agent_sync_source_id", "")
+        )
+        or ""
+    ).strip()
+    return stable_source_key(agent_source) if agent_source else registration_source_key(
+        registration
+    )
+
+
 def resolve_source_key(value: str) -> str:
     """Resolve a Registration revision name or generated DocType to its key."""
     candidate = str(value or "").strip()
@@ -2078,17 +2095,226 @@ def apply_bulk_deletion(
     )
 
 
+def _registration_stop_confirmation(registration_name: str) -> str:
+    return f"{REGISTRATION_STOP_CONFIRMATION_PREFIX}{registration_name}"
+
+
+def _registration_release_confirmation(registration_name: str) -> str:
+    return f"{REGISTRATION_RELEASE_CONFIRMATION_PREFIX}{registration_name}"
+
+
+def _registration_retirement_readiness(registration: Any) -> dict[str, Any]:
+    from db_connector.api_agent_sync import (
+        place_source_retirement_hold,
+        source_sync_lease_owner,
+    )
+
+    source = registration_retirement_source_key(registration)
+    meta = frappe.get_meta("CCD Registration")
+    hold_supported = meta.has_field("agent_retirement_hold")
+    hold_active = bool(
+        hold_supported and int(registration.get("agent_retirement_hold") or 0)
+    )
+    if hold_active:
+        # Redis is a fast race-prevention marker; the persisted field remains
+        # authoritative and recreates the marker after a cache restart.
+        place_source_retirement_hold(source, str(registration.name))
+    lease_owner = source_sync_lease_owner(source)
+    return {
+        "registration": str(registration.name),
+        "stable_source_key": registration_source_key(registration),
+        "retirement_source_key": source,
+        "hold_supported": bool(hold_supported),
+        "hold_active": hold_active,
+        "hold_at": str(registration.get("agent_retirement_hold_at") or ""),
+        "hold_by": str(registration.get("agent_retirement_hold_by") or ""),
+        "hold_note": str(registration.get("agent_retirement_hold_note") or ""),
+        "active_sync_lease": bool(lease_owner),
+        "agent_sync_state": str(registration.get("agent_sync_state") or ""),
+        "ready": bool(hold_active and not lease_owner),
+        "required_stop_confirmation": _registration_stop_confirmation(
+            str(registration.name)
+        ),
+        "required_release_confirmation": _registration_release_confirmation(
+            str(registration.name)
+        ),
+    }
+
+
+def _require_registration_retirement_ready(registration: Any) -> dict[str, Any]:
+    readiness = _registration_retirement_readiness(registration)
+    if not readiness["hold_supported"]:
+        frappe.throw(
+            "The governed agent-retirement hold is not installed. Run the "
+            "db_connector migration before cancelling this Registration."
+        )
+    if not readiness["hold_active"]:
+        frappe.throw(
+            "Stop the client CCD agent, then use Prepare Agent Stop for "
+            "Retirement before cancelling this Registration."
+        )
+    if readiness["active_sync_lease"]:
+        frappe.throw(
+            "The server-side retirement hold is active, but an earlier CCD "
+            "agent sync still owns the source lease. Wait for that run to "
+            "release the lease (or for its lease to expire), then retry."
+        )
+    return readiness
+
+
+@frappe.whitelist()
+def get_registration_retirement_readiness(
+    registration_name: str,
+) -> dict[str, Any]:
+    _require_manager()
+    registration = frappe.get_doc("CCD Registration", registration_name)
+    if int(registration.docstatus or 0) != 1:
+        frappe.throw("Only a submitted CCD Registration can be prepared")
+    return _registration_retirement_readiness(registration)
+
+
+@frappe.whitelist(methods=["POST"])
+def place_registration_retirement_hold(
+    registration_name: str,
+    stop_confirmation: str,
+    note: str,
+) -> dict[str, Any]:
+    """Persist an audited server interlock after the manager stops the agent."""
+    _require_manager()
+    locked = frappe.db.sql(
+        "SELECT docstatus FROM `tabCCD Registration` WHERE name=%s FOR UPDATE",
+        (registration_name,),
+    )
+    if not locked or int(locked[0][0]) != 1:
+        frappe.throw("Only a submitted CCD Registration can be prepared")
+    registration = frappe.get_doc("CCD Registration", registration_name)
+    expected = _registration_stop_confirmation(str(registration.name))
+    if str(stop_confirmation or "").strip() != expected:
+        frappe.throw(
+            "Stop the client CCD agent first, then type the exact displayed "
+            "confirmation sentence."
+        )
+    note_text = str(note or "").strip()
+    if not note_text:
+        frappe.throw("A retirement preparation note is required")
+    required_fields = {
+        "agent_retirement_hold",
+        "agent_retirement_hold_at",
+        "agent_retirement_hold_by",
+        "agent_retirement_hold_note",
+    }
+    meta = frappe.get_meta("CCD Registration")
+    missing = sorted(field for field in required_fields if not meta.has_field(field))
+    if missing:
+        frappe.throw(
+            "The governed agent-retirement hold is not installed. Run the "
+            "db_connector migration first."
+        )
+    source = registration_retirement_source_key(registration)
+    from db_connector.api_agent_sync import (
+        clear_source_retirement_hold,
+        place_source_retirement_hold,
+    )
+
+    place_source_retirement_hold(source, str(registration.name))
+    try:
+        frappe.db.set_value(
+            "CCD Registration",
+            registration.name,
+            {
+                "agent_retirement_hold": 1,
+                "agent_retirement_hold_at": frappe.utils.now_datetime(),
+                "agent_retirement_hold_by": frappe.session.user,
+                "agent_retirement_hold_note": note_text[:1000],
+            },
+            update_modified=False,
+        )
+    except Exception:
+        clear_source_retirement_hold(source, str(registration.name))
+        raise
+    return _registration_retirement_readiness(
+        frappe.get_doc("CCD Registration", registration.name)
+    )
+
+
+@frappe.whitelist(methods=["POST"])
+def release_registration_retirement_hold(
+    registration_name: str,
+    release_confirmation: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Resume an unchanged Registration when the planned retirement is abandoned."""
+    _require_manager()
+    locked = frappe.db.sql(
+        "SELECT docstatus FROM `tabCCD Registration` WHERE name=%s FOR UPDATE",
+        (registration_name,),
+    )
+    if not locked or int(locked[0][0]) != 1:
+        frappe.throw("Only a submitted CCD Registration hold can be released")
+    registration = frappe.get_doc("CCD Registration", registration_name)
+    if str(release_confirmation or "").strip() != _registration_release_confirmation(
+        str(registration.name)
+    ):
+        frappe.throw("Type the exact displayed release confirmation sentence")
+    if not str(reason or "").strip():
+        frappe.throw("A hold-release reason is required")
+    active_token = _cache_text(
+        frappe.cache.get_value(
+            _registration_operation_active_key(
+                "Apply", str(registration.name), str(frappe.session.user)
+            )
+        )
+    )
+    active_operation = (
+        _registration_operation_payload(active_token) if active_token else None
+    )
+    if active_operation and str(active_operation.get("status")) in {
+        "Queued",
+        "Running",
+    }:
+        frappe.throw(
+            "The governed retirement is already queued or running; its hold "
+            "cannot be released."
+        )
+    source = registration_retirement_source_key(registration)
+    released_at = frappe.utils.now_datetime()
+    previous_note = str(registration.get("agent_retirement_hold_note") or "").strip()
+    release_note = (
+        f"Released by {frappe.session.user} at {released_at}: "
+        f"{str(reason).strip()}"
+    )
+    if previous_note:
+        release_note = f"{release_note}\nPrevious hold note: {previous_note}"
+    frappe.db.set_value(
+        "CCD Registration",
+        registration.name,
+        {
+            "agent_retirement_hold": 0,
+            "agent_retirement_hold_note": release_note[:1000],
+        },
+        update_modified=False,
+    )
+    from db_connector.api_agent_sync import clear_source_retirement_hold
+
+    clear_source_retirement_hold(source, str(registration.name))
+    return _registration_retirement_readiness(
+        frappe.get_doc("CCD Registration", registration.name)
+    )
+
+
 def _registration_cancellation_preview(registration_name: str) -> dict[str, Any]:
     registration = frappe.get_doc("CCD Registration", registration_name)
     if int(registration.docstatus or 0) != 1:
         frappe.throw("Only a submitted CCD Registration can be cancelled")
-    source = registration_source_key(registration)
+    source = registration_retirement_source_key(registration)
     _state, public = _source_state(source, None)
     return {
         **public,
         "registration": registration.name,
-        "stable_source_key": source,
+        "stable_source_key": registration_source_key(registration),
+        "retirement_source_key": source,
         "generated_doctype": str(registration.get("ccd_reg_doctype") or ""),
+        "agent_retirement": _registration_retirement_readiness(registration),
     }
 
 
@@ -2230,7 +2456,9 @@ def _applied_registration_cancellation(
     if not row:
         return None
     result = json.loads(row.result_json or "{}")
-    if str(result.get("source_name")) != registration_source_key(registration):
+    if str(result.get("source_name")) != registration_retirement_source_key(
+        registration
+    ):
         return None
     return {
         **result,
@@ -2288,6 +2516,10 @@ def _queue_registration_operation(
             "status": "Completed",
             "idempotent": True,
         }
+    if operation == "Apply":
+        _require_registration_retirement_ready(
+            frappe.get_doc("CCD Registration", registration_name)
+        )
     operation_token = uuid.uuid4().hex
     payload = {
         "operation": operation,
@@ -2330,7 +2562,7 @@ def start_registration_cancellation_preview(
     registration = frappe.get_doc("CCD Registration", registration_name)
     if int(registration.docstatus or 0) != 1:
         frappe.throw("Only a submitted CCD Registration can be cancelled")
-    registration_source_key(registration)
+    registration_retirement_source_key(registration)
     return _queue_registration_operation(
         operation="Preview",
         registration_name=str(registration.name),
@@ -2430,6 +2662,7 @@ def cancel_registration_with_retirement(
         if applied:
             return applied
         frappe.throw("Only a submitted CCD Registration can be cancelled")
+    _require_registration_retirement_ready(registration)
     confirmation = {
         "registration": str(registration.name),
         "scope_fingerprint": str(confirm_scope_fingerprint or ""),
@@ -2461,7 +2694,8 @@ def start_registration_cancellation_with_retirement(
     """Queue confirmed retirement/cancellation outside the web timeout."""
     _require_manager()
     registration = frappe.get_doc("CCD Registration", registration_name)
-    registration_source_key(registration)
+    registration_retirement_source_key(registration)
+    _require_registration_retirement_ready(registration)
     fingerprint = str(confirm_scope_fingerprint or "").strip()
     reason_text = str(reason or "").strip()
     if len(fingerprint) != 64:
@@ -2551,7 +2785,8 @@ def before_cancel_registration(registration: Any, method: str | None = None) -> 
             "Use Cancel with Identity Retirement: preview the impact and type "
             "the exact scope fingerprint before cancelling."
         )
-    source = registration_source_key(registration)
+    _require_registration_retirement_ready(registration)
+    source = registration_retirement_source_key(registration)
     result = _apply_source_retirement(
         source,
         None,
@@ -2564,8 +2799,12 @@ def before_cancel_registration(registration: Any, method: str | None = None) -> 
 
 def on_cancel_registration(registration: Any, method: str | None = None) -> None:
     """Remove the generated staging DocType after governed source retirement."""
+    source = registration_retirement_source_key(registration)
+    from db_connector.api_agent_sync import clear_source_retirement_hold
+
     target_doctype = str(registration.get("ccd_reg_doctype") or "").strip()
     if not target_doctype or not frappe.db.exists("DocType", target_doctype):
+        clear_source_retirement_hold(source, str(registration.name))
         return
     from db_connector.api_ccd import (
         drop_generated_table,
@@ -2593,6 +2832,7 @@ def on_cancel_registration(registration: Any, method: str | None = None) -> None
     frappe.delete_doc(
         "DocType", target_doctype, ignore_permissions=True, force=True
     )
+    clear_source_retirement_hold(source, str(registration.name))
 
 
 def validate_registration_source_key(

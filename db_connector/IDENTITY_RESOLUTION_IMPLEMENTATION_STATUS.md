@@ -176,6 +176,18 @@ exact-scope deletion, idempotent replay, and zero persisted probe rows/audits.
 A connection-local 100,000-key scale probe deleted 100 chunks in 1.469 seconds
 and left zero rows; it never inserted an ERPNext document.
 
+Registration replacement also fails closed at the agent boundary. A System
+Manager must stop the remote client agent and type the exact Desk confirmation;
+the server then persists an audited retirement hold, atomically rejects new
+source leases, blocks document-based CCD Master writes, and refuses retirement
+while an older lease is still draining. Only then can the fingerprint-confirmed
+retirement cancel the old revision. Amended revisions start with `Idle` sync
+state and no copied heartbeat/result/hold data. After submitting the replacement,
+the operator must install its current configuration and restart the client agent
+so the process performs fresh Registration discovery. The server cannot terminate
+a process on a remote client machine; the persisted interlock makes a missed or
+stale process unable to resume central synchronization through the old revision.
+
 Reviewer access was corrected for the named reviewer account: `ccd-user` and
 `System Manager` were removed, existing sessions were terminated, and live
 permission checks denied CCD Master read/create/write/delete/report/export/

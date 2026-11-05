@@ -11,6 +11,7 @@
 !api_ccd_fuzzy.md
 !api_ccd.py
 !api_ccd_matching.py
+!api_agent_sync.py
 !api_fuzzy_evaluation.py
 !api_fuzzy_canary.py
 !api_fuzzy_review_queue.py

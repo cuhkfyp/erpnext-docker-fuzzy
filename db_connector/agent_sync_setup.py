@@ -403,10 +403,65 @@ def _custom_fields() -> dict[str, list[dict[str, Any]]]:
                 **common,
             },
             {
+                "fieldname": "agent_retirement_safety_section",
+                "fieldtype": "Section Break",
+                "label": "Governed Retirement Safety",
+                "insert_after": "agent_sync_batch_size",
+                "description": (
+                    "A System Manager must stop the client agent and place a "
+                    "server-side hold before retiring this source."
+                ),
+                **common,
+            },
+            {
+                "fieldname": "agent_retirement_hold",
+                "fieldtype": "Check",
+                "label": "Agent Retirement Hold",
+                "default": "0",
+                "read_only": 1,
+                "insert_after": "agent_retirement_safety_section",
+                "description": (
+                    "Blocks new central-sync leases and agent writes while the "
+                    "governed source-retirement operation is prepared."
+                ),
+                **common,
+            },
+            {
+                "fieldname": "agent_retirement_hold_at",
+                "fieldtype": "Datetime",
+                "label": "Last Retirement Hold At",
+                "read_only": 1,
+                "insert_after": "agent_retirement_hold",
+                **common,
+            },
+            {
+                "fieldname": "agent_retirement_hold_column",
+                "fieldtype": "Column Break",
+                "insert_after": "agent_retirement_hold_at",
+                **common,
+            },
+            {
+                "fieldname": "agent_retirement_hold_by",
+                "fieldtype": "Link",
+                "options": "User",
+                "label": "Last Retirement Hold By",
+                "read_only": 1,
+                "insert_after": "agent_retirement_hold_column",
+                **common,
+            },
+            {
+                "fieldname": "agent_retirement_hold_note",
+                "fieldtype": "Small Text",
+                "label": "Latest Retirement Hold Event",
+                "read_only": 1,
+                "insert_after": "agent_retirement_hold_by",
+                **common,
+            },
+            {
                 "fieldname": "agent_sync_state_section",
                 "fieldtype": "Section Break",
                 "label": "Current State",
-                "insert_after": "agent_sync_batch_size",
+                "insert_after": "agent_retirement_hold_note",
                 **common,
             },
             {
@@ -844,6 +899,9 @@ def _apply_setup() -> dict[str, Any]:
     registration_validation = _install_registration_validation_scripts()
     refreshed_agent_installations = _refresh_active_agent_installations()
     legacy_after_submit = _disable_legacy_registration_after_submit()
+    from db_connector.api_agent_sync import repair_inherited_amended_sync_state
+
+    inherited_sync_state_repair = repair_inherited_amended_sync_state()
     indexes = _add_indexes()
     frappe.clear_cache(doctype="CCD Registration")
     frappe.clear_cache(doctype="CCD Master")
@@ -863,6 +921,7 @@ def _apply_setup() -> dict[str, Any]:
         "registration_validation": registration_validation,
         "refreshed_agent_installations": refreshed_agent_installations,
         "legacy_after_submit": legacy_after_submit,
+        "inherited_sync_state_repair": inherited_sync_state_repair,
         "indexes_added": indexes,
         "enabled": bool(frappe.db.get_single_value(SETTINGS_DOCTYPE, "enabled")),
     }

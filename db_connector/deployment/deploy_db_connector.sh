@@ -78,6 +78,7 @@ for container in "${containers[@]}"; do
 		# Existing containers already contain the full private app. Overlay only
 		# the versioned fuzzy component and its Frappe module controllers.
 		for relative in \
+			db_connector/api_agent_sync.py \
 			db_connector/api_ccd.py \
 			db_connector/api_ccd_matching.py \
 			db_connector/api_ccd_fuzzy.py \
