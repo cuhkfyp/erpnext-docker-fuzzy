@@ -1,4 +1,5 @@
 const REGISTRATION_RETIREMENT_API = "db_connector.api_identity_retirement";
+const AGENT_SYNC_API = "db_connector.api_agent_sync";
 const REGISTRATION_RETIREMENT_POLL_MS = 4000;
 
 function retirement_progress_dialog(title, initial_message) {
@@ -327,6 +328,89 @@ function start_registration_retirement_preview(frm) {
 	});
 }
 
+function show_master_baseline_adoption_confirmation(frm, preview) {
+	const exact_confirmation = preview.required_confirmation || "";
+	const dialog = new frappe.ui.Dialog({
+		title: __("Adopt Exact Existing Master Baseline"),
+		fields: [
+			{
+				fieldtype: "HTML",
+				options: `<div class="alert alert-warning">
+					<p><strong>${__("Zero-write recovery")}</strong></p>
+					<p>${__("This authorizes the current client agent to rebuild only its local CCD Master delta cache by proving that every incoming mapped value equals the existing Master row.")}</p>
+					<p>${__("Master inserts, updates, and deletions remain prohibited. Keep the client agent stopped until authorization completes; then start only the current agent.")}</p>
+					<ul>
+						<li>${__("Source")}: <code>${frappe.utils.escape_html(preview.source_id || "")}</code></li>
+						<li>${__("Staging / Master rows")}: ${preview.staging_count || 0} / ${preview.master_count || 0}</li>
+						<li>${__("Field mappings")}: ${preview.mapping_count || 0}</li>
+						<li>${__("Mapping fingerprint")}: <code>${frappe.utils.escape_html(preview.mapping_fingerprint || "")}</code></li>
+						<li>${__("Source-key fingerprint")}: <code>${frappe.utils.escape_html(preview.source_key_fingerprint || "")}</code></li>
+					</ul>
+					<p><strong>${__("Type exactly")}</strong><br><code style="overflow-wrap:anywhere">${frappe.utils.escape_html(exact_confirmation)}</code></p>
+				</div>`,
+			},
+			{
+				fieldname: "reason",
+				fieldtype: "Small Text",
+				label: __("Baseline-adoption reason"),
+				reqd: 1,
+			},
+			{
+				fieldname: "confirmation",
+				fieldtype: "Small Text",
+				label: __("Exact authorization confirmation"),
+				reqd: 1,
+			},
+		],
+		primary_action_label: __("Authorize Zero-Write Adoption"),
+		primary_action(values) {
+			if (String(values.confirmation || "").trim() !== exact_confirmation) {
+				frappe.throw(__("The typed baseline-adoption confirmation does not match."));
+			}
+			dialog.get_primary_btn().prop("disabled", true);
+			frappe.call({
+				method: `${AGENT_SYNC_API}.authorize_master_baseline_adoption`,
+				type: "POST",
+				args: {
+					registration: frm.doc.name,
+					scope_fingerprint: preview.scope_fingerprint,
+					confirmation: values.confirmation,
+					reason: values.reason,
+				},
+				callback(response) {
+					const result = response.message || {};
+					dialog.hide();
+					frappe.msgprint({
+						title: __("Existing Master Baseline Authorized"),
+						message: __("Authorization covers {0} exact existing rows. Start only the current client agent. It will confirm all mapped values and rebuild its local cache without changing CCD Master or identity state.", [result.expected_count || 0]),
+						indicator: "green",
+					});
+					frm.reload_doc();
+				},
+				error() {
+					dialog.get_primary_btn().prop("disabled", false);
+				},
+			});
+		},
+	});
+	dialog.show();
+}
+
+function start_master_baseline_adoption_preview(frm) {
+	frappe.call({
+		method: `${AGENT_SYNC_API}.preview_master_baseline_adoption`,
+		args: { registration: frm.doc.name },
+		freeze: true,
+		freeze_message: __("Verifying exact staging and Master source scope…"),
+		callback(response) {
+			const preview = response.message || {};
+			if (preview.scope_fingerprint) {
+				show_master_baseline_adoption_confirmation(frm, preview);
+			}
+		},
+	});
+}
+
 frappe.ui.form.on("CCD Registration", {
 	refresh(frm) {
 		if (frm.doc.docstatus !== 1 || !frappe.user_roles.includes("System Manager")) {
@@ -344,6 +428,18 @@ frappe.ui.form.on("CCD Registration", {
 					frm,
 					(readiness) => show_release_retirement_hold(frm, readiness),
 				),
+				__("Actions"),
+			);
+		}
+		if (
+			frm.doc.agent_sync_state === "Reconciliation Required"
+			&& !["Authorized", "In Progress"].includes(
+				frm.doc.agent_baseline_adoption_state,
+			)
+		) {
+			frm.add_custom_button(
+				__("Adopt Existing Master Baseline"),
+				() => start_master_baseline_adoption_preview(frm),
 				__("Actions"),
 			);
 		}

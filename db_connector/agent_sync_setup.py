@@ -562,6 +562,66 @@ def _custom_fields() -> dict[str, list[dict[str, Any]]]:
                 "insert_after": "agent_sync_last_result",
                 **common,
             },
+            {
+                "fieldname": "agent_baseline_adoption_section",
+                "fieldtype": "Section Break",
+                "label": "Governed Existing Master Baseline Adoption",
+                "insert_after": "agent_sync_last_error",
+                "description": (
+                    "Manager-authorized, zero-write recovery for an exact existing "
+                    "CCD Master population when the current client cache is missing."
+                ),
+                **common,
+            },
+            {
+                "fieldname": "agent_baseline_adoption_state",
+                "fieldtype": "Select",
+                "label": "Baseline Adoption State",
+                "options": "Not Requested\nAuthorized\nIn Progress\nCompleted\nFailed",
+                "default": "Not Requested",
+                "read_only": 1,
+                "insert_after": "agent_baseline_adoption_section",
+                **common,
+            },
+            {
+                "fieldname": "agent_baseline_adoption_expected_count",
+                "fieldtype": "Int",
+                "label": "Expected Existing Rows",
+                "read_only": 1,
+                "insert_after": "agent_baseline_adoption_state",
+                **common,
+            },
+            {
+                "fieldname": "agent_baseline_adoption_progress",
+                "fieldtype": "Int",
+                "label": "Exact Rows Confirmed",
+                "read_only": 1,
+                "insert_after": "agent_baseline_adoption_expected_count",
+                **common,
+            },
+            {
+                "fieldname": "agent_baseline_adoption_column",
+                "fieldtype": "Column Break",
+                "insert_after": "agent_baseline_adoption_progress",
+                **common,
+            },
+            {
+                "fieldname": "agent_baseline_adoption_event",
+                "fieldtype": "Small Text",
+                "label": "Latest Baseline Adoption Event",
+                "read_only": 1,
+                "insert_after": "agent_baseline_adoption_column",
+                **common,
+            },
+            {
+                "fieldname": "agent_baseline_adoption_payload",
+                "fieldtype": "Long Text",
+                "label": "Baseline Adoption Authorization Payload",
+                "read_only": 1,
+                "hidden": 1,
+                "insert_after": "agent_baseline_adoption_event",
+                **common,
+            },
         ],
         "CCD Master": [
             {

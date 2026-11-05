@@ -59,7 +59,142 @@ class RegistrationRetirementInterlockTests(unittest.TestCase):
         self.assertIsNone(registration.get("agent_sync_run_id"))
         self.assertIsNone(registration.get("agent_sync_heartbeat_at"))
         self.assertEqual(registration.get("agent_retirement_hold"), 0)
+        self.assertEqual(
+            registration.get("agent_baseline_adoption_state"), "Not Requested"
+        )
+        self.assertEqual(registration.get("agent_baseline_adoption_progress"), 0)
         self.assertEqual(registration.get("log_info"), [])
+
+    def test_existing_baseline_confirmation_compares_every_required_field(self):
+        field_types = {
+            "ccd_reg_source": "Data",
+            "ccd_source_key": "Data",
+            "chi_firstname": "Data",
+            "birthday": "Date",
+        }
+        meta = SimpleNamespace(
+            fields=[
+                SimpleNamespace(fieldname=name, fieldtype=fieldtype)
+                for name, fieldtype in field_types.items()
+            ],
+            get_field=lambda name: SimpleNamespace(
+                fieldname=name, fieldtype=field_types[name]
+            ),
+        )
+        incoming = {
+            "ccd_reg_source": "SOURCE",
+            "ccd_source_key": "1",
+            "chi_firstname": "大文",
+            "birthday": "1961-10-06",
+        }
+        stored = FakeDoc(name="HKSR1", **incoming)
+        with patch.object(agent_sync.frappe, "get_meta", return_value=meta), patch.object(
+            agent_sync.frappe, "get_all", return_value=[stored]
+        ):
+            keys = agent_sync._confirm_existing_baseline_rows(
+                [incoming],
+                [incoming],
+                "SOURCE",
+                ["chi_firstname", "birthday"],
+            )
+        self.assertEqual(keys, ["1"])
+
+        missing_field = dict(incoming)
+        missing_field.pop("birthday")
+        with patch.object(agent_sync.frappe, "get_meta", return_value=meta), patch.object(
+            agent_sync.frappe, "throw", side_effect=RuntimeError("blocked")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "blocked"):
+                agent_sync._confirm_existing_baseline_rows(
+                    [missing_field],
+                    [missing_field],
+                    "SOURCE",
+                    ["chi_firstname", "birthday"],
+                )
+
+    def test_failed_baseline_batch_never_falls_through_to_master_insert(self):
+        database = MagicMock()
+        doc = FakeDoc(name="R1", agent_sync_run_id="run-1")
+        adoption = {
+            "authorization_id": "auth-1",
+            "snapshot": {
+                "master_count": 2,
+                "mapped_fields": ["chi_firstname"],
+            },
+        }
+        rows = [
+            {
+                "ccd_reg_source": "SOURCE",
+                "ccd_source_key": "1",
+                "chi_firstname": "大文",
+            }
+        ]
+        with patch.object(agent_sync, "_require_writer"), patch.object(
+            agent_sync, "_registration", return_value=doc
+        ), patch.object(
+            agent_sync, "_validate_source", return_value="SOURCE"
+        ), patch.object(
+            agent_sync,
+            "_config",
+            return_value={"fast_insert_enabled": True, "batch_size": 500},
+        ), patch.object(agent_sync, "_require_lease"), patch.object(
+            agent_sync, "_validated_rows", return_value=rows
+        ), patch.object(
+            agent_sync, "_active_baseline_adoption", return_value=adoption
+        ), patch.object(
+            agent_sync,
+            "_confirm_existing_baseline_rows",
+            side_effect=RuntimeError("1:chi_firstname"),
+        ), patch.object(
+            agent_sync, "_baseline_progress_count", return_value=0
+        ), patch.object(agent_sync, "_bulk_insert_rows") as bulk_insert, patch.object(
+            agent_sync.frappe, "db", database
+        ):
+            result = inspect.unwrap(agent_sync.fast_insert_master_batch)(
+                "R1", "SOURCE", "lease", "run-1", rows
+            )
+        self.assertEqual(result["inserted"], 0)
+        self.assertEqual(result["accepted"], 0)
+        self.assertTrue(result["errors"])
+        self.assertTrue(adoption["failed"])
+        bulk_insert.assert_not_called()
+        database.set_value.assert_called_once()
+
+    def test_completed_baseline_releases_lease_without_postprocessing(self):
+        database = MagicMock()
+        cache = MagicMock()
+        cache.eval.return_value = 1
+        doc = FakeDoc(name="R1", agent_sync_run_id="run-1")
+        adoption = {
+            "authorization_id": "auth-1",
+            "scope_fingerprint": "scope",
+        }
+        snapshot = {"master_count": 2, "mapping_count": 20}
+        with patch.object(agent_sync, "_require_writer"), patch.object(
+            agent_sync, "_registration", return_value=doc
+        ), patch.object(
+            agent_sync, "_validate_source", return_value="SOURCE"
+        ), patch.object(agent_sync, "_require_lease"), patch.object(
+            agent_sync, "_active_baseline_adoption", return_value=adoption
+        ), patch.object(
+            agent_sync, "_validated_baseline_population", return_value=snapshot
+        ), patch.object(
+            agent_sync, "_baseline_scope_fingerprint", return_value="scope"
+        ), patch.object(
+            agent_sync, "_baseline_progress_count", return_value=2
+        ), patch.object(
+            agent_sync, "_lease_keys", return_value=(b"source", b"slots")
+        ), patch.object(agent_sync.frappe, "cache", cache), patch.object(
+            agent_sync.frappe, "db", database
+        ), patch.object(agent_sync, "_enqueue_postprocess") as enqueue:
+            result = inspect.unwrap(agent_sync.finish_sync)(
+                "R1", "SOURCE", "lease", "run-1", 1, [], []
+            )
+        self.assertEqual(result["state"], "Succeeded")
+        self.assertTrue(result["baseline_adoption"])
+        self.assertEqual(result["confirmed_existing"], 2)
+        enqueue.assert_not_called()
+        database.set_value.assert_called_once()
 
     def test_agent_api_rejects_a_held_registration(self):
         database = MagicMock()
