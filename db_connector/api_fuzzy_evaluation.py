@@ -245,7 +245,8 @@ def _row_value(row: Any, fieldname: str, default: Any = "") -> Any:
 
 def _registration_stable_source_key(registration: Any) -> str:
     value = str(
-        getattr(registration, "ccd_stable_source_key", "")
+        getattr(registration, "agent_sync_source_id", "")
+        or getattr(registration, "ccd_stable_source_key", "")
         or getattr(registration, "ccd_reg_doctype", "")
         or registration.name
     ).strip()
@@ -1055,31 +1056,44 @@ def install_matching_roles() -> dict[str, str]:
 
 
 def _latest_registration_for_source(source: str) -> Any | None:
-    fields = ["name", "ccd_reg_doctype", "ccd_stable_source_key", "modified"]
-    rows = frappe.get_all(
+    fields = [
+        "name",
+        "ccd_reg_doctype",
+        "ccd_stable_source_key",
+        "agent_sync_source_id",
+        "modified",
+    ]
+    candidates = frappe.get_all(
         "CCD Registration",
-        filters={"docstatus": 1, "ccd_stable_source_key": source},
+        filters={"docstatus": 1},
         fields=fields,
         order_by="modified desc, creation desc, name desc",
-        limit_page_length=100,
+        limit_page_length=100_000,
     )
-    if not rows:
+
+    def effective_source(row: Any) -> str:
+        governed_source = str(row.agent_sync_source_id or "").strip()
+        if governed_source:
+            return governed_source
+        configured_source = str(row.ccd_stable_source_key or "").strip()
+        if configured_source:
+            return configured_source
         from db_connector.api_identity_retirement import stable_source_key
 
-        candidates = frappe.get_all(
-            "CCD Registration",
-            filters={"docstatus": 1},
-            fields=fields,
-            order_by="modified desc, creation desc, name desc",
-            limit_page_length=100_000,
-        )
-        rows = [
-            row
-            for row in candidates
+        return (
+            stable_source_key(row.ccd_reg_doctype)
             if row.ccd_reg_doctype
-            and stable_source_key(row.ccd_reg_doctype) == str(source)
-        ]
-    return frappe.get_doc("CCD Registration", rows[0].name) if rows else None
+            else ""
+        )
+
+    matching = [
+        row for row in candidates if effective_source(row) == str(source)
+    ]
+    return (
+        frappe.get_doc("CCD Registration", matching[0].name)
+        if matching
+        else None
+    )
 
 
 def _sync_policy_source_profiles(policy_name: str) -> dict[str, Any]:

@@ -120,6 +120,77 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertEqual(by_attribute["hkid"]["reliability_status"], "Approved")
         self.assertNotIn("res_addr1", {row["fieldname"] for row in rows})
 
+    def test_latest_registration_uses_governed_agent_source_identity(self):
+        rows = [
+            types.SimpleNamespace(
+                name="REG-AMENDED",
+                ccd_reg_doctype="CCD-REG-HOST_DB_NEW",
+                ccd_stable_source_key="HOST_DB_NEW",
+                agent_sync_source_id="HOST-DB-IMMUTABLE",
+                modified="2026-11-06",
+            ),
+            types.SimpleNamespace(
+                name="REG-OTHER",
+                ccd_reg_doctype="CCD-REG-HOST_DB_OLD",
+                ccd_stable_source_key="HOST-DB-IMMUTABLE",
+                agent_sync_source_id="OTHER-GOVERNED-SOURCE",
+                modified="2026-11-05",
+            ),
+        ]
+        with patch.object(
+            self.module.frappe,
+            "get_all",
+            return_value=rows,
+            create=True,
+        ), patch.object(
+            self.module.frappe,
+            "get_doc",
+            side_effect=lambda _doctype, name: types.SimpleNamespace(name=name),
+            create=True,
+        ):
+            registration = self.module._latest_registration_for_source(
+                "HOST-DB-IMMUTABLE"
+            )
+        self.assertEqual(registration.name, "REG-AMENDED")
+
+    def test_registration_profile_prefers_governed_agent_source_identity(self):
+        registration = types.SimpleNamespace(
+            name="REG-AMENDED",
+            agent_sync_source_id="HOST-DB-IMMUTABLE",
+            ccd_stable_source_key="HOST_DB_NEW",
+            ccd_reg_doctype="CCD-REG-HOST_DB_NEW",
+        )
+        self.assertEqual(
+            self.module._registration_stable_source_key(registration),
+            "HOST-DB-IMMUTABLE",
+        )
+
+    def test_latest_registration_does_not_use_shadowed_stable_source(self):
+        rows = [
+            types.SimpleNamespace(
+                name="REG-SHADOWED",
+                ccd_reg_doctype="CCD-REG-HOST_DB",
+                ccd_stable_source_key="HOST-DB-IMMUTABLE",
+                agent_sync_source_id="OTHER-GOVERNED-SOURCE",
+                modified="2026-11-06",
+            )
+        ]
+        with patch.object(
+            self.module.frappe,
+            "get_all",
+            return_value=rows,
+            create=True,
+        ), patch.object(
+            self.module.frappe,
+            "get_doc",
+            create=True,
+        ) as get_doc:
+            registration = self.module._latest_registration_for_source(
+                "HOST-DB-IMMUTABLE"
+            )
+        self.assertIsNone(registration)
+        get_doc.assert_not_called()
+
     def test_formula_record_fields_cover_all_supported_macros(self):
         fields = self.module._formula_record_fields(
             [
