@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import pathlib
 import unittest
 
@@ -14,7 +15,7 @@ class ClientAgentArtifactTests(unittest.TestCase):
     def test_agent_has_a_visible_deployment_version(self):
         source = AGENT_SOURCE.read_text(encoding="utf-8")
         self.assertIn(
-            'AGENT_PROGRAM_VERSION = "2026.11.05-governed-staging-v3"',
+            'AGENT_PROGRAM_VERSION = "2026.11.06-governed-staging-v3.1"',
             source,
         )
         self.assertIn("CCD Agent version:", source)
@@ -110,6 +111,83 @@ class ClientAgentArtifactTests(unittest.TestCase):
         self.assertLess(completion_gate, stability_check)
         self.assertLess(stability_check, save)
         self.assertIn("0 inserted, 0 deleted, 0 updated", adoption_branch)
+
+    def test_staging_cache_is_scoped_to_exact_registration_generation(self):
+        daemon_source = self._generated_job_daemon()
+        tree = ast.parse(daemon_source)
+        scope_validator = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "delta_cache_matches_current_scope"
+        )
+        namespace = {
+            "_hashlib": hashlib,
+            "source_id": "stable-source",
+            "registration_id": "registration-amended-2",
+            "_authorized_sync_generation": "new-generation",
+        }
+        exec(
+            compile(
+                ast.Module(body=[scope_validator], type_ignores=[]),
+                "generated_scope_validator.py",
+                "exec",
+            ),
+            namespace,
+        )
+        validator = namespace["delta_cache_matches_current_scope"]
+        current_cache = {
+            "version": 2,
+            "source_id": "stable-source",
+            "registration_id": "registration-amended-2",
+            "sync_generation": "new-generation",
+            "records": {"1": "hash"},
+        }
+        self.assertTrue(validator(current_cache))
+
+        for stale_field, stale_value in (
+            ("registration_id", "registration-retired-1"),
+            ("sync_generation", "old-generation"),
+            ("source_id", "other-source"),
+            ("version", 1),
+        ):
+            stale_cache = dict(current_cache)
+            stale_cache[stale_field] = stale_value
+            self.assertFalse(
+                validator(stale_cache),
+                f"cache with stale {stale_field} was incorrectly accepted",
+            )
+
+    def test_both_staging_paths_ignore_out_of_scope_cache_before_delta(self):
+        daemon_source = self._generated_job_daemon()
+        bulk_start = daemon_source.index(
+            'if step_upper.startswith("SYNC_TO_CCD_REG_BULK"):'
+        )
+        single_start = daemon_source.index(
+            'if step_upper.startswith("SYNC_TO_CCD_REG"):', bulk_start
+        )
+        master_start = daemon_source.index(
+            'if step_upper.startswith("SYNC_TO_CCD_MASTER_BULK"):',
+            single_start,
+        )
+
+        for staging_path in (
+            daemon_source[bulk_start:single_start],
+            daemon_source[single_start:master_start],
+        ):
+            scope_check = staging_path.index(
+                "delta_cache_matches_current_scope(_cache_state)"
+            )
+            ignore_cache = staging_path.index(
+                "None\n                if _cache_scope_mismatch"
+            )
+            target_inspection = staging_path.index(
+                "inspect_registration_target_state("
+            )
+            delta_calculation = staging_path.index("to_insert = [")
+            self.assertLess(scope_check, ignore_cache)
+            self.assertLess(ignore_cache, target_inspection)
+            self.assertLess(target_inspection, delta_calculation)
 
     def test_rejected_master_baseline_batch_never_uses_existence_checkpoint(self):
         source = AGENT_SOURCE.read_text(encoding="utf-8")
