@@ -424,6 +424,31 @@ class RegistrationRetirementInterlockTests(unittest.TestCase):
                     "R1", "SOURCE", "generation"
                 )
 
+    def test_governed_staging_comparison_rejects_duplicate_source_keys(self):
+        rows = [
+            FakeDoc(name="ROW-1", ccd_source_key="1", birthday="1961-10-06"),
+            FakeDoc(name="ROW-2", ccd_source_key="1", birthday="1961-10-06"),
+        ]
+        with patch.object(agent_sync, "_require_writer"), patch.object(
+            agent_sync,
+            "_staging_scope",
+            return_value=(FakeDoc(name="R1"), "SOURCE", "generation", "CCD-REG-R1"),
+        ), patch.object(
+            agent_sync,
+            "_staging_baseline_fields",
+            return_value={"ccd_source_key": "Data", "birthday": "Date"},
+        ), patch.object(
+            agent_sync, "_settings", return_value={"maximum_batch_size": 1000}
+        ), patch.object(
+            agent_sync.frappe, "get_all", return_value=rows
+        ), patch.object(
+            agent_sync.frappe, "throw", side_effect=RuntimeError("duplicate")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "duplicate"):
+                inspect.unwrap(agent_sync.get_registration_rows)(
+                    "R1", "SOURCE", "generation", ["1"], ["birthday"]
+                )
+
     def test_legacy_staging_guard_is_default_off_then_fail_closed(self):
         with patch.object(agent_sync, "_require_writer"), patch.object(
             agent_sync, "_settings", return_value={"enforce_agent_v3_staging_fence": 0}
