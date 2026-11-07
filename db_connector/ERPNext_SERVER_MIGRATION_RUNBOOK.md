@@ -1530,3 +1530,34 @@ Before declaring transfer complete, record:
 
 If these sources disagree, stop before activation and reconcile the
 documentation and deployed commit first.
+
+### 13.1 Evaluation-derived Splink prospective validation
+
+For a new governed source population, open its Ready **CCD Match Review Queue
+Run** and use **Preview Validation Inventory** before creating a cohort. Verify:
+
+1. `authorization_protocol` is `evaluation-high-v2`;
+2. the cutoff equals the approved Threshold Evaluation's displayed High
+   threshold and is above the queue Review cutoff;
+3. the displayed Wilson lower target matches the approved policy governance
+   value and is not below 0.80;
+4. at least 215 untouched isolated pairs are eligible;
+5. validation allocations total 165, holdout allocations total 50, every
+   requested stratum count is within its available population, and all checks
+   are true; and
+6. `identity_writes` is zero.
+
+Use **Create Splink Automatic Validation**, retain the displayed cutoff,
+target, and allocation report, accept the generated 64-character hexadecimal
+seed once, record it in the governance evidence, and type the exact Queue ID.
+Do not retry with alternative seeds to obtain preferred cases. Only the 165
+validation pairs become visible for masked two-reviewer work; the 50 holdout
+pairs remain reserved and blinded.
+
+Finalization applies the precision target frozen on that run. Management must
+still inspect observed precision, the Wilson interval, source subgroup
+metrics, stale/unresolved counts, and provenance before approval. Holdout
+rollout, full holdout QC, combined gate, second approval, enablement, and
+ongoing rolling QC use the same frozen target. Legacy runs without the v2
+protocol retain the historical `0.999148140`/0.95 interpretation. Never edit a
+run's cutoff, target, allocation, or fingerprint directly.

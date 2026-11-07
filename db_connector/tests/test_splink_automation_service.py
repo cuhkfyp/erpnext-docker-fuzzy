@@ -62,6 +62,58 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         )
         self.assertIn("Retry", event_field["options"].splitlines())
 
+    def test_queue_uses_approved_evaluation_high_cutoff(self):
+        queue = types.SimpleNamespace(
+            threshold_evaluation_run="evaluation-run",
+            review_threshold=0.222831503,
+        )
+        evaluation = types.SimpleNamespace(
+            status="Completed",
+            approval_status="Approved",
+            metrics_json=json.dumps(
+                {
+                    "models": {
+                        "fellegi_sunter_calibration": {
+                            "validation_ready": True,
+                            "high_threshold": 0.997092444,
+                            "held_out_high": {
+                                "precision": 0.9696969697,
+                                "precision_wilson_95": [0.8468, 0.9916],
+                            },
+                        }
+                    }
+                }
+            ),
+        )
+        with patch.object(service.frappe, "get_doc", return_value=evaluation):
+            self.assertEqual(
+                service._evaluation_automatic_cutoff(queue),
+                0.997092444,
+            )
+            self.assertEqual(
+                service._evaluation_automatic_cutoff(
+                    queue,
+                    minimum_wilson_lower=0.80,
+                ),
+                0.997092444,
+            )
+            with self.assertRaises(Exception):
+                service._evaluation_automatic_cutoff(
+                    queue,
+                    minimum_wilson_lower=0.85,
+                )
+
+    def test_queue_precision_target_accepts_80_percent_but_rejects_lower(self):
+        queue = types.SimpleNamespace(matching_policy="pilot-1.9")
+        policy = types.SimpleNamespace(splink_validation_precision_lower_target=0.80)
+        with patch.object(service.frappe, "get_doc", return_value=policy):
+            self.assertEqual(service._queue_precision_lower_target(queue), 0.80)
+        policy.splink_validation_precision_lower_target = 0.79
+        with patch.object(service.frappe, "get_doc", return_value=policy), self.assertRaises(
+            Exception
+        ):
+            service._queue_precision_lower_target(queue)
+
     def test_splink_retry_replaces_the_previous_failed_queue_job(self):
         batch = types.SimpleNamespace(
             name="failed-batch",

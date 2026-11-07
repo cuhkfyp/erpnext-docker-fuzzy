@@ -21,6 +21,7 @@ HOLDOUT_SIZE = 50
 MIN_VALID_VALIDATION = 150
 MIN_ELIGIBLE_HOLDOUT = 45
 PRECISION_LOWER_TARGET = 0.95
+MINIMUM_GOVERNED_PRECISION_LOWER_TARGET = 0.80
 WEEKLY_PAIR_CAPACITY = 20
 
 VALIDATION_SOURCE_ALLOCATION = {
@@ -187,6 +188,126 @@ def select_stratified_cohorts(
     return {"validation": tuple(validation), "holdout": tuple(holdout)}
 
 
+def _bounded_proportional_allocation(
+    capacities: Mapping[str, int],
+    total: int,
+    *,
+    minimum_per_active_source: int = 0,
+) -> dict[str, int]:
+    """Allocate an exact total proportionally without exceeding a stratum.
+
+    Ties are resolved by the canonical source-pair name, so a frozen population
+    always produces the same allocation.  A small floor may be used to retain
+    source coverage before the Hamilton-style proportional remainder is
+    assigned.
+    """
+    available = {
+        canonical_source_pair(source): max(int(count), 0)
+        for source, count in capacities.items()
+        if int(count) > 0
+    }
+    requested = int(total)
+    if requested < 0:
+        raise ValueError("Cohort allocation total cannot be negative")
+    if sum(available.values()) < requested:
+        raise ValueError(
+            f"Only {sum(available.values())} eligible pairs are available; "
+            f"{requested} required"
+        )
+    allocation = {source: 0 for source in sorted(available)}
+    if not requested:
+        return allocation
+
+    floor = max(int(minimum_per_active_source), 0)
+    if floor and requested >= len(available) * floor:
+        for source in allocation:
+            granted = min(floor, available[source])
+            allocation[source] = granted
+            requested -= granted
+
+    while requested:
+        remaining_capacity = {
+            source: available[source] - allocation[source]
+            for source in allocation
+            if available[source] > allocation[source]
+        }
+        if not remaining_capacity:
+            raise ValueError("Cohort allocation exhausted all source capacities")
+        denominator = sum(remaining_capacity.values())
+        quotas = {
+            source: requested * capacity / denominator
+            for source, capacity in remaining_capacity.items()
+        }
+        floor_grants = {
+            source: min(int(math.floor(quota)), remaining_capacity[source])
+            for source, quota in quotas.items()
+        }
+        granted = sum(floor_grants.values())
+        for source, count in floor_grants.items():
+            allocation[source] += count
+        requested -= granted
+        if not requested:
+            break
+
+        ranked = sorted(
+            (
+                (quotas[source] - math.floor(quotas[source]), source)
+                for source in remaining_capacity
+                if allocation[source] < available[source]
+            ),
+            key=lambda item: (-item[0], item[1]),
+        )
+        if not ranked:
+            continue
+        for _fraction, source in ranked:
+            if not requested:
+                break
+            if allocation[source] >= available[source]:
+                continue
+            allocation[source] += 1
+            requested -= 1
+    return allocation
+
+
+def proportional_source_allocations(
+    available_by_source: Mapping[str, int],
+    *,
+    validation_size: int = VALIDATION_SIZE,
+    holdout_size: int = HOLDOUT_SIZE,
+) -> dict[str, dict[str, int]]:
+    """Derive deterministic source-stratified validation/holdout allocations.
+
+    Every represented source receives a validation case when the cohort is
+    large enough.  Holdout allocation is then computed from the remaining
+    capacity, keeping both cohorts disjoint and bounded by the frozen queue.
+    """
+    available = {
+        canonical_source_pair(source): max(int(count), 0)
+        for source, count in available_by_source.items()
+        if int(count) > 0
+    }
+    validation = _bounded_proportional_allocation(
+        available,
+        int(validation_size),
+        minimum_per_active_source=1,
+    )
+    remaining = {
+        source: available[source] - validation.get(source, 0)
+        for source in available
+    }
+    holdout = _bounded_proportional_allocation(
+        remaining,
+        int(holdout_size),
+    )
+    for source in sorted(available):
+        validation.setdefault(source, 0)
+        holdout.setdefault(source, 0)
+    return {
+        "validation": dict(sorted(validation.items())),
+        "holdout": dict(sorted(holdout.items())),
+    }
+
+
 def validation_gate(
     labels: Sequence[str],
     *,
@@ -231,7 +352,10 @@ def provenance_fingerprint(values: Mapping[str, Any]) -> str:
     missing = [name for name in required if values.get(name) in (None, "")]
     if missing:
         raise ValueError("Missing frozen provenance: " + ", ".join(missing))
-    canonical = "\x1e".join(f"{name}={values[name]}" for name in required)
+    governed = list(required)
+    optional = ("authorization_protocol", "precision_lower_target")
+    governed.extend(name for name in optional if values.get(name) not in (None, ""))
+    canonical = "\x1e".join(f"{name}={values[name]}" for name in governed)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -239,7 +363,7 @@ def authorization_staleness(
     frozen: Mapping[str, Any], current: Mapping[str, Any]
 ) -> tuple[str, ...]:
     """Return full-authorization invalidators, excluding record-level drift."""
-    governed = (
+    governed = [
         "queue_run",
         "canary_run",
         "policy_snapshot_sha256",
@@ -247,6 +371,11 @@ def authorization_staleness(
         "runtime_versions_json",
         "source_scope_json",
         "frozen_cutoff",
+    ]
+    governed.extend(
+        name
+        for name in ("authorization_protocol", "precision_lower_target")
+        if frozen.get(name) not in (None, "") or current.get(name) not in (None, "")
     )
     return tuple(name for name in governed if str(frozen.get(name)) != str(current.get(name)))
 

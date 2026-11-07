@@ -414,6 +414,13 @@ function render_hybrid_validation_progress(frm) {
 }
 
 function add_splink_validation_actions(frm) {
+	frm.dashboard.set_headline_alert(
+		__("Frozen Splink cutoff {0}; Wilson 95% lower-bound target {1}%.", [
+			Number(frm.doc.frozen_automatic_cutoff || 0).toFixed(12),
+			(Number(frm.doc.validation_precision_lower_target || 0.95) * 100).toFixed(2),
+		]),
+		"blue",
+	);
 	if (frm.doc.status === "Reviewing") {
 		frm.add_custom_button(__("Finalize Frozen Validation"), () => frappe.call({
 			method: "db_connector.api_splink_automation.finalize_splink_automatic_validation",

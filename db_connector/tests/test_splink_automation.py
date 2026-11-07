@@ -12,6 +12,7 @@ from fuzzy_matching.splink_automation import (
     automatic_components,
     canonical_source_pair,
     component_metadata,
+    proportional_source_allocations,
     select_stratified_cohorts,
     validation_gate,
 )
@@ -96,6 +97,41 @@ class SplinkAutomationHelperTests(unittest.TestCase):
         self.assertTrue(two["passed"])
         self.assertFalse(three["passed"])
         self.assertLess(three["wilson_95"][0], 0.95)
+
+    def test_governed_80_percent_gate_passes_22_but_not_23_different(self):
+        twenty_two = validation_gate(
+            ["Same"] * 143 + ["Different"] * 22,
+            lower_target=0.80,
+        )
+        twenty_three = validation_gate(
+            ["Same"] * 142 + ["Different"] * 23,
+            lower_target=0.80,
+        )
+        self.assertTrue(twenty_two["passed"])
+        self.assertFalse(twenty_three["passed"])
+        self.assertGreaterEqual(twenty_two["wilson_95"][0], 0.80)
+        self.assertLess(twenty_three["wilson_95"][0], 0.80)
+
+    def test_dynamic_source_allocation_is_exact_bounded_and_deterministic(self):
+        available = {
+            "Source-A::Source-B": 600,
+            "Source-A::Source-C": 100,
+            "Source-A::Source-D": 40,
+            "Source-B::Source-C": 20,
+            "Source-B::Source-D": 10,
+            "Source-C::Source-D": 5,
+        }
+        first = proportional_source_allocations(available)
+        second = proportional_source_allocations(dict(reversed(list(available.items()))))
+        self.assertEqual(first, second)
+        self.assertEqual(sum(first["validation"].values()), 165)
+        self.assertEqual(sum(first["holdout"].values()), 50)
+        self.assertTrue(all(count >= 1 for count in first["validation"].values()))
+        for source, capacity in available.items():
+            self.assertLessEqual(
+                first["validation"][source] + first["holdout"][source],
+                capacity,
+            )
 
     def test_validation_attrition_and_unresolved_fail_closed(self):
         self.assertFalse(validation_gate(["Same"] * 149)["passed"])

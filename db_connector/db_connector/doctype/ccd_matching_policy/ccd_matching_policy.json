@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "policy_version", "title", "status", "trusted_global_identifiers",
-  "high_precision_target", "minimum_high_samples", "minimum_positive_labels_per_split", "max_block_size",
+  "high_precision_target", "minimum_high_samples", "minimum_positive_labels_per_split", "splink_validation_precision_lower_target", "max_block_size",
   "max_candidate_pairs", "source_profiles", "notes"
  ],
  "fields": [
@@ -17,6 +17,7 @@
   {"default": "0.95", "fieldname": "high_precision_target", "fieldtype": "Float", "label": "High Precision Target", "reqd": 1},
   {"default": "30", "fieldname": "minimum_high_samples", "fieldtype": "Int", "label": "Minimum High Samples", "reqd": 1},
   {"default": "10", "description": "Minimum confirmed Same labels required independently in both calibration and held-out partitions before candidate thresholds are considered validation-ready.", "fieldname": "minimum_positive_labels_per_split", "fieldtype": "Int", "label": "Minimum Positive Labels per Split", "reqd": 1},
+  {"default": "0.95", "description": "Governed Wilson 95% lower-bound requirement for a new Splink automatic-validation cohort. Values below 0.80 are rejected. The value is frozen into each authorization and changing it invalidates that authorization.", "fieldname": "splink_validation_precision_lower_target", "fieldtype": "Float", "label": "Splink Validation Precision Lower Target (0-1)", "precision": "6", "reqd": 1},
   {"default": "10000", "fieldname": "max_block_size", "fieldtype": "Int", "label": "Maximum Block Size", "reqd": 1},
   {"default": "500000", "fieldname": "max_candidate_pairs", "fieldtype": "Int", "label": "Maximum Candidate Pairs", "reqd": 1},
   {"fieldname": "source_profiles", "fieldtype": "Table", "label": "Source Profiles", "options": "CCD Matching Source Profile"},

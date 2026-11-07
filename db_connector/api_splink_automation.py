@@ -31,15 +31,16 @@ from db_connector.fuzzy_matching.identity import expected_identity_fingerprints
 from db_connector.fuzzy_matching.splink_automation import (
     FROZEN_AUTOMATIC_CUTOFF,
     HOLDOUT_SIZE,
-    HOLDOUT_SOURCE_ALLOCATION,
+    MINIMUM_GOVERNED_PRECISION_LOWER_TARGET,
     MIN_ELIGIBLE_HOLDOUT,
+    PRECISION_LOWER_TARGET,
     VALIDATION_SIZE,
-    VALIDATION_SOURCE_ALLOCATION,
     WEEKLY_PAIR_CAPACITY,
     allocate_shared_capacity,
     automatic_components,
     canonical_source_pair,
     component_metadata,
+    proportional_source_allocations,
     provenance_fingerprint,
     select_stratified_cohorts,
     validation_gate,
@@ -57,9 +58,7 @@ RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 CANARY_RUN_DOCTYPE = "CCD Match Canary Run"
 GROUP_DOCTYPE = "CCD Identity Group"
 FINAL_STATUSES = {"Agreed", "Adjudicated"}
-EXPECTED_ULTRA_HIGH_EDGES = 402
-EXPECTED_ISOLATED_PAIRS = 223
-EXPECTED_PREVIOUSLY_REVIEWED = 8
+SPLINK_AUTHORIZATION_PROTOCOL = "evaluation-high-v2"
 
 
 def _json(value: Any) -> str:
@@ -197,9 +196,15 @@ def _runtime_versions(queue: Any) -> str:
     )
 
 
-def _provenance_values(queue: Any, *, cutoff: float) -> dict[str, Any]:
+def _provenance_values(
+    queue: Any,
+    *,
+    cutoff: float,
+    protocol: str = "",
+    precision_lower_target: float | None = None,
+) -> dict[str, Any]:
     evaluation = frappe.get_doc(RUN_DOCTYPE, queue.threshold_evaluation_run)
-    return {
+    values = {
         "queue_run": str(queue.name),
         "canary_run": str(queue.canary_run),
         "policy_snapshot_sha256": str(queue.policy_snapshot_sha256),
@@ -208,6 +213,71 @@ def _provenance_values(queue: Any, *, cutoff: float) -> dict[str, Any]:
         "source_scope_json": _source_scope(queue),
         "frozen_cutoff": f"{float(cutoff):.12f}",
     }
+    if protocol:
+        values["authorization_protocol"] = str(protocol)
+        values["precision_lower_target"] = f"{float(precision_lower_target):.9f}"
+    return values
+
+
+def _evaluation_automatic_cutoff(
+    queue: Any, *, minimum_wilson_lower: float | None = None
+) -> float:
+    """Return the approved held-out-validated High threshold for this queue."""
+    evaluation = frappe.get_doc(RUN_DOCTYPE, queue.threshold_evaluation_run)
+    if evaluation.status != "Completed" or evaluation.approval_status != "Approved":
+        frappe.throw("The queue threshold evaluation is not approved")
+    metrics = json.loads(evaluation.metrics_json or "{}")
+    calibration = (metrics.get("models") or {}).get(
+        "fellegi_sunter_calibration"
+    ) or {}
+    cutoff = calibration.get("high_threshold")
+    held_out = calibration.get("held_out_high") or {}
+    if (
+        not calibration.get("validation_ready")
+        or cutoff is None
+        or held_out.get("precision") is None
+    ):
+        frappe.throw(
+            "The approved evaluation has no held-out-validated Splink High cutoff"
+        )
+    if minimum_wilson_lower is not None:
+        precision_wilson = held_out.get("precision_wilson_95") or ()
+        if not precision_wilson or float(precision_wilson[0]) < float(
+            minimum_wilson_lower
+        ):
+            frappe.throw(
+                "The approved evaluation held-out Wilson lower bound is below "
+                "the governed Splink precision target"
+            )
+    value = float(cutoff)
+    if value <= float(queue.review_threshold or 0) or value > 1:
+        frappe.throw("The approved Splink High cutoff is outside the queue score range")
+    return value
+
+
+def _queue_precision_lower_target(queue: Any) -> float:
+    """Return the manager-governed target independently of model calibration."""
+    policy = frappe.get_doc("CCD Matching Policy", queue.matching_policy)
+    value = float(
+        getattr(policy, "splink_validation_precision_lower_target", 0)
+        or PRECISION_LOWER_TARGET
+    )
+    if not MINIMUM_GOVERNED_PRECISION_LOWER_TARGET <= value <= 1:
+        frappe.throw(
+            "Splink validation precision lower target must be between "
+            f"{MINIMUM_GOVERNED_PRECISION_LOWER_TARGET:.2f} and 1.00"
+        )
+    return value
+
+
+def _run_precision_lower_target(run: Any) -> float:
+    protocol = str(getattr(run, "splink_authorization_protocol", "") or "")
+    if protocol != SPLINK_AUTHORIZATION_PROTOCOL:
+        return PRECISION_LOWER_TARGET
+    value = float(getattr(run, "validation_precision_lower_target", 0) or 0)
+    if not MINIMUM_GOVERNED_PRECISION_LOWER_TARGET <= value <= 1:
+        frappe.throw("The frozen Splink precision target is invalid")
+    return value
 
 
 def _matching_ready_queue(run: Any, frozen_queue: Any) -> Any | None:
@@ -261,16 +331,37 @@ def _authorization_current(run: Any) -> tuple[bool, list[str]]:
         reasons.append(f"frozen_queue_unavailable:{queue.status}")
     elif queue.status == "Superseded" and not _matching_ready_queue(run, queue):
         reasons.append("no_provenance_identical_ready_replacement_queue")
+    protocol = str(getattr(run, "splink_authorization_protocol", "") or "")
+    precision_lower_target = _run_precision_lower_target(run)
     current = _provenance_values(
-        queue, cutoff=float(run.frozen_automatic_cutoff or 0)
+        queue,
+        cutoff=float(run.frozen_automatic_cutoff or 0),
+        protocol=protocol,
+        precision_lower_target=precision_lower_target,
     )
     current_fingerprint = provenance_fingerprint(current)
     if current_fingerprint != str(run.authorization_fingerprint or ""):
         reasons.append("frozen_provenance_changed")
     if str(queue.canary_run) != str(run.validation_canary_run):
         reasons.append("canary_changed")
-    if abs(float(run.frozen_automatic_cutoff or 0) - FROZEN_AUTOMATIC_CUTOFF) > 1e-12:
-        reasons.append("frozen_cutoff_changed")
+    if protocol == SPLINK_AUTHORIZATION_PROTOCOL:
+        try:
+            approved_cutoff = _evaluation_automatic_cutoff(
+                queue,
+                minimum_wilson_lower=precision_lower_target,
+            )
+            if abs(float(run.frozen_automatic_cutoff or 0) - approved_cutoff) > 1e-12:
+                reasons.append("approved_evaluation_cutoff_changed")
+            if abs(precision_lower_target - _queue_precision_lower_target(queue)) > 1e-12:
+                reasons.append("precision_lower_target_changed")
+        except Exception as exc:
+            reasons.append(f"automatic_governance_unavailable:{type(exc).__name__}")
+    elif abs(
+        float(run.frozen_automatic_cutoff or 0) - FROZEN_AUTOMATIC_CUTOFF
+    ) > 1e-12:
+        # Preserve verification of immutable legacy authorizations without
+        # retroactively rewriting their historical fingerprint.
+        reasons.append("legacy_frozen_cutoff_changed")
     try:
         from db_connector.api_fuzzy_canary import (
             _policy_from_doc,
@@ -327,7 +418,12 @@ def _mark_validation_stale(run: Any, reasons: list[str]) -> None:
 
 
 def _validation_inventory(queue: Any) -> dict[str, Any]:
-    rows = _queue_rows(queue.name, minimum_score=FROZEN_AUTOMATIC_CUTOFF)
+    precision_lower_target = _queue_precision_lower_target(queue)
+    cutoff = _evaluation_automatic_cutoff(
+        queue,
+        minimum_wilson_lower=precision_lower_target,
+    )
+    rows = _queue_rows(queue.name, minimum_score=cutoff)
     metadata = component_metadata(rows)
     reviewed = _reviewed_candidate_names(rows)
     isolated = [row for row in rows if metadata[str(row["name"])]["isolated_pair"]]
@@ -336,14 +432,20 @@ def _validation_inventory(queue: Any) -> dict[str, Any]:
     available_by_source = dict(
         sorted(Counter(canonical_source_pair(row["source_pair"]) for row in eligible).items())
     )
+    allocation_error = ""
+    try:
+        source_allocations = proportional_source_allocations(available_by_source)
+    except ValueError as exc:
+        source_allocations = {"validation": {}, "holdout": {}}
+        allocation_error = str(exc)
     required_by_source = {
-        source_pair: int(VALIDATION_SOURCE_ALLOCATION.get(source_pair, 0))
-        + int(HOLDOUT_SOURCE_ALLOCATION.get(source_pair, 0))
-        for source_pair in sorted(
-            set(VALIDATION_SOURCE_ALLOCATION) | set(HOLDOUT_SOURCE_ALLOCATION)
-        )
+        source_pair: int(source_allocations["validation"].get(source_pair, 0))
+        + int(source_allocations["holdout"].get(source_pair, 0))
+        for source_pair in sorted(available_by_source)
     }
     return {
+        "cutoff": cutoff,
+        "precision_lower_target": precision_lower_target,
         "rows": rows,
         "metadata": metadata,
         "reviewed": reviewed,
@@ -351,13 +453,15 @@ def _validation_inventory(queue: Any) -> dict[str, Any]:
         "reviewed_isolated": reviewed_isolated,
         "eligible": eligible,
         "available_by_source": available_by_source,
+        "source_allocations": source_allocations,
         "required_by_source": required_by_source,
+        "allocation_error": allocation_error,
     }
 
 
 @frappe.whitelist()
 def preview_splink_automatic_validation(queue_run: str) -> dict[str, Any]:
-    """Read-only aggregate inventory for the frozen 165/50 cohort proposal."""
+    """Read-only aggregate inventory for a versioned 165/50 proposal."""
     _require_manager()
     queue = frappe.get_doc(QUEUE_DOCTYPE, str(queue_run or "").strip())
     inventory = _validation_inventory(queue)
@@ -371,29 +475,31 @@ def preview_splink_automatic_validation(queue_run: str) -> dict[str, Any]:
     }
     checks = {
         "queue_ready": queue.status == "Ready",
-        "ultra_high_edges": actual["ultra_high_edges"] == EXPECTED_ULTRA_HIGH_EDGES,
-        "isolated_pairs": actual["isolated_pairs"] == EXPECTED_ISOLATED_PAIRS,
-        "previously_reviewed_isolated": actual["previously_reviewed_isolated"]
-        == EXPECTED_PREVIOUSLY_REVIEWED,
-        "eligible_isolated_pairs": actual["eligible_isolated_pairs"]
-        == VALIDATION_SIZE + HOLDOUT_SIZE,
-        "source_allocations": all(
+        "eligible_isolated_floor": actual["eligible_isolated_pairs"]
+        >= VALIDATION_SIZE + HOLDOUT_SIZE,
+        "source_allocations": not inventory["allocation_error"] and all(
             int(available.get(source_pair, 0)) >= count
             for source_pair, count in required.items()
+        ),
+        "unreserved_population": not any(
+            row.get("automation_reserved") for row in inventory["eligible"]
         ),
     }
     return {
         "queue_run": queue.name,
-        "cutoff": FROZEN_AUTOMATIC_CUTOFF,
+        "authorization_protocol": SPLINK_AUTHORIZATION_PROTOCOL,
+        "cutoff": inventory["cutoff"],
+        "precision_lower_target": inventory["precision_lower_target"],
         "expected": {
-            "ultra_high_edges": EXPECTED_ULTRA_HIGH_EDGES,
-            "isolated_pairs": EXPECTED_ISOLATED_PAIRS,
-            "previously_reviewed_isolated": EXPECTED_PREVIOUSLY_REVIEWED,
-            "eligible_isolated_pairs": VALIDATION_SIZE + HOLDOUT_SIZE,
+            "minimum_eligible_isolated_pairs": VALIDATION_SIZE + HOLDOUT_SIZE,
+            "validation_pairs": VALIDATION_SIZE,
+            "holdout_pairs": HOLDOUT_SIZE,
         },
         "actual": actual,
         "eligible_by_source": available,
+        "source_allocations": inventory["source_allocations"],
         "required_by_source": required,
+        "allocation_error": inventory["allocation_error"],
         "checks": checks,
         "ready_to_create": all(checks.values()),
         "identity_writes": 0,
@@ -410,8 +516,9 @@ def create_splink_automatic_validation(
     if str(confirm_queue_run or "").strip() != queue_run:
         frappe.throw("Type the exact Ready Review Queue ID to confirm cohort creation")
     seed = str(deterministic_seed or "").strip()
-    if not seed:
-        frappe.throw("A deterministic source-stratified random seed is required")
+    if len(seed) != 64 or any(character not in "0123456789abcdefABCDEF" for character in seed):
+        frappe.throw("The deterministic seed must be exactly 64 hexadecimal characters")
+    seed = seed.casefold()
     _lock_rows(QUEUE_DOCTYPE, (queue_run,))
     queue = frappe.get_doc(QUEUE_DOCTYPE, queue_run)
     if queue.status != "Ready":
@@ -426,36 +533,54 @@ def create_splink_automatic_validation(
     rows = inventory["rows"]
     metadata = inventory["metadata"]
     isolated = inventory["isolated"]
-    if len(rows) != EXPECTED_ULTRA_HIGH_EDGES:
-        frappe.throw(
-            f"Frozen queue mismatch: expected {EXPECTED_ULTRA_HIGH_EDGES} ultra-high edges, found {len(rows)}"
-        )
-    if len(isolated) != EXPECTED_ISOLATED_PAIRS:
-        frappe.throw(
-            f"Frozen queue mismatch: expected {EXPECTED_ISOLATED_PAIRS} isolated pairs, found {len(isolated)}"
-        )
     reviewed_isolated = inventory["reviewed_isolated"]
-    if len(reviewed_isolated) != EXPECTED_PREVIOUSLY_REVIEWED:
-        frappe.throw(
-            "Frozen queue mismatch: expected "
-            f"{EXPECTED_PREVIOUSLY_REVIEWED} previously reviewed isolated pairs, "
-            f"found {len(reviewed_isolated)}"
-        )
     eligible = inventory["eligible"]
+    if len(eligible) < VALIDATION_SIZE + HOLDOUT_SIZE:
+        frappe.throw(
+            f"Only {len(eligible)} unseen isolated pairs are eligible; "
+            f"{VALIDATION_SIZE + HOLDOUT_SIZE} required"
+        )
+    if inventory["allocation_error"]:
+        frappe.throw(inventory["allocation_error"])
     if any(row.get("automation_reserved") for row in eligible):
         frappe.throw("One or more eligible candidates are already reserved")
+    _lock_rows(CANDIDATE_DOCTYPE, (str(row["name"]) for row in eligible))
+    validation_allocation = inventory["source_allocations"]["validation"]
+    holdout_allocation = inventory["source_allocations"]["holdout"]
     try:
-        cohorts = select_stratified_cohorts(eligible, seed=seed)
+        cohorts = select_stratified_cohorts(
+            eligible,
+            seed=seed,
+            validation_allocation=validation_allocation,
+            holdout_allocation=holdout_allocation,
+        )
     except ValueError as exc:
         frappe.throw(str(exc))
     if len(cohorts["validation"]) != VALIDATION_SIZE or len(cohorts["holdout"]) != HOLDOUT_SIZE:
         frappe.throw("The deterministic selection did not produce the frozen 165/50 cohorts")
 
-    provenance = _provenance_values(queue, cutoff=FROZEN_AUTOMATIC_CUTOFF)
+    cutoff = float(inventory["cutoff"])
+    precision_lower_target = float(inventory["precision_lower_target"])
+    provenance = _provenance_values(
+        queue,
+        cutoff=cutoff,
+        protocol=SPLINK_AUTHORIZATION_PROTOCOL,
+        precision_lower_target=precision_lower_target,
+    )
     fingerprint = provenance_fingerprint(provenance)
-    source_allocation = {
+    selected_source_allocation = {
         "validation": dict(Counter(canonical_source_pair(row["source_pair"]) for row in eligible if row["name"] in cohorts["validation"])),
         "holdout": dict(Counter(canonical_source_pair(row["source_pair"]) for row in eligible if row["name"] in cohorts["holdout"])),
+    }
+    if selected_source_allocation != {
+        "validation": dict(validation_allocation),
+        "holdout": {key: value for key, value in holdout_allocation.items() if value},
+    }:
+        frappe.throw("The selected cohorts do not match the frozen source allocation")
+    source_allocation = {
+        "strategy": "deterministic_proportional_source_stratification_v1",
+        "available": inventory["available_by_source"],
+        **selected_source_allocation,
     }
     run = frappe.get_doc(
         {
@@ -476,7 +601,9 @@ def create_splink_automatic_validation(
             "model_versions_json": provenance["model_versions_json"],
             "validation_queue_run": queue.name,
             "validation_canary_run": queue.canary_run,
-            "frozen_automatic_cutoff": FROZEN_AUTOMATIC_CUTOFF,
+            "frozen_automatic_cutoff": cutoff,
+            "splink_authorization_protocol": SPLINK_AUTHORIZATION_PROTOCOL,
+            "validation_precision_lower_target": precision_lower_target,
             "validation_seed": seed,
             "source_allocation_json": _json(source_allocation),
             "source_scope_json": provenance["source_scope_json"],
@@ -546,7 +673,9 @@ def create_splink_automatic_validation(
         metadata={
             "queue_run": queue.name,
             "seed": seed,
-            "cutoff": FROZEN_AUTOMATIC_CUTOFF,
+            "authorization_protocol": SPLINK_AUTHORIZATION_PROTOCOL,
+            "cutoff": cutoff,
+            "precision_lower_target": precision_lower_target,
             "ultra_high_edges": len(rows),
             "isolated_pairs": len(isolated),
             "previously_reviewed_excluded": len(reviewed_isolated),
@@ -559,6 +688,9 @@ def create_splink_automatic_validation(
     return {
         "validation_run": run.name,
         "status": run.status,
+        "authorization_protocol": SPLINK_AUTHORIZATION_PROTOCOL,
+        "cutoff": cutoff,
+        "precision_lower_target": precision_lower_target,
         "ultra_high_edges": len(rows),
         "isolated_pairs": len(isolated),
         "previously_reviewed_excluded": len(reviewed_isolated),
@@ -646,7 +778,13 @@ def finalize_splink_automatic_validation(run_name: str) -> dict[str, Any]:
             unresolved += 1
         else:
             labels.append(str(row.final_label))
-    gate = validation_gate(labels, stale_count=stale, unresolved_count=unresolved)
+    precision_lower_target = _run_precision_lower_target(run)
+    gate = validation_gate(
+        labels,
+        stale_count=stale,
+        unresolved_count=unresolved,
+        lower_target=precision_lower_target,
+    )
     values = {
         "validation_valid_count": gate["valid"],
         "validation_stale_count": stale,
@@ -660,6 +798,10 @@ def finalize_splink_automatic_validation(run_name: str) -> dict[str, Any]:
             {
                 "run_purpose": "Splink Automatic Validation",
                 "frozen_cutoff": float(run.frozen_automatic_cutoff),
+                "authorization_protocol": str(
+                    getattr(run, "splink_authorization_protocol", "") or "legacy-v1"
+                ),
+                "precision_lower_target": precision_lower_target,
                 "accepted_global_population_risk": True,
                 "subgroup_precision": _validation_subgroup_metrics(rows),
                 "authorization_gate": gate,
@@ -1902,7 +2044,11 @@ def _holdout_acceptance_blockers(run: Any) -> list[str]:
         and row.review_status in FINAL_STATUSES
         and row.final_label in {"Same", "Different"}
     ]
-    current_validation_gate = validation_gate(current_validation_labels)
+    precision_lower_target = _run_precision_lower_target(run)
+    current_validation_gate = validation_gate(
+        current_validation_labels,
+        lower_target=precision_lower_target,
+    )
     if not current_validation_gate["passed"]:
         blockers.extend(
             "validation_" + reason for reason in current_validation_gate["reasons"]
@@ -1928,7 +2074,7 @@ def _holdout_acceptance_blockers(run: Any) -> list[str]:
         for candidate in applied
         if candidate.automated_qc_final_label and str(candidate.name) not in excluded
     )
-    gate = validation_gate(combined)
+    gate = validation_gate(combined, lower_target=precision_lower_target)
     if not gate["passed"]:
         blockers.extend("combined_" + reason for reason in gate["reasons"])
     return blockers
@@ -2395,10 +2541,21 @@ def monitor_splink_and_run_automatic() -> dict[str, Any]:
         ],
         max(int(settings.rolling_qc_window or 100), 1),
     )
+    precision_lower_target = PRECISION_LOWER_TARGET
+    authorized_run = str(settings.authorized_splink_validation_run or "")
+    if authorized_run and frappe.db.exists(RUN_DOCTYPE, authorized_run):
+        precision_lower_target = _run_precision_lower_target(
+            frappe.get_doc(RUN_DOCTYPE, authorized_run)
+        )
     result["rolling_qc"] = rolling
-    if rolling["window_complete"] and rolling["wilson_95"][0] < 0.95:
+    result["rolling_qc"]["precision_lower_target"] = precision_lower_target
+    if (
+        rolling["window_complete"]
+        and rolling["wilson_95"][0] < precision_lower_target
+    ):
         result["pause"] = _pause_splink(
-            f"splink_rolling_precision_below_0.95:{rolling['wilson_95'][0]:.6f}"
+            "splink_rolling_precision_below_target:"
+            f"{rolling['wilson_95'][0]:.6f}:{precision_lower_target:.6f}"
         )
     frappe.db.commit()
     result["automatic_splink"] = run_automatic_splink_cycle()

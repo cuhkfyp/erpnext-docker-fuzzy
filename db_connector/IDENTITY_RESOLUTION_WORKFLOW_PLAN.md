@@ -1545,3 +1545,37 @@ a Development-only demonstration path. UAT/Production still require their own
 backup, code-only deployment, fresh data-local validation, holdout approval,
 and explicit authorization; Development data or authorization must not be
 copied.
+
+### 27.12 Versioned evaluation-derived ultra-high Splink authorization
+
+New source populations do not reuse a global candidate count or silently
+inherit the historical `0.999148140` authorization. A Ready Review Queue reads
+its automatic cutoff from the exact completed and approved Threshold
+Evaluation's held-out-validated `fellegi_sunter_calibration.high_threshold`.
+The policy separately declares a governed Wilson 95% lower-bound target from
+0.80 through 1.00. Both values are frozen into the prospective-validation run
+and its authorization fingerprint; changing either invalidates the proposal.
+
+For `pilot-1.9`, the frozen proposal is cutoff `0.997092444` with an accepted
+global-population Wilson-lower target of 0.80. This acceptance acknowledges
+that subgroup precision may be weaker and that the lower bound permits more
+false matches than the historical 0.95 gate. It does not bypass two-reviewer
+validation, adjudication, the 150-valid floor, blinded holdout QC, two
+management approvals, ongoing sampled QC, correction/investigation, or the
+default-off materialization and automation switches.
+
+The zero-write inventory constructs the High-score graph, restricts formal
+sampling to untouched isolated two-record components, and derives exact
+165/50 source allocations proportionally from the current eligible strata.
+Each represented source pair receives a validation position when capacity
+permits; remaining positions use deterministic proportional allocation with
+lexical tie-breaking and never exceed a stratum's capacity. One recorded
+64-character hexadecimal seed produces a single deterministic permutation;
+trying multiple seeds to select a preferred cohort is prohibited. The actual
+available population, allocation strategy, allocations, cutoff, target, and
+model/runtime/source provenance remain visible in Desk and audit events.
+
+Historical Splink authorization records keep the legacy cutoff, frozen source
+allocation, fingerprint, and 0.95 gate. The new protocol does not rewrite or
+reinterpret those records, and it does not change the independently frozen
+upper bounds of already-completed Development Hybrid studies.

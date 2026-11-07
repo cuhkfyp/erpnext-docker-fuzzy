@@ -1154,3 +1154,41 @@ applied groups and complete provenance, while all reviewer and due-date fields
 remain empty. The live mandatory Hybrid backlog and sampling-eligible carryover
 are both zero. The complete 240-test suite, deployed JavaScript syntax checks,
 worker imports, schema migration, and live state queries pass.
+
+## Pilot 1.9 evaluation-derived Splink authorization — 2026-11-07
+
+The four-source `pilot-1.9` Threshold Evaluation `s4gnnfipqm` and High Tier
+Validation `s78reh610m` are `Completed / Approved`. The Threshold Evaluation
+selected Splink High cutoff `0.997092444`: calibration precision was 46/48
+(95.83%), held-out precision was 32/33 (96.97%), and the held-out 95% Wilson
+lower bound was 84.68%. The separate deterministic High validation was
+100/100 Same with a 96.30% Wilson lower bound. Management explicitly accepted
+an 80% Wilson-lower authorization target for this Development Splink proposal.
+
+Canary `h1ilbt9scd` completed Ready without truncation or identity writes.
+Review Queue `inqr69n5cd` reproduced all 500 evaluation scores within the
+`1e-9` tolerance, scored 198,580 eligible pairs, and retained 14,114 at the
+Review cutoff. The new High cutoff contains 797 edges; 465 are untouched
+isolated pairs. The old `0.999148140` cutoff contains only 94 edges in this new
+population and remains historical provenance for its old authorization.
+
+The Splink prospective-validation service now uses authorization protocol
+`evaluation-high-v2`. It derives the cutoff from the exact approved Threshold
+Evaluation, freezes the policy-level Wilson target into the run and
+authorization fingerprint, and deterministically derives source-stratified
+165-validation/50-holdout allocations from the actual eligible population.
+It no longer requires the historical 402/223/8 population constants for a new
+source scope. Legacy runs retain their old fingerprint and 95% interpretation.
+Changing the approved evaluation cutoff, precision target, policy/source
+snapshot, queue/canary, fitted model, runtime, or source scope invalidates the
+new authorization.
+
+The deployed zero-write preview reports 797 High edges, 465 eligible isolated
+pairs, all six source-pair strata represented, and exact allocations of
+165/50. All preview checks pass. No cohort is reserved yet; automatic Splink,
+live materialization, and every existing circuit breaker remain unchanged.
+Migration followed verified full backup `20261107_163755`; its configuration,
+577.3 MiB compressed database, 1.6 GiB public archive, and 30.7 MiB private
+archive passed JSON/gzip/tar checks and were SHA-256 hashed. The superseded
+local full set was removed after verification; the off-machine backup was not
+touched.
