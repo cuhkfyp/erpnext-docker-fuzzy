@@ -29,6 +29,29 @@ resolved_registration AS (
     FROM registration_lineage
     GROUP BY source_name
 ),
+registration_aliases AS (
+    SELECT source_name, current_registration
+    FROM resolved_registration
+
+    UNION
+
+    SELECT TRIM(r.ccd_stable_source_key), r.name
+    FROM `tabCCD Registration` r
+    WHERE r.docstatus = 1
+      AND NULLIF(TRIM(r.ccd_stable_source_key), '') IS NOT NULL
+
+    UNION
+
+    SELECT TRIM(r.agent_sync_source_id), r.name
+    FROM `tabCCD Registration` r
+    WHERE r.docstatus = 1
+      AND NULLIF(TRIM(r.agent_sync_source_id), '') IS NOT NULL
+),
+resolved_source_alias AS (
+    SELECT source_name, MAX(current_registration) AS current_registration
+    FROM registration_aliases
+    GROUP BY source_name
+),
 source_settings AS (
     SELECT
         rr.source_name,
@@ -37,7 +60,7 @@ source_settings AS (
         NULLIF(TRIM(r.custom_dashboard_environment), '') AS environment,
         NULLIF(TRIM(r.service_name), '') AS registration_service,
         r.custom_service_available_from AS service_available_from
-    FROM resolved_registration rr
+    FROM resolved_source_alias rr
     JOIN `tabCCD Registration` r ON r.name = rr.current_registration
 ),
 sex_mapping AS (
@@ -49,7 +72,7 @@ sex_mapping AS (
                 THEN 1 ELSE 0
             END
         ) AS has_explicit_sex_mapping
-    FROM resolved_registration rr
+    FROM resolved_source_alias rr
     LEFT JOIN `tabCCD Field Match` f
         ON f.parent = rr.current_registration
        AND f.parenttype = 'CCD Registration'

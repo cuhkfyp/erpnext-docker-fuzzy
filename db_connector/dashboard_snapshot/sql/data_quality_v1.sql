@@ -14,6 +14,25 @@ resolved_registration AS (
     FROM registration_lineage
     GROUP BY source_name
 ),
+registration_aliases AS (
+    SELECT source_name, current_registration
+    FROM resolved_registration
+    UNION
+    SELECT TRIM(r.ccd_stable_source_key), r.name
+    FROM `tabCCD Registration` r
+    WHERE r.docstatus = 1
+      AND NULLIF(TRIM(r.ccd_stable_source_key), '') IS NOT NULL
+    UNION
+    SELECT TRIM(r.agent_sync_source_id), r.name
+    FROM `tabCCD Registration` r
+    WHERE r.docstatus = 1
+      AND NULLIF(TRIM(r.agent_sync_source_id), '') IS NOT NULL
+),
+resolved_source_alias AS (
+    SELECT source_name, MAX(current_registration) AS current_registration
+    FROM registration_aliases
+    GROUP BY source_name
+),
 registration_roots AS (
     SELECT rl.current_registration, rl.source_name AS root_source
     FROM registration_lineage rl
@@ -25,12 +44,24 @@ registration_roots AS (
       ON depth_by_current.current_registration = rl.current_registration
      AND depth_by_current.max_depth = rl.depth
 ),
+registration_primary_sources AS (
+    SELECT
+        r.name AS current_registration,
+        COALESCE(
+            NULLIF(TRIM(r.agent_sync_source_id), ''),
+            NULLIF(TRIM(r.ccd_stable_source_key), ''),
+            roots.root_source
+        ) AS source
+    FROM `tabCCD Registration` r
+    JOIN registration_roots roots ON roots.current_registration = r.name
+    WHERE r.docstatus = 1
+),
 source_universe AS (
     SELECT DISTINCT ccd_reg_source AS source
     FROM `tabCCD Master`
     WHERE COALESCE(ccd_reg_source, '') <> ''
     UNION
-    SELECT root_source FROM registration_roots
+    SELECT source FROM registration_primary_sources
 ),
 mapping_readiness AS (
     SELECT
@@ -42,7 +73,7 @@ mapping_readiness AS (
         MAX(LOWER(TRIM(SUBSTRING_INDEX(f.sys_fieldname, ':', 1))) IN
             ('post_district', 'pos_district')) AS postal_district_mapping_ready,
         MAX(LOWER(TRIM(SUBSTRING_INDEX(f.sys_fieldname, ':', 1))) = 'res_addr1') AS address_inference_ready
-    FROM resolved_registration rr
+    FROM resolved_source_alias rr
     LEFT JOIN `tabCCD Field Match` f
       ON f.parent = rr.current_registration
      AND f.parenttype = 'CCD Registration'
@@ -56,7 +87,7 @@ source_metadata AS (
         NULLIF(TRIM(r.service_name), '') AS registration_service,
         r.custom_service_available_from AS service_available_from,
         r.modified AS registration_modified
-    FROM resolved_registration rr
+    FROM resolved_source_alias rr
     JOIN `tabCCD Registration` r ON r.name = rr.current_registration
 ),
 address_district_pattern_sets AS (
