@@ -88,6 +88,12 @@ SELECT
     NULL,
     MAX(r.modified)
 FROM `tabCCD Match Recommendation` r
+JOIN `tabCCD Match Canary Run` canary
+  ON canary.name = r.canary_run
+ AND canary.status IN ('Ready', 'Active')
+WHERE r.status = 'Proposed'
+  AND COALESCE(NULLIF(r.rollout_state, ''), 'Available')
+      NOT IN ('Applied', 'Stale', 'Superseded')
 GROUP BY r.status, COALESCE(NULLIF(r.model_tier, ''), 'Unclassified tier')
 
 UNION ALL
@@ -101,6 +107,11 @@ SELECT
     NULL,
     MAX(c.modified)
 FROM `tabCCD Match Review Candidate` c
+WHERE c.stale = 0
+  AND c.review_status IN (
+      'Unreviewed', 'Partially Reviewed', 'Positive Confirmation Required',
+      'Needs Adjudication'
+  )
 GROUP BY c.review_status, c.model_tier, c.stale
 
 UNION ALL
@@ -114,6 +125,16 @@ SELECT
     NULL,
     MAX(c.modified)
 FROM `tabCCD Match Component Review` c
+JOIN `tabCCD Match Canary Run` canary
+  ON canary.name = c.canary_run
+ AND canary.status IN ('Ready', 'Active')
+WHERE c.stale = 0
+  AND c.review_status IN (
+      'Unreviewed', 'Partially Reviewed', 'Positive Confirmation Required',
+      'Needs Adjudication'
+  )
+  AND COALESCE(NULLIF(c.materialization_status, ''), 'Not Final')
+      NOT IN ('Applied', 'Corrected', 'Stale', 'Superseded')
 GROUP BY c.review_status, c.materialization_status, c.stale
 
 UNION ALL
@@ -126,6 +147,7 @@ SELECT
     NULL,
     MAX(e.modified)
 FROM `tabCCD Identity Exclusion` e
+WHERE e.status = 'Active'
 GROUP BY e.status
 
 UNION ALL
@@ -138,6 +160,8 @@ SELECT
     NULL,
     MAX(o.modified)
 FROM `tabCCD Identity Overlap Resolution` o
+WHERE o.status = 'Applying'
+  AND o.source_population_status = 'Current'
 GROUP BY o.status
 
 UNION ALL
