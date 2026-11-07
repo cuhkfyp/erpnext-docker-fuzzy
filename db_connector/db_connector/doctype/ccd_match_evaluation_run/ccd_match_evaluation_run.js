@@ -13,11 +13,11 @@ frappe.ui.form.on("CCD Match Evaluation Run", {
 			add_hybrid_validation_actions(frm);
 			return;
 		}
-		if (!frappe.user.has_role("System Manager")) return;
 		if (frm.doc.run_purpose === "Splink Automatic Validation") {
 			add_splink_validation_actions(frm);
 			return;
 		}
+		if (!frappe.user.has_role("System Manager")) return;
 		if (frm.doc.status === "Reviewing") {
 			frm.add_custom_button(__("Finalize Evaluation"), () => {
 				frappe.call({
@@ -414,6 +414,10 @@ function render_hybrid_validation_progress(frm) {
 }
 
 function add_splink_validation_actions(frm) {
+	const manager = frappe.user.has_role("System Manager");
+	const reviewer = manager
+		|| frappe.user.has_role("CCD Match Reviewer")
+		|| frappe.user.has_role("CCD Match Sensitive Reviewer");
 	frm.dashboard.set_headline_alert(
 		__("Frozen Splink cutoff {0}; Wilson 95% lower-bound target {1}%.", [
 			Number(frm.doc.frozen_automatic_cutoff || 0).toFixed(12),
@@ -421,7 +425,18 @@ function add_splink_validation_actions(frm) {
 		]),
 		"blue",
 	);
-	if (frm.doc.status === "Reviewing") {
+	if (frm.doc.status === "Reviewing" && reviewer) {
+		frm.add_custom_button(__("Review Next Validation Pair"), () => frappe.call({
+			method: "db_connector.api_splink_automation.get_next_splink_validation_pair",
+			args: { run_name: frm.doc.name },
+			callback(response) {
+				const pair = response.message?.pair;
+				if (pair) frappe.set_route("Form", "CCD Match Evaluation Pair", pair);
+				else frappe.msgprint(__("You have completed your ordinary reviews in this Splink cohort."));
+			},
+		}), __("Splink Automation"));
+	}
+	if (frm.doc.status === "Reviewing" && manager) {
 		frm.add_custom_button(__("Finalize Frozen Validation"), () => frappe.call({
 			method: "db_connector.api_splink_automation.finalize_splink_automatic_validation",
 			args: { run_name: frm.doc.name },
@@ -429,7 +444,7 @@ function add_splink_validation_actions(frm) {
 			callback: () => frm.reload_doc(),
 		}), __("Splink Automation"));
 	}
-	if (frm.doc.status === "Awaiting Management Approval") {
+	if (frm.doc.status === "Awaiting Management Approval" && manager) {
 		for (const decision of ["Approved", "Rejected"]) {
 			frm.add_custom_button(__(decision), () => frappe.prompt(
 				[
@@ -445,7 +460,7 @@ function add_splink_validation_actions(frm) {
 			), __("Splink Management Decision"));
 		}
 	}
-	if (frm.doc.status === "Completed" && frm.doc.approval_status === "Approved") {
+	if (frm.doc.status === "Completed" && frm.doc.approval_status === "Approved" && manager) {
 		frm.add_custom_button(__("Preview Human-Label Activation"), () => frappe.call({
 			method: "db_connector.api_splink_automation.preview_validation_label_activation",
 			args: { run_name: frm.doc.name },

@@ -114,6 +114,40 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         ):
             service._queue_precision_lower_target(queue)
 
+    def test_next_splink_pair_skips_labels_from_the_current_reviewer(self):
+        run = types.SimpleNamespace(
+            name="validation-run",
+            run_purpose="Splink Automatic Validation",
+            status="Reviewing",
+        )
+        rows = [
+            types.SimpleNamespace(
+                name=f"pair-{index}",
+                creation=datetime(2026, 11, 7, 17, 0, index),
+                review_status="Partially Reviewed" if index < 3 else "Unreviewed",
+            )
+            for index in range(1, 5)
+        ]
+        with patch.object(
+            service.frappe, "get_roles", return_value=["CCD Match Reviewer"]
+        ), patch.object(
+            service.frappe, "get_doc", return_value=run
+        ), patch.object(
+            service.frappe,
+            "get_all",
+            side_effect=[rows, ["pair-1", "pair-2"]],
+        ), patch.object(
+            service.frappe,
+            "session",
+            types.SimpleNamespace(user="reviewer@example.com"),
+        ):
+            result = service.get_next_splink_validation_pair(
+                "validation-run",
+                current_pair="pair-1",
+            )
+        self.assertEqual(result["pair"], "pair-3")
+        self.assertEqual(result["remaining"], 2)
+
     def test_splink_retry_replaces_the_previous_failed_queue_job(self):
         batch = types.SimpleNamespace(
             name="failed-batch",

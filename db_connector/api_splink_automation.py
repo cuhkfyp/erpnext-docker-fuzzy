@@ -48,6 +48,7 @@ from db_connector.fuzzy_matching.splink_automation import (
 
 RUN_DOCTYPE = "CCD Match Evaluation Run"
 PAIR_DOCTYPE = "CCD Match Evaluation Pair"
+LABEL_DOCTYPE = "CCD Match Review Label"
 QUEUE_DOCTYPE = "CCD Match Review Queue Run"
 CANDIDATE_DOCTYPE = "CCD Match Review Candidate"
 BATCH_DOCTYPE = "CCD Splink Automation Batch"
@@ -58,6 +59,11 @@ RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 CANARY_RUN_DOCTYPE = "CCD Match Canary Run"
 GROUP_DOCTYPE = "CCD Identity Group"
 FINAL_STATUSES = {"Agreed", "Adjudicated"}
+OPEN_REVIEW_STATUSES = {
+    "Unreviewed",
+    "Partially Reviewed",
+    "Positive Confirmation Required",
+}
 SPLINK_AUTHORIZATION_PROTOCOL = "evaluation-high-v2"
 
 
@@ -718,6 +724,91 @@ def _validation_rows(run_name: str) -> list[Any]:
         ],
         limit_page_length=1_000,
     )
+
+
+@frappe.whitelist()
+def get_next_splink_validation_pair(
+    run_name: str,
+    current_pair: str = "",
+    previous: int = 0,
+    review_mode: str = "ordinary",
+) -> dict[str, Any]:
+    """Return the next pair this reviewer can act on in the frozen cohort.
+
+    Generic Desk navigation is unreliable after a filtered pair changes from
+    Unreviewed to Partially Reviewed or final.  This route uses the complete
+    frozen cohort as its ordering anchor, then filters actions for the current
+    reviewer without exposing labels from another reviewer.
+    """
+    _require_reviewer()
+    run = frappe.get_doc(RUN_DOCTYPE, str(run_name or "").strip())
+    if run.run_purpose != "Splink Automatic Validation" or run.status != "Reviewing":
+        frappe.throw("The Splink Automatic Validation is not open for review")
+
+    mode = str(review_mode or "ordinary").strip().casefold()
+    if mode not in {"ordinary", "adjudication"}:
+        frappe.throw("Review mode must be ordinary or adjudication")
+    if mode == "adjudication":
+        _require_manager()
+
+    rows = frappe.get_all(
+        PAIR_DOCTYPE,
+        filters={
+            "evaluation_run": run.name,
+            "automation_cohort": "Validation",
+            "stale": 0,
+        },
+        fields=["name", "creation", "review_status"],
+        order_by="creation asc, name asc",
+        limit_page_length=1_000,
+    )
+    ordered_names = [str(row.name) for row in rows]
+    if mode == "adjudication":
+        eligible = {
+            str(row.name)
+            for row in rows
+            if str(row.review_status or "") == "Needs Adjudication"
+        }
+    else:
+        open_names = [
+            str(row.name)
+            for row in rows
+            if str(row.review_status or "") in OPEN_REVIEW_STATUSES
+        ]
+        already_reviewed = {
+            str(parent)
+            for parent in frappe.get_all(
+                LABEL_DOCTYPE,
+                filters={
+                    "parent": ["in", open_names],
+                    "parenttype": PAIR_DOCTYPE,
+                    "reviewer": frappe.session.user,
+                    "is_adjudication": 0,
+                },
+                pluck="parent",
+                limit_page_length=1_000,
+            )
+        } if open_names else set()
+        eligible = set(open_names) - already_reviewed
+
+    anchor = str(current_pair or "").strip()
+    if anchor in ordered_names:
+        index = ordered_names.index(anchor)
+        if int(previous or 0):
+            candidates = list(reversed(ordered_names[:index])) + list(
+                reversed(ordered_names[index + 1 :])
+            )
+        else:
+            candidates = ordered_names[index + 1 :] + ordered_names[:index]
+    else:
+        candidates = list(reversed(ordered_names)) if int(previous or 0) else ordered_names
+    pair_name = next((name for name in candidates if name in eligible), "")
+    return {
+        "run": run.name,
+        "pair": pair_name,
+        "review_mode": mode,
+        "remaining": len(eligible),
+    }
 
 
 def _pair_stale(row: Any) -> bool:
