@@ -1,6 +1,8 @@
 """The Desk batch-creation request must outlive an HTTP response timeout."""
 
+import json
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +24,17 @@ class ActivationBatchCreationOperationTests(unittest.TestCase):
         )
         clock.start()
         self.addCleanup(clock.stop)
+
+    def test_activation_item_source_pairs_accepts_multi_source_components(self):
+        doctype_path = (
+            Path(__file__).resolve().parents[1]
+            / "db_connector/doctype/ccd_identity_activation_item/ccd_identity_activation_item.json"
+        )
+        fields = {
+            field["fieldname"]: field
+            for field in json.loads(doctype_path.read_text())["fields"]
+        }
+        self.assertEqual(fields["source_pairs"]["fieldtype"], "Small Text")
 
     def test_repeated_click_reuses_running_operation_without_second_job(self):
         database = MagicMock()
