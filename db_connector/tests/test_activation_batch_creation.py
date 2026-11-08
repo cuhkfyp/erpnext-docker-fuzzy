@@ -36,6 +36,16 @@ class ActivationBatchCreationOperationTests(unittest.TestCase):
         }
         self.assertEqual(fields["source_pairs"]["fieldtype"], "Small Text")
 
+    def test_exception_recommendation_exposes_its_component_review_in_desk(self):
+        script_path = (
+            Path(__file__).resolve().parents[1]
+            / "db_connector/doctype/ccd_match_recommendation/ccd_match_recommendation.js"
+        )
+        source = script_path.read_text()
+        self.assertIn('frm.doc.status === "Exception" && frm.doc.component_review', source)
+        self.assertIn('__("Open Exception Component Review")', source)
+        self.assertIn('"CCD Match Component Review"', source)
+
     def test_repeated_click_reuses_running_operation_without_second_job(self):
         database = MagicMock()
         database.sql.return_value = [("canary1",)]

@@ -2,6 +2,17 @@ frappe.ui.form.on("CCD Match Recommendation", {
 	refresh(frm) {
 		if (frm.is_new()) return;
 		load_recommendation_evidence(frm);
+		if (frm.doc.status === "Exception" && frm.doc.component_review) {
+			frm.add_custom_button(
+				__("Open Exception Component Review"),
+				() => frappe.set_route(
+					"Form",
+					"CCD Match Component Review",
+					frm.doc.component_review,
+				),
+				__("Exception Review"),
+			);
+		}
 		if (!frappe.user.has_role("System Manager")) return;
 		if (
 			frm.doc.identity_decision &&
