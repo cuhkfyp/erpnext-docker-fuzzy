@@ -354,6 +354,57 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         self.assertEqual(database.set_value.call_count, 20)
         database.commit.assert_called_once_with()
 
+    def test_weekly_capacity_reclaims_only_untouched_stale_cases(self):
+        rows = [
+            service.frappe._dict(name="active", qc_stale=0),
+            service.frappe._dict(name="stale-unreviewed", qc_stale=1),
+            service.frappe._dict(name="stale-reviewed", qc_stale=1),
+        ]
+        with patch.object(
+            service.frappe,
+            "get_all",
+            side_effect=[rows, ["stale-reviewed"]],
+        ) as get_all:
+            count = service._assigned_capacity_count(
+                service.RECOMMENDATION_DOCTYPE,
+                assigned_at_field="qc_assigned_at",
+                stale_field="qc_stale",
+                review_parentfield="qc_review_labels",
+                start="2026-11-02",
+            )
+
+        self.assertEqual(count, 2)
+        self.assertEqual(
+            get_all.call_args_list[1].kwargs["filters"],
+            {
+                "parenttype": service.RECOMMENDATION_DOCTYPE,
+                "parentfield": "qc_review_labels",
+                "parent": ["in", ["stale-reviewed", "stale-unreviewed"]],
+            },
+        )
+
+    def test_weekly_capacity_uses_channel_specific_stale_and_label_fields(self):
+        with patch.object(
+            service, "_week_start", return_value="2026-11-02"
+        ), patch.object(
+            service,
+            "_assigned_capacity_count",
+            side_effect=[3, 4, 5],
+        ) as assigned_count:
+            result = service._weekly_assigned_count()
+
+        self.assertEqual(result, 12)
+        calls = assigned_count.call_args_list
+        self.assertEqual(calls[0].kwargs["stale_field"], "qc_stale")
+        self.assertEqual(calls[0].kwargs["review_parentfield"], "qc_review_labels")
+        self.assertEqual(calls[1].kwargs["stale_field"], "automated_qc_stale")
+        self.assertEqual(
+            calls[1].kwargs["review_parentfield"], "automated_qc_review_labels"
+        )
+        self.assertEqual(calls[2].kwargs["stale_field"], "stale")
+        self.assertEqual(calls[2].kwargs["review_parentfield"], "review_labels")
+        self.assertEqual(calls[2].kwargs["extra_filters"], {"automation_reserved": 0})
+
     def test_due_shared_cadence_advances_when_weekly_capacity_is_exhausted(self):
         settings = types.SimpleNamespace(
             automatic_tiered_canary="canary-run",

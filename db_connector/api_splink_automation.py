@@ -1787,13 +1787,77 @@ def _week_start() -> Any:
     return add_days(today, -today.weekday())
 
 
+def _assigned_capacity_count(
+    doctype: str,
+    *,
+    assigned_at_field: str,
+    stale_field: str,
+    review_parentfield: str,
+    start: Any,
+    extra_filters: dict[str, Any] | None = None,
+) -> int:
+    """Count weekly reviewer workload without charging untouched stale cases.
+
+    A stale case still consumes capacity when at least one reviewer submitted a
+    label.  A case invalidated before any label was submitted did not consume
+    reviewer effort and releases its slot for other mandatory QC work.
+    """
+    filters = dict(extra_filters or {})
+    filters[assigned_at_field] = [">=", start]
+    rows = frappe.get_all(
+        doctype,
+        filters=filters,
+        fields=["name", stale_field],
+        limit_page_length=100_000,
+    )
+    stale_names = sorted(
+        str(row.name) for row in rows if bool(row.get(stale_field))
+    )
+    touched_stale: set[str] = set()
+    for offset in range(0, len(stale_names), 500):
+        chunk = stale_names[offset : offset + 500]
+        touched_stale.update(
+            str(name)
+            for name in frappe.get_all(
+                LABEL_DOCTYPE,
+                filters={
+                    "parenttype": doctype,
+                    "parentfield": review_parentfield,
+                    "parent": ["in", chunk],
+                },
+                pluck="parent",
+                limit_page_length=len(chunk),
+            )
+        )
+    return sum(
+        not bool(row.get(stale_field)) or str(row.name) in touched_stale
+        for row in rows
+    )
+
+
 def _weekly_assigned_count() -> int:
     start = _week_start()
-    recommendation = frappe.db.count(RECOMMENDATION_DOCTYPE, {"qc_assigned_at": [">=", start]})
-    splink = frappe.db.count(CANDIDATE_DOCTYPE, {"automated_qc_assigned_at": [">=", start]})
-    optional = frappe.db.count(
+    recommendation = _assigned_capacity_count(
+        RECOMMENDATION_DOCTYPE,
+        assigned_at_field="qc_assigned_at",
+        stale_field="qc_stale",
+        review_parentfield="qc_review_labels",
+        start=start,
+    )
+    splink = _assigned_capacity_count(
         CANDIDATE_DOCTYPE,
-        {"assigned_at": [">=", start], "automation_reserved": 0},
+        assigned_at_field="automated_qc_assigned_at",
+        stale_field="automated_qc_stale",
+        review_parentfield="automated_qc_review_labels",
+        start=start,
+    )
+    optional = _assigned_capacity_count(
+        CANDIDATE_DOCTYPE,
+        assigned_at_field="assigned_at",
+        stale_field="stale",
+        review_parentfield="review_labels",
+        start=start,
+        extra_filters={"automation_reserved": 0},
     )
     return int(recommendation) + int(splink) + int(optional)
 
