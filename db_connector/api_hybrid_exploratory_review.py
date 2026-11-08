@@ -97,6 +97,24 @@ def _enqueue_builder(batch_name: str) -> None:
     )
 
 
+def _validated_sample_rows(sample: dict[str, Any]) -> list[dict[str, Any]]:
+    """Require the exact sample size consumed by prospective validation."""
+    rows = list(sample.get("rows") or [])
+    population_size = int(sample.get("population_size") or 0)
+    if len(rows) != FIXED_SAMPLE_SIZE:
+        raise ValueError(
+            "insufficient_hybrid_exploratory_population:"
+            f"found={population_size}:sampled={len(rows)}:required={FIXED_SAMPLE_SIZE}"
+        )
+    return rows
+
+
+def _build_error_summary(exc: Exception) -> str:
+    detail = " ".join(str(exc or "").split())
+    prefix = f"hybrid_exploratory_build_failed:{type(exc).__name__}"
+    return (f"{prefix}:{detail}" if detail else prefix)[:140]
+
+
 @frappe.whitelist()
 def start_hybrid_exploratory_batch(
     minimum_score: float | str = 0.95,
@@ -158,9 +176,11 @@ def build_hybrid_exploratory_batch(batch_name: str) -> None:
             exploratory_sample_size=FIXED_SAMPLE_SIZE,
         )
         sample = preview.get("exploratory_sample") or {}
-        rows = list(sample.get("rows") or [])
-        if not rows:
-            frappe.throw("The exploratory selection returned no eligible pair")
+        # Formal Hybrid validation requires a completed 100-item exploratory
+        # sample.  Fail before inserting any items when the current population
+        # cannot supply that exact cohort; a smaller Reviewing batch can never
+        # become valid prospective evidence.
+        rows = _validated_sample_rows(sample)
         candidate_names = [str(row["candidate"]) for row in rows]
         candidates = {
             str(row.name): row
@@ -240,7 +260,7 @@ def build_hybrid_exploratory_batch(batch_name: str) -> None:
             batch_name,
             {
                 "status": "Failed",
-                "error_summary": f"hybrid_exploratory_build_failed:{type(exc).__name__}",
+                "error_summary": _build_error_summary(exc),
             },
             update_modified=False,
         )

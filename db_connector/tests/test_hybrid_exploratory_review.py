@@ -24,6 +24,54 @@ class HybridExploratoryReviewTests(unittest.TestCase):
         self.assertEqual(len(first), 64)
         self.assertNotEqual(first, changed)
 
+    def test_short_population_is_rejected_before_review_items_are_created(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "insufficient_hybrid_exploratory_population:found=1:sampled=1:required=100",
+        ):
+            service._validated_sample_rows(
+                {"population_size": 1, "rows": [{"candidate": "only-pair"}]}
+            )
+
+    def test_exact_fixed_sample_is_accepted(self):
+        rows = [{"candidate": f"candidate-{index}"} for index in range(100)]
+        self.assertEqual(
+            service._validated_sample_rows(
+                {"population_size": 100, "rows": rows}
+            ),
+            rows,
+        )
+
+    def test_failed_build_preserves_population_shortfall_in_batch_summary(self):
+        batch = types.SimpleNamespace(
+            name="batch-1",
+            status="Building",
+            research_minimum_score=0.95,
+            queue_run="queue-1",
+        )
+        database = MagicMock()
+        preview = {
+            "exploratory_sample": {
+                "population_size": 1,
+                "rows": [{"candidate": "only-pair"}],
+            }
+        }
+        with patch.object(service.frappe, "get_doc", return_value=batch), patch.object(
+            service.frappe, "db", database
+        ), patch.object(service.frappe, "get_all") as get_all, patch.object(
+            service.frappe, "log_error"
+        ), patch.object(
+            service,
+            "preview_lower_score_hybrid_research",
+            return_value=preview,
+        ), self.assertRaisesRegex(ValueError, "found=1:sampled=1:required=100"):
+            service.build_hybrid_exploratory_batch(batch.name)
+
+        get_all.assert_not_called()
+        failed_values = database.set_value.call_args.args[2]
+        self.assertEqual(failed_values["status"], "Failed")
+        self.assertIn("found=1:sampled=1:required=100", failed_values["error_summary"])
+
     def test_progress_counts_exploratory_outcomes_without_candidate_writes(self):
         rows = [
             types.SimpleNamespace(
