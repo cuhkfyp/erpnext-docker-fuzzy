@@ -561,6 +561,84 @@ def _preview_components(
     }
 
 
+def _approve_all_safe_fallback(
+    selected: list[tuple[str, list[Any]]],
+    preview: dict[str, Any],
+) -> tuple[list[tuple[str, list[Any]]], dict[str, Any]]:
+    """Keep only current safe components for Approve All Eligible.
+
+    Approve-all is a bulk convenience operation, not an instruction to weaken
+    a safety gate. Components that fail the fresh preview stay Proposed and
+    available for the existing target/overlap-resolution workflow. The
+    skipped manifest is frozen into the batch dry-run result so the fallback
+    is visible and auditable instead of silently dropping work.
+    """
+    summaries = list(preview.get("components") or [])
+    if len(summaries) != len(selected):
+        frappe.throw("Approve-all safety preview returned an incomplete component manifest")
+
+    safe_selected: list[tuple[str, list[Any]]] = []
+    safe_summaries: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    skipped_recommendations = 0
+    for (component_key, rows), summary in zip(selected, summaries, strict=True):
+        if str(summary.get("component_fingerprint") or "") != str(component_key):
+            frappe.throw("Approve-all safety preview component order is inconsistent")
+        if summary.get("safe"):
+            safe_selected.append((component_key, rows))
+            safe_summaries.append(summary)
+            continue
+        recommendation_names = [str(row.name) for row in rows]
+        skipped_recommendations += len(recommendation_names)
+        skipped.append(
+            {
+                "component_fingerprint": str(component_key),
+                "recommendation_names": recommendation_names,
+                "recommendation_count": len(recommendation_names),
+                "record_count": int(summary.get("record_count") or 0),
+                "conflicts": sorted(
+                    {str(reason) for reason in summary.get("conflicts") or []}
+                ),
+            }
+        )
+
+    if not safe_selected:
+        frappe.throw(
+            "No currently safe Proposed components remain for Approve All Eligible; "
+            "handle the reported components through target or overlap resolution"
+        )
+
+    safe_preview = {
+        **preview,
+        "selected_component_count": len(safe_selected),
+        "selected_recommendation_count": sum(
+            len(rows) for _component_key, rows in safe_selected
+        ),
+        "safe_component_count": len(safe_selected),
+        "unsafe_component_count": 0,
+        "stale_component_count": 0,
+        "planned_identity_group_count": len(safe_selected),
+        "planned_membership_count": sum(
+            int(summary.get("record_count") or 0) for summary in safe_summaries
+        ),
+        "conflict_counts": {},
+        "components": safe_summaries,
+        "omitted_component_detail_count": 0,
+        "approve_all_scanned_component_count": len(selected),
+        "approve_all_scanned_recommendation_count": sum(
+            len(rows) for _component_key, rows in selected
+        ),
+        "skipped_unsafe_component_count": len(skipped),
+        "skipped_unsafe_recommendation_count": skipped_recommendations,
+        "skipped_stale_component_count": int(
+            preview.get("stale_component_count") or 0
+        ),
+        "skipped_conflict_counts": dict(preview.get("conflict_counts") or {}),
+        "skipped_components": skipped,
+    }
+    return safe_selected, safe_preview
+
+
 @frappe.whitelist()
 def preview_approve_all(run_name: str) -> dict[str, Any]:
     """Reject the legacy synchronous path before a web worker can time out."""
@@ -855,6 +933,8 @@ def _create_activation_batch(
             else None
         ),
     )
+    if selection_method == "Approve All Eligible" and preview["unsafe_component_count"]:
+        selected, preview = _approve_all_safe_fallback(selected, preview)
     if preview["unsafe_component_count"]:
         if not allow_structural_overlap:
             frappe.throw("Activation Batch selection contains stale or unsafe components")
@@ -878,10 +958,43 @@ def _create_activation_batch(
         int(automation_control_revision or 0) if is_automatic else 0,
     )
     existing = frappe.db.get_value(
-        BATCH_DOCTYPE, {"selection_fingerprint": selection_fingerprint}, "name"
+        BATCH_DOCTYPE,
+        {"selection_fingerprint": selection_fingerprint},
+        [
+            "name",
+            "status",
+            "selected_component_count",
+            "selected_recommendation_count",
+            "new_exception_count",
+            "dry_run_json",
+        ],
+        as_dict=True,
     )
     if existing:
-        return {"batch": existing, "status": frappe.db.get_value(BATCH_DOCTYPE, existing, "status")}
+        try:
+            existing_dry_run = json.loads(existing.dry_run_json or "{}")
+        except (TypeError, ValueError):
+            existing_dry_run = {}
+        return {
+            "batch": str(existing.name),
+            "status": str(existing.status),
+            "existing": True,
+            "selected_component_count": int(existing.selected_component_count or 0),
+            "selected_recommendation_count": int(
+                existing.selected_recommendation_count or 0
+            ),
+            "skipped_unsafe_component_count": int(
+                existing_dry_run.get("skipped_unsafe_component_count")
+                or existing.new_exception_count
+                or 0
+            ),
+            "skipped_unsafe_recommendation_count": int(
+                existing_dry_run.get("skipped_unsafe_recommendation_count") or 0
+            ),
+            "skipped_conflict_counts": dict(
+                existing_dry_run.get("skipped_conflict_counts") or {}
+            ),
+        }
     idempotency_key = hashlib.sha256(
         f"activation-batch-v1\x1f{selection_fingerprint}".encode()
     ).hexdigest()
@@ -910,7 +1023,10 @@ def _create_activation_batch(
             "planned_group_count": preview["planned_identity_group_count"],
             "planned_membership_count": preview["planned_membership_count"],
             "stale_count": preview["stale_component_count"],
-            "new_exception_count": preview["unsafe_component_count"],
+            "new_exception_count": int(
+                preview.get("skipped_unsafe_component_count")
+                or preview["unsafe_component_count"]
+            ),
             "dry_run_at": now,
             "dry_run_by": frappe.session.user,
             "dry_run_json": _json({key: value for key, value in preview.items() if key != "components"}),
@@ -1220,6 +1336,21 @@ def run_activation_batch_creation(
         "completed_at": str(frappe.utils.now_datetime()),
         "batch": result["batch"],
         "batch_status": result["status"],
+        "selected_component_count": int(
+            result.get("selected_component_count") or 0
+        ),
+        "selected_recommendation_count": int(
+            result.get("selected_recommendation_count") or 0
+        ),
+        "skipped_unsafe_component_count": int(
+            result.get("skipped_unsafe_component_count") or 0
+        ),
+        "skipped_unsafe_recommendation_count": int(
+            result.get("skipped_unsafe_recommendation_count") or 0
+        ),
+        "skipped_conflict_counts": dict(
+            result.get("skipped_conflict_counts") or {}
+        ),
     })
     _set_creation_operation(operation_token, payload)
     return result

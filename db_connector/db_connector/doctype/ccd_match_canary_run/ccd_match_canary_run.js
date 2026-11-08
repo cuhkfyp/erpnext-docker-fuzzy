@@ -227,7 +227,7 @@ function create_wave(frm) {
 
 function create_all_batch(frm) {
 	frappe.confirm(
-		__("Freeze every currently available Proposed component into one reviewed Activation Batch? Deliberately held components remain Proposed and are excluded. Creating the batch does not create identity links."),
+		__("Freeze every currently safe Proposed component into one reviewed Activation Batch? Components that fail the fresh safety check remain Proposed for later target or overlap resolution and are recorded in the batch dry-run result. Deliberately held components remain Proposed and are excluded. Creating the batch does not create identity links."),
 		() => create_activation_batch(frm, "Approve All Eligible", null, 0),
 	);
 }
@@ -307,7 +307,12 @@ function poll_activation_batch_creation(operationToken, dialog) {
 			}
 			dialog.hide();
 			if (operation.status === "Completed" && operation.batch) {
-				frappe.show_alert({ message: __("Activation Batch created."), indicator: "green" });
+				const selected = Number(operation.selected_component_count || 0);
+				const skipped = Number(operation.skipped_unsafe_component_count || 0);
+				const message = skipped
+					? __("Activation Batch created with {0} safe component(s); {1} unsafe component(s) remain Proposed for later resolution.", [selected, skipped])
+					: __("Activation Batch created with {0} safe component(s).", [selected]);
+				frappe.show_alert({ message, indicator: skipped ? "orange" : "green" });
 				frappe.set_route("Form", "CCD Identity Activation Batch", operation.batch);
 				return;
 			}

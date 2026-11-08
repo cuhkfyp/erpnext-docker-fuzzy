@@ -219,6 +219,169 @@ class ActivationBatchCreationOperationTests(unittest.TestCase):
         self.assertEqual(result["planned_membership_count"], 4)
         self.assertEqual(progress.call_args_list[-1].args, (3, 3))
 
+    def test_approve_all_fallback_freezes_safe_and_audits_unsafe_components(self):
+        safe_row = SimpleNamespace(name="recommendation-safe")
+        unsafe_rows = [
+            SimpleNamespace(name="recommendation-unsafe-a"),
+            SimpleNamespace(name="recommendation-unsafe-b"),
+        ]
+        selected = [
+            ("component-safe", [safe_row]),
+            ("component-unsafe", unsafe_rows),
+        ]
+        preview = {
+            "run": "canary1",
+            "zero_write": True,
+            "selected_component_count": 2,
+            "selected_recommendation_count": 3,
+            "safe_component_count": 1,
+            "unsafe_component_count": 1,
+            "stale_component_count": 0,
+            "planned_identity_group_count": 1,
+            "planned_membership_count": 2,
+            "conflict_counts": {"partial_existing_identity_group": 1},
+            "components": [
+                {
+                    "component_fingerprint": "component-safe",
+                    "recommendation_count": 1,
+                    "record_count": 2,
+                    "safe": True,
+                    "conflicts": [],
+                },
+                {
+                    "component_fingerprint": "component-unsafe",
+                    "recommendation_count": 2,
+                    "record_count": 3,
+                    "safe": False,
+                    "conflicts": ["partial_existing_identity_group"],
+                },
+            ],
+            "omitted_component_detail_count": 0,
+        }
+
+        safe_selected, safe_preview = activation._approve_all_safe_fallback(
+            selected, preview
+        )
+
+        self.assertEqual(safe_selected, [selected[0]])
+        self.assertEqual(safe_preview["selected_component_count"], 1)
+        self.assertEqual(safe_preview["selected_recommendation_count"], 1)
+        self.assertEqual(safe_preview["unsafe_component_count"], 0)
+        self.assertEqual(safe_preview["planned_membership_count"], 2)
+        self.assertEqual(safe_preview["skipped_unsafe_component_count"], 1)
+        self.assertEqual(safe_preview["skipped_unsafe_recommendation_count"], 2)
+        self.assertEqual(
+            safe_preview["skipped_conflict_counts"],
+            {"partial_existing_identity_group": 1},
+        )
+        self.assertEqual(
+            safe_preview["skipped_components"],
+            [
+                {
+                    "component_fingerprint": "component-unsafe",
+                    "recommendation_names": [
+                        "recommendation-unsafe-a",
+                        "recommendation-unsafe-b",
+                    ],
+                    "recommendation_count": 2,
+                    "record_count": 3,
+                    "conflicts": ["partial_existing_identity_group"],
+                }
+            ],
+        )
+
+    def test_approve_all_fallback_rejects_when_every_component_is_unsafe(self):
+        selected = [
+            ("component-unsafe", [SimpleNamespace(name="recommendation1")])
+        ]
+        preview = {
+            "components": [
+                {
+                    "component_fingerprint": "component-unsafe",
+                    "record_count": 2,
+                    "safe": False,
+                    "conflicts": ["partial_existing_identity_group"],
+                }
+            ]
+        }
+        with patch.object(
+            activation.frappe,
+            "throw",
+            side_effect=RuntimeError("no safe components"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no safe components"):
+                activation._approve_all_safe_fallback(selected, preview)
+
+    def test_approve_all_creation_fingerprints_only_safe_fallback_selection(self):
+        unsafe_selected = [
+            ("component-safe", [SimpleNamespace(name="recommendation-safe")]),
+            ("component-unsafe", [SimpleNamespace(name="recommendation-unsafe")]),
+        ]
+        safe_selected = [unsafe_selected[0]]
+        unsafe_preview = {"unsafe_component_count": 1}
+        safe_preview = {"unsafe_component_count": 0}
+        database = MagicMock()
+        database.get_value.return_value = SimpleNamespace(
+            name="batch-existing",
+            status="Reviewed",
+            selected_component_count=1,
+            selected_recommendation_count=1,
+            new_exception_count=1,
+            dry_run_json=(
+                '{"skipped_unsafe_component_count": 1, '
+                '"skipped_unsafe_recommendation_count": 1, '
+                '"skipped_conflict_counts": {'
+                '"partial_existing_identity_group": 1}}'
+            ),
+        )
+
+        with patch.object(activation, "_require_manager"), patch.object(
+            activation,
+            "_run",
+            return_value=SimpleNamespace(name="canary1"),
+        ), patch.object(
+            activation,
+            "reconcile_materialized_recommendations",
+            return_value={"recommendation_count": 0},
+        ), patch.object(
+            activation,
+            "_selected_components",
+            return_value=unsafe_selected,
+        ), patch.object(
+            activation,
+            "_preview_components",
+            return_value=unsafe_preview,
+        ), patch.object(
+            activation,
+            "_approve_all_safe_fallback",
+            return_value=(safe_selected, safe_preview),
+        ) as fallback, patch.object(
+            activation,
+            "_selection_fingerprint",
+            return_value="safe-fingerprint",
+        ) as fingerprint, patch.object(
+            activation.frappe,
+            "db",
+            database,
+        ):
+            result = activation._create_activation_batch(
+                "canary1", selection_method="Approve All Eligible"
+            )
+
+        fallback.assert_called_once_with(unsafe_selected, unsafe_preview)
+        fingerprint.assert_called_once_with(
+            "canary1", "Approve All Eligible", safe_selected, 0
+        )
+        self.assertEqual(result["batch"], "batch-existing")
+        self.assertEqual(result["status"], "Reviewed")
+        self.assertTrue(result["existing"])
+        self.assertEqual(result["selected_component_count"], 1)
+        self.assertEqual(result["skipped_unsafe_component_count"], 1)
+        self.assertEqual(
+            result["skipped_conflict_counts"],
+            {"partial_existing_identity_group": 1},
+        )
+
     def test_component_lookup_is_bounded_to_frozen_batch_keys(self):
         with patch.object(activation.frappe, "get_all", return_value=[]) as get_all:
             result = activation._component_rows(
