@@ -816,6 +816,16 @@ def _provenance_reasons(run: Any) -> list[str]:
     if run.run_purpose != RUN_PURPOSE or not run.hybrid_development_only:
         reasons.append("wrong_or_non_development_run")
         return reasons
+    # ``_request_context`` intentionally throws on stale governed evidence.
+    # This read-only helper converts that exception into a fail-closed blocker,
+    # but ``frappe.throw`` also appends a Desk message before raising.  Restore
+    # the request's prior message log when the exception is consumed so a
+    # historical Hybrid blocker cannot surface as an unrelated modal while the
+    # Identity Resolution Settings form refreshes after another channel runs.
+    try:
+        prior_message_log = list(getattr(frappe.local, "message_log", []) or [])
+    except Exception:
+        prior_message_log = None
     try:
         batch, queue, settings, floor, cutoff = _request_context(
             run.hybrid_exploratory_batch
@@ -845,6 +855,8 @@ def _provenance_reasons(run: Any) -> list[str]:
         if str(settings.authorized_splink_queue or "") != str(queue.name):
             reasons.append("authorized_queue_changed")
     except Exception as exc:
+        if prior_message_log is not None:
+            frappe.local.message_log = prior_message_log
         reasons.append(f"provenance_unavailable:{type(exc).__name__}")
     return sorted(set(reasons))
 

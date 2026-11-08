@@ -1,8 +1,11 @@
 import json
 import random
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from db_connector import api_hybrid_validation as validation_service
 from fuzzy_matching.hybrid_validation import (
     HYBRID_HOLDOUT_SIZE,
     HYBRID_VALIDATION_SIZE,
@@ -202,6 +205,35 @@ class HybridValidationIntegrationContractTests(unittest.TestCase):
         self.assertIn("The exact frozen holdout contains", source)
         self.assertIn("HYBRID_MINIMUM_ELIGIBLE_HOLDOUT", source)
         self.assertIn("authorizes_identity_writes", source)
+
+
+class HybridValidationProvenanceDisplayTests(unittest.TestCase):
+    def test_consumed_stale_provenance_error_does_not_leak_a_desk_modal(self):
+        run = types.SimpleNamespace(
+            run_purpose=validation_service.RUN_PURPOSE,
+            hybrid_development_only=1,
+            hybrid_exploratory_batch="historical-batch",
+        )
+        fake_frappe = types.SimpleNamespace(
+            local=types.SimpleNamespace(message_log=["existing-message"])
+        )
+
+        def stale_context(_batch):
+            fake_frappe.local.message_log.append(
+                "Hybrid prospective validation requires a Ready Review Queue"
+            )
+            raise ValueError("historical queue is stale")
+
+        with patch.object(validation_service, "frappe", fake_frappe), patch.object(
+            validation_service, "_request_context", side_effect=stale_context
+        ):
+            reasons = validation_service._provenance_reasons(run)
+
+        self.assertEqual(
+            fake_frappe.local.message_log,
+            ["existing-message"],
+        )
+        self.assertEqual(reasons, ["provenance_unavailable:ValueError"])
 
 
 if __name__ == "__main__":
