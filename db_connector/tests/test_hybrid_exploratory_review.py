@@ -24,6 +24,16 @@ class HybridExploratoryReviewTests(unittest.TestCase):
         self.assertEqual(len(first), 64)
         self.assertNotEqual(first, changed)
 
+    def test_request_fingerprint_is_rule_specific(self):
+        queue = self._queue()
+        strong = service._selection_fingerprint(
+            queue, 0.997092444, 0.95, "hybrid-research-v1"
+        )
+        name_support = service._selection_fingerprint(
+            queue, 0.997092444, 0.95, "hybrid-name-support-v1"
+        )
+        self.assertNotEqual(strong, name_support)
+
     def test_short_population_is_rejected_before_review_items_are_created(self):
         with self.assertRaisesRegex(
             ValueError,
@@ -142,6 +152,7 @@ class HybridExploratoryReviewTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("Create Persistent Exploratory Review Batch", settings_source)
         self.assertIn("start_hybrid_exploratory_batch", settings_source)
+        self.assertIn("hybrid-name-support-v1", settings_source)
         self.assertIn("Review Next Unreviewed", batch_source)
         self.assertIn("frm.disable_save()", batch_source)
         self.assertIn("Create / Reopen Governed Batch", batch_source)

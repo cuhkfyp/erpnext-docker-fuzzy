@@ -17,8 +17,10 @@ import frappe
 from db_connector.api_fuzzy_evaluation import _evaluation_record_fields
 from db_connector.fuzzy_matching.hybrid_research import (
     HYBRID_RESEARCH_RULE_VERSION,
+    SUPPORTED_HYBRID_RESEARCH_RULES,
     classify_corroboration,
     deterministic_stratified_sample,
+    governed_research_classification,
     lower_score_band,
 )
 from db_connector.fuzzy_matching.identity import identity_fingerprint
@@ -158,10 +160,11 @@ def _derived_exploratory_seed(
     queue: Any,
     cutoff: float,
     floor: float,
+    rule_version: str = HYBRID_RESEARCH_RULE_VERSION,
 ) -> str:
     payload = {
         "purpose": "lower-score-hybrid-exploratory-sample",
-        "rule_version": HYBRID_RESEARCH_RULE_VERSION,
+        "rule_version": str(rule_version),
         "queue_run": str(queue.name),
         "matching_policy": str(queue.matching_policy or ""),
         "policy_version": str(queue.policy_version or ""),
@@ -193,6 +196,7 @@ def _classify_pair(
     left: dict[str, Any],
     right: dict[str, Any],
     policy: MatchingPolicy,
+    rule_version: str = HYBRID_RESEARCH_RULE_VERSION,
 ) -> dict[str, Any]:
     evidence = build_evidence(left, right, policy)
     trusted = {
@@ -201,20 +205,29 @@ def _classify_pair(
         if policy.globally_comparable(str(left["source"]), attribute)
         and policy.globally_comparable(str(right["source"]), attribute)
     }
-    return classify_corroboration(
-        evidence,
-        left_birthday=policy.value(left, "birthday"),
-        right_birthday=policy.value(right, "birthday"),
-        left_birthday_key=left.get("birthday_key"),
-        right_birthday_key=right.get("birthday_key"),
-        trusted_identifiers=trusted,
+    return governed_research_classification(
+        classify_corroboration(
+            evidence,
+            left_birthday=policy.value(left, "birthday"),
+            right_birthday=policy.value(right, "birthday"),
+            left_birthday_key=left.get("birthday_key"),
+            right_birthday_key=right.get("birthday_key"),
+            trusted_identifiers=trusted,
+        ),
+        rule_version,
     )
 
 
 @frappe.whitelist()
-def preview_lower_score_hybrid_candidate(candidate_name: str) -> dict[str, Any]:
+def preview_lower_score_hybrid_candidate(
+    candidate_name: str,
+    rule_version: str = HYBRID_RESEARCH_RULE_VERSION,
+) -> dict[str, Any]:
     """Explain one Review candidate under the zero-write research rule."""
     _require_manager()
+    version = str(rule_version or HYBRID_RESEARCH_RULE_VERSION).strip()
+    if version not in SUPPORTED_HYBRID_RESEARCH_RULES:
+        frappe.throw(f"Unsupported Hybrid research rule: {version}")
     settings = frappe.get_single(SETTINGS_DOCTYPE)
     candidate = frappe.get_doc(CANDIDATE_DOCTYPE, str(candidate_name or "").strip())
     if str(candidate.queue_run or "") != str(settings.authorized_splink_queue or ""):
@@ -233,6 +246,7 @@ def preview_lower_score_hybrid_candidate(candidate_name: str) -> dict[str, Any]:
             "research_only": True,
             "candidate": candidate.name,
             "selected_for_research": False,
+            "rule_version": version,
             "unavailable_reasons": ["record_missing"],
         }
 
@@ -253,7 +267,7 @@ def preview_lower_score_hybrid_candidate(candidate_name: str) -> dict[str, Any]:
     ):
         unavailable.append("identity_fingerprint_changed")
 
-    result = _classify_pair(left, right, policy)
+    result = _classify_pair(left, right, policy, version)
     record_ids = {left_id, right_id}
     memberships = _current_membership_records(record_ids)
     pair = tuple(sorted((left_id, right_id)))
@@ -280,6 +294,7 @@ def preview_lower_score_hybrid_candidate(candidate_name: str) -> dict[str, Any]:
         "probabilistic_score": score,
         "frozen_ultra_high_cutoff": cutoff,
         "score_band": lower_score_band(score, cutoff),
+        "rule_version": version,
         "in_lower_score_band": in_lower_score_band,
         **result,
         "unavailable_reasons": sorted(set(unavailable)),
@@ -298,9 +313,13 @@ def preview_lower_score_hybrid_research(
     minimum_score: float | str = DEFAULT_RESEARCH_MINIMUM_SCORE,
     queue_run: str = "",
     exploratory_sample_size: int | str = 0,
+    rule_version: str = HYBRID_RESEARCH_RULE_VERSION,
 ) -> dict[str, Any]:
     """Classify the current lower-score pool without writing any state."""
     _require_manager()
+    version = str(rule_version or HYBRID_RESEARCH_RULE_VERSION).strip()
+    if version not in SUPPORTED_HYBRID_RESEARCH_RULES:
+        frappe.throw(f"Unsupported Hybrid research rule: {version}")
     settings = frappe.get_single(SETTINGS_DOCTYPE)
     authorized_queue = str(settings.authorized_splink_queue or "")
     requested_queue = str(queue_run or authorized_queue).strip()
@@ -415,7 +434,7 @@ def preview_lower_score_hybrid_research(
         ):
             unavailable.append("identity_fingerprint_changed")
 
-        result = _classify_pair(left, right, policy)
+        result = _classify_pair(left, right, policy, version)
         row.update(result)
         birthday_counts[result["birthday_status"]] += 1
         if result["hard_conflicts"]:
@@ -479,7 +498,9 @@ def preview_lower_score_hybrid_research(
     exploratory_sample: dict[str, Any] | None = None
     if requested_sample_size:
         eligible_manifest_digest = _eligible_manifest_digest(operationally_clear)
-        exploratory_seed = _derived_exploratory_seed(queue, cutoff, floor)
+        exploratory_seed = _derived_exploratory_seed(
+            queue, cutoff, floor, version
+        )
         sample = deterministic_stratified_sample(
             operationally_clear,
             requested_sample_size,
@@ -499,7 +520,7 @@ def preview_lower_score_hybrid_research(
             sample_birthday_counts[str(row["birthday_status"])] += 1
         exploratory_sample = {
             **sample,
-            "rule_version": HYBRID_RESEARCH_RULE_VERSION,
+            "rule_version": version,
             "derived_seed": exploratory_seed,
             "eligible_manifest_digest": eligible_manifest_digest,
             "route_counts": dict(sorted(sample_route_counts.items())),
@@ -537,6 +558,7 @@ def preview_lower_score_hybrid_research(
         "code_frozen_cutoff": FROZEN_AUTOMATIC_CUTOFF,
         "review_threshold": review_threshold,
         "research_minimum_score": floor,
+        "rule_version": version,
         "lower_score_candidate_count": int(total_lower_score),
         "scanned_candidate_count": len(rows),
         "corroborated_candidate_count": all_corroborated_count,

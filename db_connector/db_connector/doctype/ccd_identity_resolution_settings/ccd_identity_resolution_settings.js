@@ -404,6 +404,7 @@ function add_hybrid_research_control(frm) {
 		__("Preview Lower-Score Hybrid Research"),
 		() => frappe.prompt(
 			[
+				hybrid_research_rule_field(),
 				{
 					fieldname: "minimum_score",
 					fieldtype: "Float",
@@ -413,7 +414,7 @@ function add_hybrid_research_control(frm) {
 					description: __("Zero-write only. Must remain below the frozen ultra-high cutoff."),
 				},
 			],
-			(values) => preview_hybrid_research(values.minimum_score),
+			(values) => preview_hybrid_research(values.minimum_score, values.rule_version),
 			__("Lower-Score Hybrid Research"),
 		),
 		__("Splink Automation"),
@@ -422,6 +423,7 @@ function add_hybrid_research_control(frm) {
 		__("Open Stratified Exploratory Sample"),
 		() => frappe.prompt(
 			[
+				hybrid_research_rule_field(),
 				{
 					fieldname: "minimum_score",
 					fieldtype: "Float",
@@ -431,7 +433,7 @@ function add_hybrid_research_control(frm) {
 					description: __("Builds the fixed 100-pair, deterministic, zero-write sample."),
 				},
 			],
-			(values) => open_hybrid_exploratory_sample(values.minimum_score),
+			(values) => open_hybrid_exploratory_sample(values.minimum_score, values.rule_version),
 			__("Deterministic Hybrid Exploratory Sample"),
 		),
 		__("Splink Automation"),
@@ -440,6 +442,7 @@ function add_hybrid_research_control(frm) {
 		__("Create Persistent Exploratory Review Batch"),
 		() => frappe.prompt(
 			[
+				hybrid_research_rule_field(),
 				{
 					fieldname: "minimum_score",
 					fieldtype: "Float",
@@ -451,12 +454,24 @@ function add_hybrid_research_control(frm) {
 			],
 			(values) => frappe.confirm(
 				__("Create or reopen the persistent exploratory batch? Labels remain separate from candidate and identity decisions."),
-				() => start_hybrid_exploratory_batch(values.minimum_score),
+				() => start_hybrid_exploratory_batch(values.minimum_score, values.rule_version),
 			),
 			__("Persistent Hybrid Exploratory Review"),
 		),
 		__("Splink Automation"),
 	);
+}
+
+function hybrid_research_rule_field() {
+	return {
+		fieldname: "rule_version",
+		fieldtype: "Select",
+		label: __("Development research rule"),
+		options: "hybrid-name-support-v1\nhybrid-research-v1",
+		default: "hybrid-name-support-v1",
+		reqd: 1,
+		description: __("Name-support v1 tests score plus name evidence only. Research v1 preserves the original stronger deterministic-corroboration routes."),
+	};
 }
 
 function add_hybrid_holdout_control(frm) {
@@ -586,10 +601,10 @@ function render_hybrid_holdout_dashboard(wrapper, result) {
 	);
 }
 
-function start_hybrid_exploratory_batch(minimumScore) {
+function start_hybrid_exploratory_batch(minimumScore, ruleVersion) {
 	frappe.call({
 		method: "db_connector.api_hybrid_exploratory_review.start_hybrid_exploratory_batch",
-		args: { minimum_score: minimumScore },
+		args: { minimum_score: minimumScore, rule_version: ruleVersion },
 		freeze: true,
 		freeze_message: __("Creating the persistent exploratory request…"),
 		callback(response) {
@@ -599,10 +614,10 @@ function start_hybrid_exploratory_batch(minimumScore) {
 	});
 }
 
-function preview_hybrid_research(minimumScore) {
+function preview_hybrid_research(minimumScore, ruleVersion) {
 	frappe.call({
 		method: "db_connector.api_hybrid_research.preview_lower_score_hybrid_research",
-		args: { minimum_score: minimumScore },
+		args: { minimum_score: minimumScore, rule_version: ruleVersion },
 		freeze: true,
 		freeze_message: __("Classifying lower-score pairs without writing identity state…"),
 		callback(response) {
@@ -617,6 +632,7 @@ function preview_hybrid_research(minimumScore) {
 				indicator: "blue",
 				wide: true,
 				message: `<p>${__("Queue")}: ${esc(result.queue_run || "")}</p>` +
+					`<p>${__("Frozen research rule")}: ${esc(result.rule_version || "")}</p>` +
 					`<p>${__("Research score range")}: ${esc(result.research_minimum_score)} ≤ score &lt; ${esc(result.frozen_ultra_high_cutoff)}</p>` +
 					`<p>${__("Scanned / corroborated / untouched edges")}: ${esc(result.scanned_candidate_count || 0)} / ${esc(result.corroborated_candidate_count || 0)} / ${esc(result.untouched_corroborated_edge_count || 0)}</p>` +
 					`<p>${__("Isolated pairs / operationally clear isolated pairs")}: ${esc(result.isolated_pair_count || 0)} / ${esc(result.operationally_clear_isolated_pair_count || 0)}</p>` +
@@ -651,12 +667,13 @@ function format_hybrid_examples(examplesByRoute) {
 	return `<p><strong>${__("Highest-score operationally clear examples")}</strong><br>${rows.join("<br>")}</p>`;
 }
 
-function open_hybrid_exploratory_sample(minimumScore) {
+function open_hybrid_exploratory_sample(minimumScore, ruleVersion) {
 	frappe.call({
 		method: "db_connector.api_hybrid_research.preview_lower_score_hybrid_research",
 		args: {
 			minimum_score: minimumScore,
 			exploratory_sample_size: 100,
+			rule_version: ruleVersion,
 		},
 		freeze: true,
 		freeze_message: __("Building the deterministic stratified sample without writing candidate state…"),

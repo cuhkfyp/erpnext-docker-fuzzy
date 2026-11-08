@@ -1192,3 +1192,33 @@ Migration followed verified full backup `20261107_163755`; its configuration,
 archive passed JSON/gzip/tar checks and were SHA-256 hashed. The superseded
 local full set was removed after verification; the off-machine backup was not
 touched.
+
+## Development name-support Hybrid profile — 2026-11-08
+
+Development now keeps two explicit, non-interchangeable Hybrid research
+profiles. Existing evidence and automation remain pinned to
+`hybrid-research-v1`. The new `hybrid-name-support-v1` profile freezes the
+single route `name_support+score_floor` over
+`0.95 <= score < 0.997092444`. It requires at least one supported Chinese or
+English name comparison at Weak or better and retains the existing trusted
+identifier, confirmed-birthday, current-fingerprint, isolated-pair,
+identity-overlap, exclusion, and untouched-lifecycle fail-closed checks. It is
+recorded as score-plus-name research rather than independent deterministic
+corroboration.
+
+The live zero-write inventory for queue `inqr69n5cd` scanned 2,817 lower-band
+pairs. Of 2,812 with name support, 266 trusted-HKID conflicts failed closed.
+The remaining graph contains 570 isolated edges; after 37 current identity
+overlaps, 533 pairs are operationally clear. The deterministic exploratory
+sample freezes exactly 100 of those 533 across five available source pairs and
+both score bands. This leaves enough unseen capacity for the separate 165-pair
+validation and 50-pair blinded holdout, but no write is authorized by the
+inventory or exploratory labels.
+
+All three Desk launchers—Settings preview/sample/persistent batch, the Hybrid
+Exploratory Batch form launcher, and its list launcher—now require a visible
+rule selection and default to the new Development profile. The rule version is
+part of the selection fingerprint, deterministic seed, eligible manifest,
+prospective request fingerprint, Evaluation Run, frozen route scope, holdout
+recheck, and later automation provenance. Introducing the new profile therefore
+does not reuse or invalidate the original profile's completed evidence.

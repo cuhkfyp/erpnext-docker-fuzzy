@@ -14,7 +14,10 @@ from db_connector.api_hybrid_research import (
     _load_records,
     preview_lower_score_hybrid_research,
 )
-from db_connector.fuzzy_matching.hybrid_research import HYBRID_RESEARCH_RULE_VERSION
+from db_connector.fuzzy_matching.hybrid_research import (
+    HYBRID_RESEARCH_RULE_VERSION,
+    SUPPORTED_HYBRID_RESEARCH_RULES,
+)
 from db_connector.fuzzy_matching.identity import identity_fingerprint
 from db_connector.fuzzy_matching.models import build_evidence
 from db_connector.fuzzy_matching.policy import MatchingPolicy
@@ -69,7 +72,12 @@ def _request_context(minimum_score: float | str) -> tuple[Any, float, float]:
     return queue, cutoff, floor
 
 
-def _selection_fingerprint(queue: Any, cutoff: float, floor: float) -> str:
+def _selection_fingerprint(
+    queue: Any,
+    cutoff: float,
+    floor: float,
+    rule_version: str = HYBRID_RESEARCH_RULE_VERSION,
+) -> str:
     payload = {
         "purpose": "persistent-hybrid-exploratory-review",
         "queue_run": str(queue.name),
@@ -77,7 +85,7 @@ def _selection_fingerprint(queue: Any, cutoff: float, floor: float) -> str:
         "policy_snapshot_sha256": hashlib.sha256(
             str(queue.policy_snapshot_json or "").encode("utf-8")
         ).hexdigest(),
-        "rule_version": HYBRID_RESEARCH_RULE_VERSION,
+        "rule_version": str(rule_version),
         "minimum_score": f"{float(floor):.12f}",
         "frozen_ultra_high_cutoff": f"{float(cutoff):.12f}",
         "sample_size": FIXED_SAMPLE_SIZE,
@@ -118,11 +126,15 @@ def _build_error_summary(exc: Exception) -> str:
 @frappe.whitelist()
 def start_hybrid_exploratory_batch(
     minimum_score: float | str = 0.95,
+    rule_version: str = HYBRID_RESEARCH_RULE_VERSION,
 ) -> dict[str, Any]:
     """Create one idempotent request and build its exact sample off-request."""
     _require_manager()
+    version = str(rule_version or HYBRID_RESEARCH_RULE_VERSION).strip()
+    if version not in SUPPORTED_HYBRID_RESEARCH_RULES:
+        frappe.throw(f"Unsupported Hybrid research rule: {version}")
     queue, cutoff, floor = _request_context(minimum_score)
-    fingerprint = _selection_fingerprint(queue, cutoff, floor)
+    fingerprint = _selection_fingerprint(queue, cutoff, floor, version)
     existing = frappe.db.get_value(
         BATCH_DOCTYPE,
         {"selection_fingerprint": fingerprint},
@@ -144,7 +156,7 @@ def start_hybrid_exploratory_batch(
             "requested_at": frappe.utils.now_datetime(),
             "matching_policy": queue.matching_policy,
             "policy_version": queue.policy_version,
-            "rule_version": HYBRID_RESEARCH_RULE_VERSION,
+            "rule_version": version,
             "research_minimum_score": floor,
             "frozen_ultra_high_cutoff": cutoff,
             "selection_fingerprint": fingerprint,
@@ -174,6 +186,10 @@ def build_hybrid_exploratory_batch(batch_name: str) -> None:
             minimum_score=float(batch.research_minimum_score),
             queue_run=str(batch.queue_run),
             exploratory_sample_size=FIXED_SAMPLE_SIZE,
+            rule_version=str(
+                getattr(batch, "rule_version", "")
+                or HYBRID_RESEARCH_RULE_VERSION
+            ),
         )
         sample = preview.get("exploratory_sample") or {}
         # Formal Hybrid validation requires a completed 100-item exploratory

@@ -1435,13 +1435,21 @@ management approval.
 After a completed 100-pair exploratory batch, a System Manager may use
 **Prepare Development Validation Proposal** on that batch. The long worker
 recomputes the current lower-score population without exposing or reserving a
-pair. The frozen proposal is deliberately narrower than the exploratory rule:
-it includes only `exact_name+unverified_identifier_exact` and
-`name_support+unverified_identifier+secondary_exact`, at
-`0.95 <= Splink score < 0.999148140`. It excludes every candidate previously
-exposed through exploratory or Evaluation Pair review, every changed, reviewed,
-assigned, reserved, or materialized candidate, non-isolated components, active
-identity overlap, and human exclusions.
+pair. The frozen proposal is pinned to the rule selected when the exploratory
+batch is created. `hybrid-research-v1` preserves the original narrower routes:
+`exact_name+unverified_identifier_exact` and
+`name_support+unverified_identifier+secondary_exact`. The separately governed
+Development profile `hybrid-name-support-v1` tests
+`name_support+score_floor`: at least one supported Chinese or English name
+comparison at Weak or better, plus the frozen
+`0.95 <= Splink score < authorized ultra-high cutoff` band. The latter is
+explicitly weaker and is not described as independent deterministic
+corroboration. Both profiles reject hard trusted-identifier and confirmed-DOB
+conflicts and exclude every candidate previously exposed through exploratory
+or Evaluation Pair review, every changed, reviewed, assigned, reserved, or
+materialized candidate, non-isolated components, active identity overlap, and
+human exclusions. Existing approved v1 evidence remains pinned to v1 when a
+new profile is introduced.
 
 Source scope is data-driven rather than restricted to HMSSHP-to-SHP-UAT. Every
 source pair present in the current unseen eligible population receives a

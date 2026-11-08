@@ -78,6 +78,15 @@ function prompt_hybrid_exploratory_batch_from_form() {
 	frappe.prompt(
 		[
 			{
+				fieldname: "rule_version",
+				fieldtype: "Select",
+				label: __("Development research rule"),
+				options: "hybrid-name-support-v1\nhybrid-research-v1",
+				default: "hybrid-name-support-v1",
+				reqd: 1,
+				description: __("Name-support v1 uses the 0.95+ score band plus name evidence; research v1 keeps the original stronger corroboration routes."),
+			},
+			{
 				fieldname: "minimum_score",
 				fieldtype: "Float",
 				label: __("Research minimum Splink score"),
@@ -86,15 +95,15 @@ function prompt_hybrid_exploratory_batch_from_form() {
 				description: __("Creates or reopens the deterministic 100-pair batch. The score must remain below the frozen ultra-high cutoff."),
 			},
 		],
-		(values) => create_hybrid_exploratory_batch_from_form(values.minimum_score),
+		(values) => create_hybrid_exploratory_batch_from_form(values.minimum_score, values.rule_version),
 		__("Create / Reopen Governed Exploratory Batch"),
 	);
 }
 
-function create_hybrid_exploratory_batch_from_form(minimumScore) {
+function create_hybrid_exploratory_batch_from_form(minimumScore, ruleVersion) {
 	frappe.call({
 		method: "db_connector.api_hybrid_exploratory_review.start_hybrid_exploratory_batch",
-		args: { minimum_score: minimumScore },
+		args: { minimum_score: minimumScore, rule_version: ruleVersion },
 		freeze: true,
 		freeze_message: __("Creating or reopening the governed exploratory batch…"),
 		callback(response) {

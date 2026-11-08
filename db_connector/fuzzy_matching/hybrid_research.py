@@ -25,7 +25,19 @@ STRONG_NAME_LEVELS = frozenset(
         EvidenceLevel.PHONETIC.value,
     }
 )
-HYBRID_RESEARCH_RULE_VERSION = "hybrid-research-v1"
+HYBRID_STRONG_CORROBORATION_RULE_VERSION = "hybrid-research-v1"
+HYBRID_NAME_SUPPORT_RULE_VERSION = "hybrid-name-support-v1"
+# Backward-compatible default. Existing approved Development evidence and
+# automation remain pinned to v1 unless a caller explicitly selects another
+# governed rule profile.
+HYBRID_RESEARCH_RULE_VERSION = HYBRID_STRONG_CORROBORATION_RULE_VERSION
+HYBRID_NAME_SUPPORT_ROUTE = "name_support+score_floor"
+SUPPORTED_HYBRID_RESEARCH_RULES = frozenset(
+    {
+        HYBRID_STRONG_CORROBORATION_RULE_VERSION,
+        HYBRID_NAME_SUPPORT_RULE_VERSION,
+    }
+)
 EXPLORATORY_RARE_ROUTE_LIMIT = 10
 EXPLORATORY_ROUTE_MINIMUM = 20
 
@@ -198,6 +210,30 @@ def classify_corroboration(
         "trusted_identifier_exact": tuple(trusted_exact),
         "unverified_identifier_exact": tuple(unverified_exact),
     }
+
+
+def governed_research_classification(
+    classification: Mapping[str, Any], rule_version: str
+) -> dict[str, Any]:
+    """Apply one explicit governed research profile to base evidence.
+
+    The original strong-corroboration rule remains unchanged for historical
+    evidence. The Development name-support profile is deliberately separate:
+    it relies on the frozen lower-score Splink band plus at least one supported
+    name comparison, while retaining every hard-conflict fail-closed check.
+    """
+    version = str(rule_version or HYBRID_RESEARCH_RULE_VERSION).strip()
+    if version not in SUPPORTED_HYBRID_RESEARCH_RULES:
+        raise ValueError(f"unsupported_hybrid_research_rule:{version}")
+    result = dict(classification)
+    if version == HYBRID_NAME_SUPPORT_RULE_VERSION:
+        routes = (HYBRID_NAME_SUPPORT_ROUTE,) if result.get("name_support") else ()
+        result["routes"] = routes
+        result["selected_for_research"] = bool(routes) and not bool(
+            result.get("hard_conflicts")
+        )
+    result["rule_version"] = version
+    return result
 
 
 def lower_score_band(score: float, ultra_high_cutoff: float) -> str:

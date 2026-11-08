@@ -29,16 +29,18 @@ from db_connector.api_hybrid_research import (
 )
 from db_connector.fuzzy_matching.hybrid_research import (
     HYBRID_RESEARCH_RULE_VERSION,
+    SUPPORTED_HYBRID_RESEARCH_RULES,
     lower_score_band,
 )
 from db_connector.fuzzy_matching.hybrid_validation import (
     HYBRID_HOLDOUT_SIZE,
     HYBRID_MINIMUM_ELIGIBLE_HOLDOUT,
     HYBRID_MINIMUM_SCORE,
-    HYBRID_PROPOSAL_ROUTES,
     HYBRID_VALIDATION_SIZE,
     dynamic_source_allocations,
     hybrid_holdout_gate,
+    hybrid_primary_route,
+    hybrid_proposal_routes,
     select_dynamic_hybrid_cohorts,
 )
 from db_connector.fuzzy_matching.identity import identity_fingerprint
@@ -115,6 +117,11 @@ def _request_context(exploratory_batch: str) -> tuple[Any, Any, Any, float, floa
         or int(batch.stale_count or 0)
     ):
         frappe.throw("The exploratory batch is not a complete 100-pair research sample")
+    rule_version = str(
+        getattr(batch, "rule_version", "") or HYBRID_RESEARCH_RULE_VERSION
+    )
+    if rule_version not in SUPPORTED_HYBRID_RESEARCH_RULES:
+        frappe.throw(f"Unsupported frozen Hybrid research rule: {rule_version}")
     queue = frappe.get_doc(QUEUE_DOCTYPE, batch.queue_run)
     settings = frappe.get_single(SETTINGS_DOCTYPE)
     if queue.status != "Ready":
@@ -145,6 +152,9 @@ def _queue_runtime_versions(queue: Any) -> str:
 
 
 def _request_fingerprint(batch: Any, queue: Any, floor: float, cutoff: float) -> str:
+    rule_version = str(
+        getattr(batch, "rule_version", "") or HYBRID_RESEARCH_RULE_VERSION
+    )
     payload = {
         "purpose": RUN_PURPOSE,
         "development_only": True,
@@ -152,10 +162,10 @@ def _request_fingerprint(batch: Any, queue: Any, floor: float, cutoff: float) ->
         "exploratory_manifest": str(batch.eligible_manifest_digest or ""),
         "queue_run": str(queue.name),
         "policy_snapshot_sha256": str(queue.policy_snapshot_sha256 or ""),
-        "hybrid_rule_version": HYBRID_RESEARCH_RULE_VERSION,
+        "hybrid_rule_version": rule_version,
         "minimum_score": f"{floor:.12f}",
         "ultra_high_cutoff": f"{cutoff:.12f}",
-        "routes": list(HYBRID_PROPOSAL_ROUTES),
+        "routes": list(hybrid_proposal_routes(rule_version)),
         "validation_size": HYBRID_VALIDATION_SIZE,
         "holdout_size": HYBRID_HOLDOUT_SIZE,
     }
@@ -231,7 +241,10 @@ def _hybrid_inventory(batch: Any, queue: Any, floor: float, cutoff: float) -> di
     records = _load_records(record_ids, policy)
     exploratory_exposed = hybrid_exploratory_candidate_names(queue.name)
     evaluation_exposed = _evaluation_exposed_candidate_names(queue.name)
-    allowed_routes = set(HYBRID_PROPOSAL_ROUTES)
+    rule_version = str(
+        getattr(batch, "rule_version", "") or HYBRID_RESEARCH_RULE_VERSION
+    )
+    allowed_routes = set(hybrid_proposal_routes(rule_version))
     exclusion_counts: Counter[str] = Counter()
     graph_rows: list[dict[str, Any]] = []
     proposal_rows: list[dict[str, Any]] = []
@@ -261,7 +274,7 @@ def _hybrid_inventory(batch: Any, queue: Any, floor: float, cutoff: float) -> di
             != str(row.get("right_identity_fingerprint") or "")
         ):
             unavailable.append("identity_fingerprint_changed")
-        result = _classify_pair(left, right, policy)
+        result = _classify_pair(left, right, policy, rule_version)
         if result["hard_conflicts"]:
             unavailable.extend(str(value) for value in result["hard_conflicts"])
         if unavailable:
@@ -279,11 +292,7 @@ def _hybrid_inventory(batch: Any, queue: Any, floor: float, cutoff: float) -> di
             exclusion_counts["outside_frozen_route_scope"] += 1
             continue
         row["routes"] = routes
-        row["primary_route"] = (
-            "exact_name+unverified_identifier_exact"
-            if "exact_name+unverified_identifier_exact" in routes
-            else "name_support+unverified_identifier+secondary_exact"
-        )
+        row["primary_route"] = hybrid_primary_route(routes, rule_version)
         row["score_band"] = lower_score_band(
             float(row["probabilistic_score"]), cutoff
         )
@@ -361,17 +370,20 @@ def _hybrid_inventory(batch: Any, queue: Any, floor: float, cutoff: float) -> di
 def _proposal_profile(
     batch: Any, queue: Any, floor: float, cutoff: float, inventory: dict[str, Any]
 ) -> dict[str, Any]:
+    rule_version = str(
+        getattr(batch, "rule_version", "") or HYBRID_RESEARCH_RULE_VERSION
+    )
     return {
         "development_only": True,
         "identity_writes": 0,
         "exploratory_batch": batch.name,
         "queue_run": queue.name,
-        "hybrid_rule_version": HYBRID_RESEARCH_RULE_VERSION,
+        "hybrid_rule_version": rule_version,
         "score_range": {
             "minimum_inclusive": floor,
             "ultra_high_exclusive": cutoff,
         },
-        "frozen_routes": list(HYBRID_PROPOSAL_ROUTES),
+        "frozen_routes": list(hybrid_proposal_routes(rule_version)),
         "validation_target": HYBRID_VALIDATION_SIZE,
         "holdout_target": HYBRID_HOLDOUT_SIZE,
         "scanned_count": inventory["scanned_count"],
@@ -418,6 +430,9 @@ def start_hybrid_validation_proposal(exploratory_batch: str) -> dict[str, Any]:
             "existing": True,
         }
     request_fingerprint = _request_fingerprint(batch, queue, floor, cutoff)
+    rule_version = str(
+        getattr(batch, "rule_version", "") or HYBRID_RESEARCH_RULE_VERSION
+    )
     run = frappe.get_doc(
         {
             "doctype": RUN_DOCTYPE,
@@ -442,9 +457,11 @@ def start_hybrid_validation_proposal(exploratory_batch: str) -> dict[str, Any]:
             "holdout_target_count": HYBRID_HOLDOUT_SIZE,
             "second_management_approval_status": "Not Requested",
             "hybrid_exploratory_batch": batch.name,
-            "hybrid_rule_version": HYBRID_RESEARCH_RULE_VERSION,
+            "hybrid_rule_version": rule_version,
             "hybrid_minimum_score": floor,
-            "hybrid_route_scope_json": _json(HYBRID_PROPOSAL_ROUTES),
+            "hybrid_route_scope_json": _json(
+                hybrid_proposal_routes(rule_version)
+            ),
             "hybrid_development_only": 1,
         }
     ).insert(ignore_permissions=True)
@@ -713,7 +730,7 @@ def freeze_hybrid_validation_cohorts(run_name: str) -> None:
                     "reason_codes_json": _json(
                         {
                             "development_only": True,
-                            "hybrid_rule_version": HYBRID_RESEARCH_RULE_VERSION,
+                            "hybrid_rule_version": str(run.hybrid_rule_version or ""),
                             "primary_route": row["primary_route"],
                             "routes": row["routes"],
                             "score_band": row["score_band"],
@@ -840,14 +857,21 @@ def _provenance_reasons(run: Any) -> list[str]:
             reasons.append("model_versions_changed")
         if _queue_runtime_versions(queue) != str(run.runtime_versions_json or "{}"):
             reasons.append("runtime_versions_changed")
-        if HYBRID_RESEARCH_RULE_VERSION != str(run.hybrid_rule_version or ""):
+        run_rule_version = str(run.hybrid_rule_version or "")
+        batch_rule_version = str(
+            getattr(batch, "rule_version", "") or HYBRID_RESEARCH_RULE_VERSION
+        )
+        if (
+            run_rule_version not in SUPPORTED_HYBRID_RESEARCH_RULES
+            or run_rule_version != batch_rule_version
+        ):
             reasons.append("hybrid_rule_version_changed")
         if abs(float(run.hybrid_minimum_score or 0) - floor) > 1e-12:
             reasons.append("research_floor_changed")
         if abs(float(run.frozen_automatic_cutoff or 0) - cutoff) > 1e-12:
             reasons.append("ultra_high_cutoff_changed")
         if tuple(json.loads(run.hybrid_route_scope_json or "[]")) != tuple(
-            HYBRID_PROPOSAL_ROUTES
+            hybrid_proposal_routes(run_rule_version)
         ):
             reasons.append("route_scope_changed")
         if str(batch.eligible_manifest_digest or "") == "":
@@ -1188,7 +1212,8 @@ def _holdout_current_eligibility(
     records = _load_records(record_ids, policy)
     memberships = _current_membership_records(record_ids)
     exclusions = _active_exclusion_pairs(record_ids)
-    allowed_routes = set(HYBRID_PROPOSAL_ROUTES)
+    rule_version = str(run.hybrid_rule_version or "")
+    allowed_routes = set(hybrid_proposal_routes(rule_version))
     eligible: list[dict[str, Any]] = []
     ineligible: dict[str, list[str]] = {}
 
@@ -1246,7 +1271,7 @@ def _holdout_current_eligibility(
                 != str(row.get("right_identity_fingerprint") or "")
             ):
                 reasons.append("identity_fingerprint_changed")
-            classification = _classify_pair(left, right, policy)
+            classification = _classify_pair(left, right, policy, rule_version)
             if classification["hard_conflicts"]:
                 reasons.extend(str(item) for item in classification["hard_conflicts"])
             routes = tuple(sorted(allowed_routes.intersection(classification["routes"])))
@@ -1254,10 +1279,8 @@ def _holdout_current_eligibility(
                 reasons.append("outside_frozen_route_scope")
             else:
                 row["routes"] = routes
-                row["primary_route"] = (
-                    "exact_name+unverified_identifier_exact"
-                    if "exact_name+unverified_identifier_exact" in routes
-                    else "name_support+unverified_identifier+secondary_exact"
+                row["primary_route"] = hybrid_primary_route(
+                    routes, rule_version
                 )
                 row["score_band"] = lower_score_band(
                     score, float(run.frozen_automatic_cutoff or 0)
@@ -1402,7 +1425,7 @@ def build_hybrid_holdout_qc(run_name: str) -> None:
                         {
                             "development_only": True,
                             "zero_identity_writes": True,
-                            "hybrid_rule_version": HYBRID_RESEARCH_RULE_VERSION,
+                            "hybrid_rule_version": str(run.hybrid_rule_version or ""),
                             "primary_route": row["primary_route"],
                             "routes": row["routes"],
                             "score_band": row["score_band"],

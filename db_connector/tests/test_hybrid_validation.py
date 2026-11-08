@@ -11,11 +11,34 @@ from fuzzy_matching.hybrid_validation import (
     HYBRID_VALIDATION_SIZE,
     dynamic_source_allocations,
     hybrid_holdout_gate,
+    hybrid_primary_route,
+    hybrid_proposal_routes,
     select_dynamic_hybrid_cohorts,
+)
+from fuzzy_matching.hybrid_research import (
+    HYBRID_NAME_SUPPORT_ROUTE,
+    HYBRID_NAME_SUPPORT_RULE_VERSION,
+    HYBRID_RESEARCH_RULE_VERSION,
 )
 
 
 class HybridValidationSelectionTests(unittest.TestCase):
+    def test_rule_profiles_keep_legacy_and_name_support_routes_separate(self):
+        self.assertNotIn(
+            HYBRID_NAME_SUPPORT_ROUTE,
+            hybrid_proposal_routes(HYBRID_RESEARCH_RULE_VERSION),
+        )
+        self.assertEqual(
+            hybrid_proposal_routes(HYBRID_NAME_SUPPORT_RULE_VERSION),
+            (HYBRID_NAME_SUPPORT_ROUTE,),
+        )
+        self.assertEqual(
+            hybrid_primary_route(
+                (HYBRID_NAME_SUPPORT_ROUTE,), HYBRID_NAME_SUPPORT_RULE_VERSION
+            ),
+            HYBRID_NAME_SUPPORT_ROUTE,
+        )
+
     def _rows(self):
         capacities = {
             "HMSSHP::SHP-UAT": 300,

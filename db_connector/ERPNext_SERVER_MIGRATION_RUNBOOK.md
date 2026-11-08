@@ -1390,12 +1390,15 @@ as hybrid authorization. Existing independently authorized channels may keep
 their current state, but their controls must not be changed merely to run this
 validation. In Development:
 
-1. complete the governed 100-pair **CCD Hybrid Exploratory Batch**;
+1. create the governed 100-pair **CCD Hybrid Exploratory Batch**, explicitly
+   choosing either the original `hybrid-research-v1` strong-corroboration
+   profile or the Development-only `hybrid-name-support-v1` score-plus-name
+   profile, then complete all 100 exploratory labels;
 2. take and verify a fresh full backup before migrating the hybrid validation
    schema/code;
 3. on the completed batch, click **Prepare Development Validation Proposal**;
 4. wait for the linked **CCD Match Evaluation Run** to reach `Queued`, then
-   verify the displayed unseen population, two frozen corroboration routes,
+   verify the displayed unseen population, frozen rule version and route(s),
    score range, manifest SHA-256, and dynamic source allocations;
 5. generate and record one governance-approved 64-character hexadecimal seed;
    do not try multiple seeds to obtain a preferred cohort;

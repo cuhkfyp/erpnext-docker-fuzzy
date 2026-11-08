@@ -1,8 +1,11 @@
 import unittest
 
 from fuzzy_matching.hybrid_research import (
+    HYBRID_NAME_SUPPORT_ROUTE,
+    HYBRID_NAME_SUPPORT_RULE_VERSION,
     classify_corroboration,
     deterministic_stratified_sample,
+    governed_research_classification,
     lower_score_band,
     quality_aware_birthday,
 )
@@ -123,6 +126,44 @@ class HybridResearchTests(unittest.TestCase):
         )
         self.assertFalse(result["selected_for_research"])
         self.assertIn("trusted_identifier_conflict:hkid", result["hard_conflicts"])
+
+    def test_name_support_profile_is_distinct_and_needs_no_secondary_exact(self):
+        base = classify_corroboration(
+            self._evidence(
+                chi_surname=EvidenceLevel.WEAK,
+                chi_firstname=EvidenceLevel.MISSING,
+            ),
+            left_birthday="1961-10-06",
+            right_birthday="1959-01-01",
+            left_birthday_key="Yes",
+            right_birthday_key="No",
+        )
+        self.assertFalse(base["selected_for_research"])
+        selected = governed_research_classification(
+            base, HYBRID_NAME_SUPPORT_RULE_VERSION
+        )
+        self.assertTrue(selected["selected_for_research"])
+        self.assertEqual(selected["routes"], (HYBRID_NAME_SUPPORT_ROUTE,))
+        self.assertEqual(selected["exact_secondary"], ())
+
+    def test_name_support_profile_still_rejects_hard_identifier_conflict(self):
+        base = classify_corroboration(
+            self._evidence(
+                chi_surname=EvidenceLevel.WEAK,
+                chi_firstname=EvidenceLevel.MISSING,
+                hkid=EvidenceLevel.DISAGREE,
+            ),
+            left_birthday=None,
+            right_birthday=None,
+            left_birthday_key=None,
+            right_birthday_key=None,
+            trusted_identifiers={"hkid"},
+        )
+        selected = governed_research_classification(
+            base, HYBRID_NAME_SUPPORT_RULE_VERSION
+        )
+        self.assertFalse(selected["selected_for_research"])
+        self.assertIn("trusted_identifier_conflict:hkid", selected["hard_conflicts"])
 
     def test_score_bands_keep_ultra_high_separate(self):
         cutoff = 0.999148140

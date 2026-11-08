@@ -6,6 +6,13 @@ import hashlib
 from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
+from .hybrid_research import (
+    HYBRID_NAME_SUPPORT_ROUTE,
+    HYBRID_NAME_SUPPORT_RULE_VERSION,
+    HYBRID_RESEARCH_RULE_VERSION,
+    HYBRID_STRONG_CORROBORATION_RULE_VERSION,
+    SUPPORTED_HYBRID_RESEARCH_RULES,
+)
 from .splink_automation import validation_gate
 
 
@@ -18,6 +25,28 @@ HYBRID_PROPOSAL_ROUTES = (
     "exact_name+unverified_identifier_exact",
     "name_support+unverified_identifier+secondary_exact",
 )
+HYBRID_PROPOSAL_ROUTES_BY_RULE = {
+    HYBRID_STRONG_CORROBORATION_RULE_VERSION: HYBRID_PROPOSAL_ROUTES,
+    HYBRID_NAME_SUPPORT_RULE_VERSION: (HYBRID_NAME_SUPPORT_ROUTE,),
+}
+
+
+def hybrid_proposal_routes(rule_version: str) -> tuple[str, ...]:
+    version = str(rule_version or HYBRID_RESEARCH_RULE_VERSION).strip()
+    if version not in SUPPORTED_HYBRID_RESEARCH_RULES:
+        raise ValueError(f"unsupported_hybrid_research_rule:{version}")
+    return tuple(HYBRID_PROPOSAL_ROUTES_BY_RULE[version])
+
+
+def hybrid_primary_route(routes: Iterable[str], rule_version: str) -> str:
+    frozen = tuple(sorted({str(route) for route in routes if str(route)}))
+    allowed = hybrid_proposal_routes(rule_version)
+    if HYBRID_NAME_SUPPORT_ROUTE in frozen:
+        return HYBRID_NAME_SUPPORT_ROUTE
+    for route in allowed:
+        if route in frozen:
+            return route
+    raise ValueError("hybrid_candidate_has_no_frozen_route")
 
 
 def hybrid_holdout_gate(
