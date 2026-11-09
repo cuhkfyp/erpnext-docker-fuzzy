@@ -222,6 +222,14 @@ class TieredOneToManyDeskContractTests(unittest.TestCase):
         self.assertIn("tiered_one_to_many_qc_percent", guard_manifest)
         self.assertIn("Stop only the affected automatic channel", settings_controller)
         self.assertIn("already-created batch keeps its frozen selection", settings_client)
+        self.assertIn("effective_component_size_maximum", settings_client)
+        self.assertIn("no additional labeling cohort is required", settings_client)
+
+        service = (self.app / "api_tiered_one_to_many.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("component_scope_expanded_by_manager", service)
+        self.assertIn("max-component-size", service)
 
     def test_frappe_controller_names_preserve_lowercase_hyphenated_to(self):
         validation_controller = (

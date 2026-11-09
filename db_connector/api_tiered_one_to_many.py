@@ -1038,9 +1038,22 @@ def set_one_to_many_qc_capacity_gate(
     }
 
 
-def _bulk_candidates(validation: Any) -> list[str]:
+def _bulk_candidates(
+    validation: Any,
+    maximum_component_size: int | None = None,
+) -> list[str]:
+    maximum = int(
+        maximum_component_size
+        if maximum_component_size is not None
+        else frappe.db.get_single_value(
+            SETTINGS_DOCTYPE, "maximum_tiered_one_to_many_component_size"
+        )
+        or validation.maximum_component_size
+    )
+    if maximum < 3 or maximum > 100:
+        frappe.throw("Maximum Tiered One-to-Many Component Size must be between 3 and 100")
     inventory = _component_inventory(
-        str(validation.canary_run), int(validation.maximum_component_size)
+        str(validation.canary_run), maximum
     )
     reserved = set(
         frappe.get_all(
@@ -1070,7 +1083,15 @@ def preview_bulk_cycle(validation_name: str | None = None) -> dict[str, Any]:
     validation = frappe.get_doc(VALIDATION_DOCTYPE, selected)
     if validation.status != "Stale":
         _require_frozen_provenance(validation)
-    candidates = _bulk_candidates(validation) if validation.status == "Authorized" else []
+    effective_maximum = int(
+        settings.maximum_tiered_one_to_many_component_size
+        or validation.maximum_component_size
+    )
+    candidates = (
+        _bulk_candidates(validation, effective_maximum)
+        if validation.status == "Authorized"
+        else []
+    )
     limit = max(int(settings.tiered_one_to_many_components_per_run or 10), 1)
     selected_count = min(len(candidates), limit)
     percent = float(settings.tiered_one_to_many_qc_percent or 10)
@@ -1098,6 +1119,11 @@ def preview_bulk_cycle(validation_name: str | None = None) -> dict[str, Any]:
     return {
         "zero_write": True,
         "validation": validation.name,
+        "validated_component_size_maximum": int(validation.maximum_component_size),
+        "effective_component_size_maximum": effective_maximum,
+        "component_scope_expanded_by_manager": (
+            effective_maximum > int(validation.maximum_component_size)
+        ),
         "eligible_component_count": len(candidates),
         "selected_component_count": selected_count,
         "requested_qc_sample_count": qc_plan["requested"],
@@ -1123,7 +1149,8 @@ def start_bulk_cycle() -> dict[str, Any]:
     validation = frappe.get_doc(
         VALIDATION_DOCTYPE, settings.tiered_one_to_many_validation
     )
-    candidates = _bulk_candidates(validation)
+    effective_maximum = int(preview["effective_component_size_maximum"])
+    candidates = _bulk_candidates(validation, effective_maximum)
     cycle_index = frappe.db.count(
         BATCH_DOCTYPE,
         {"validation": validation.name, "batch_type": "Scheduled Bulk One-to-Many"},
@@ -1142,7 +1169,7 @@ def start_bulk_cycle() -> dict[str, Any]:
         validation,
         names,
         batch_type="Scheduled Bulk One-to-Many",
-        seed_suffix=f"bulk:{cycle_index}",
+        seed_suffix=f"bulk:{cycle_index}:max-component-size:{effective_maximum}",
     )
     for name in names:
         frappe.db.set_value(

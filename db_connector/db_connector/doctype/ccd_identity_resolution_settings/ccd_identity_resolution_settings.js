@@ -78,6 +78,16 @@ function enable_wrapped_page_actions(frm) {
 
 function add_tiered_one_to_many_research(frm) {
 	frm.set_df_property(
+		"maximum_tiered_one_to_many_component_size",
+		"label",
+		__("Maximum Tiered One-to-Many Component Size"),
+	);
+	frm.set_df_property(
+		"maximum_tiered_one_to_many_component_size",
+		"description",
+		__("Live manager-selected ceiling for both research and the next authorized one-to-many automation cycle. Raising it does not require another validation cohort; every component still receives current conflict, exclusion, overlap, and staleness checks."),
+	);
+	frm.set_df_property(
 		"tiered_one_to_many_components_per_run",
 		"description",
 		__("Positive manager-selected cap for the next component-atomic bulk cycle. It can be changed while automation is enabled; an already-created batch keeps its frozen selection."),
@@ -149,6 +159,8 @@ function add_tiered_one_to_many_research(frm) {
 					title: __("Zero-write one-to-many bulk preview"),
 					indicator: (result.blockers || []).length ? "orange" : "green",
 					message: `<p>${__("Eligible / selected components")}: ${result.eligible_component_count || 0} / ${result.selected_component_count || 0}</p>` +
+						`<p>${__("Validated / effective maximum component size")}: ${result.validated_component_size_maximum || 0} / ${result.effective_component_size_maximum || 0}</p>` +
+						(result.component_scope_expanded_by_manager ? `<p class="text-warning"><strong>${__("The manager-selected live ceiling extends beyond the original prospective cohort. Fresh component safety checks still apply; no additional labeling cohort is required.")}</strong></p>` : "") +
 						`<p>${__("QC capacity mode")}: <strong>${esc(result.qc_capacity_mode || "Capacity Gated")}</strong><br>` +
 						`${__("Requested / assignable / risk-accepted unassigned QC")}: ${result.requested_qc_sample_count || 0} / ${result.assignable_qc_sample_count || 0} / ${result.unassigned_qc_sample_count || 0}<br>` +
 						`${__("Shared weekly QC remaining")}: ${result.shared_weekly_qc_remaining || 0}</p>` +
