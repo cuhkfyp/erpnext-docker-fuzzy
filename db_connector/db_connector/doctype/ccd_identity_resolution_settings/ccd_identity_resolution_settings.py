@@ -15,6 +15,8 @@ class CCDIdentityResolutionSettings(Document):
             self.qc_assignment_interval_days = 7
         if not self.automatic_tiered_schedule:
             self.automatic_tiered_schedule = "Daily"
+        if not self.maximum_tiered_one_to_many_component_size:
+            self.maximum_tiered_one_to_many_component_size = 3
         if not self.automatic_splink_components_per_run:
             self.automatic_splink_components_per_run = 10
         if not self.maximum_splink_component_size:
@@ -111,6 +113,12 @@ class CCDIdentityResolutionSettings(Document):
                 )
         if int(self.automatic_hybrid_components_per_run or 0) < 1:
             frappe.throw("Maximum Hybrid Components per Run must be at least 1")
+        if int(self.maximum_tiered_one_to_many_component_size or 0) < 3 or int(
+            self.maximum_tiered_one_to_many_component_size or 0
+        ) > 100:
+            frappe.throw(
+                "Maximum Tiered One-to-Many Research Component Size must be between 3 and 100"
+            )
         if int(self.maximum_splink_component_size or 0) < 2 or int(
             self.maximum_splink_component_size or 0
         ) > 100:

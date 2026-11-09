@@ -35,6 +35,7 @@ from db_connector.fuzzy_matching.canary import (
     canonical_identity_groups,
     identity_partition_fingerprint,
     ordered_pair,
+    summarize_one_to_many_research,
 )
 from db_connector.fuzzy_matching.correction import partition_for_display
 from db_connector.fuzzy_matching.identity import identity_fingerprint
@@ -796,7 +797,7 @@ def reconcile_materialized_recommendations(
     recommendation_count = 0
     group_names: set[str] = set()
     reason = "already_materialized_current_partition"
-    recommendation_updates: list[dict[str, Any]] = []
+    recommendation_updates: dict[str, dict[str, Any]] = {}
     event_rows: list[tuple[Any, ...]] = []
     event_fields = [
         "name", "creation", "modified", "modified_by", "owner", "docstatus",
@@ -806,8 +807,7 @@ def reconcile_materialized_recommendations(
     for component_key, match in matches.items():
         group_names.add(match["identity_group"])
         for recommendation in component_rows[component_key]:
-            recommendation_updates.append({
-                "name": recommendation.name,
+            recommendation_updates[str(recommendation.name)] = {
                 "status": "Superseded",
                 "rollout_state": "Superseded",
                 "identity_decision": match["identity_decision"],
@@ -815,7 +815,7 @@ def reconcile_materialized_recommendations(
                 "ended_at": now,
                 "ended_by": actor,
                 "end_reason": reason,
-            })
+            }
             recommendation.status = "Superseded"
             event_key = hashlib.sha256(
                 f"{recommendation.name}\x1f{reason}".encode()
@@ -2144,3 +2144,124 @@ def get_canary_summary(run_name: str) -> dict[str, Any]:
         "qc_review_complete_count": run.qc_review_complete_count,
         "summary": json.loads(run.summary_json or "{}"),
     }
+
+
+@frappe.whitelist()
+def preview_tiered_one_to_many_research(
+    run_name: str | None = None,
+) -> dict[str, Any]:
+    """Profile frozen one-to-many Tiered exceptions without writing anything."""
+    _require_manager()
+    settings = frappe.get_single("CCD Identity Resolution Settings")
+    selected_run = str(run_name or "").strip()
+    selection_reason = "explicit"
+    if not selected_run and settings.automatic_tiered_policy:
+        latest = frappe.get_all(
+            RUN_DOCTYPE,
+            filters={
+                "matching_policy": settings.automatic_tiered_policy,
+                "status": ["in", ["Ready", "Active"]],
+            },
+            fields=["name"],
+            order_by="creation desc",
+            limit=1,
+        )
+        if latest:
+            selected_run = str(latest[0].name)
+            selection_reason = "latest_ready_or_active_for_configured_policy"
+    if not selected_run:
+        selected_run = str(settings.automatic_tiered_canary or "").strip()
+        selection_reason = "authorized_canary_fallback"
+    if not selected_run:
+        frappe.throw("Select an Authorized Tiered Canary first")
+    if not frappe.db.exists(RUN_DOCTYPE, selected_run):
+        frappe.throw(f"Tiered Canary {selected_run} does not exist")
+
+    maximum = int(
+        settings.maximum_tiered_one_to_many_component_size or 3
+    )
+    if maximum < 3 or maximum > 100:
+        frappe.throw(
+            "Maximum Tiered One-to-Many Research Component Size must be between 3 and 100"
+        )
+
+    rows = frappe.get_all(
+        RECOMMENDATION_DOCTYPE,
+        filters={"canary_run": selected_run, "status": "Exception"},
+        fields=[
+            "cluster_fingerprint",
+            "cluster_size",
+            "left_record",
+            "right_record",
+            "left_source",
+            "right_source",
+            "reason_codes_json",
+            "safety_reasons_json",
+            "component_review",
+        ],
+        limit_page_length=100_000,
+    )
+    recommendations: list[dict[str, Any]] = []
+    review_names: set[str] = set()
+    for row in rows:
+        safety = json.loads(row.safety_reasons_json or "[]")
+        if "one_to_many_source_conflict" not in safety:
+            continue
+        review_name = str(row.component_review or "")
+        if review_name:
+            review_names.add(review_name)
+        recommendations.append(
+            {
+                "cluster_fingerprint": row.cluster_fingerprint,
+                "cluster_size": row.cluster_size,
+                "left_record": row.left_record,
+                "right_record": row.right_record,
+                "left_source": row.left_source,
+                "right_source": row.right_source,
+                "reason_codes": json.loads(row.reason_codes_json or "[]"),
+                "safety_reasons": safety,
+                "component_review": review_name,
+            }
+        )
+
+    reviews = {
+        str(row.name): {
+            "review_status": row.review_status,
+            "final_decision": row.final_decision,
+            "materialization_status": row.materialization_status,
+            "stale": bool(row.stale),
+        }
+        for row in frappe.get_all(
+            COMPONENT_REVIEW_DOCTYPE,
+            filters={"name": ["in", sorted(review_names)]},
+            fields=[
+                "name",
+                "review_status",
+                "final_decision",
+                "materialization_status",
+                "stale",
+            ],
+            limit_page_length=100_000,
+        )
+    } if review_names else {}
+
+    run = frappe.get_doc(RUN_DOCTYPE, selected_run)
+    result = summarize_one_to_many_research(
+        recommendations,
+        reviews=reviews,
+        maximum_component_size=maximum,
+    )
+    result.update(
+        {
+            "run": run.name,
+            "run_status": run.status,
+            "policy_version": run.policy_version,
+            "selection_reason": selection_reason,
+            "notice": (
+                "Missing, partial, or uncertain birthday/HKID values are neutral in "
+                "this research preview. A recorded conflict between complete trusted "
+                "identifiers remains a hard conflict."
+            ),
+        }
+    )
+    return result

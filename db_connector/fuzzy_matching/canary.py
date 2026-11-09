@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
+ONE_TO_MANY_REASON = "one_to_many_source_conflict"
+TRUSTED_IDENTIFIER_CONFLICT_PREFIX = "transitive_trusted_identifier_conflict:"
+
+
 def ordered_pair(left_id: Any, right_id: Any) -> tuple[str, str]:
     return tuple(sorted((str(left_id), str(right_id))))
 
@@ -171,3 +175,170 @@ def analyze_canary_edges(
                 cluster_size=len(node_ids),
             )
     return decisions
+
+
+def summarize_one_to_many_research(
+    recommendations: Iterable[dict[str, Any]],
+    *,
+    reviews: dict[str, dict[str, Any]] | None = None,
+    maximum_component_size: int = 3,
+) -> dict[str, Any]:
+    """Summarize frozen Tiered one-to-many exceptions without changing state.
+
+    A one-to-many exception contains at least three records, so a maximum of
+    three means "three-record components only". Missing or uncertain birthday
+    and identifier values are deliberately not gates here. Only an already
+    recorded conflict between complete normalized trusted identifiers is a hard
+    conflict in this research view.
+    """
+    maximum = int(maximum_component_size or 3)
+    if maximum < 3 or maximum > 100:
+        raise ValueError("Maximum component size must be between 3 and 100")
+
+    review_rows = reviews or {}
+    components: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for raw in recommendations:
+        row = dict(raw)
+        safety = tuple(str(item) for item in (row.get("safety_reasons") or ()))
+        if ONE_TO_MANY_REASON not in safety:
+            continue
+        fingerprint = str(row.get("cluster_fingerprint") or "")
+        if fingerprint:
+            components[fingerprint].append(row)
+
+    size_counts: Counter[int] = Counter()
+    within_size_counts: Counter[int] = Counter()
+    source_patterns: Counter[str] = Counter()
+    evidence_bands: Counter[str] = Counter()
+    total_edges = 0
+    total_records: set[str] = set()
+    within_edges = 0
+    within_records: set[str] = set()
+    hard_conflicts = 0
+    reviewed = 0
+    applied = 0
+    research_candidates = 0
+    examples: list[dict[str, Any]] = []
+
+    for fingerprint in sorted(components):
+        rows = components[fingerprint]
+        records: set[str] = set()
+        sources: Counter[str] = Counter()
+        safety: set[str] = set()
+        edge_reason_sets: list[set[str]] = []
+        review_name = ""
+        declared_size = 0
+        for row in rows:
+            declared_size = max(declared_size, int(row.get("cluster_size") or 0))
+            for side in ("left", "right"):
+                record = str(row.get(f"{side}_record") or "")
+                if record:
+                    records.add(record)
+            safety.update(str(item) for item in (row.get("safety_reasons") or ()))
+            edge_reason_sets.append(
+                {str(item) for item in (row.get("reason_codes") or ())}
+            )
+            review_name = review_name or str(row.get("component_review") or "")
+
+        record_sources: dict[str, str] = {}
+        for row in rows:
+            for side in ("left", "right"):
+                record = str(row.get(f"{side}_record") or "")
+                source = str(row.get(f"{side}_source") or "")
+                if record and source:
+                    record_sources[record] = source
+        sources.update(record_sources.values())
+        size = max(declared_size, len(records))
+        size_counts[size] += 1
+        total_edges += len(rows)
+        total_records.update(records)
+        source_pattern = " + ".join(
+            f"{source}:{count}" for source, count in sorted(sources.items())
+        )
+        source_patterns[source_pattern or "unknown"] += 1
+
+        has_trusted_conflict = any(
+            reason.startswith(TRUSTED_IDENTIFIER_CONFLICT_PREFIX)
+            for reason in safety
+        )
+        if has_trusted_conflict:
+            hard_conflicts += 1
+
+        review = dict(review_rows.get(review_name) or {})
+        review_status = str(review.get("review_status") or "Unreviewed")
+        materialization_status = str(
+            review.get("materialization_status") or "Not Final"
+        )
+        if review_status in {"Agreed", "Adjudicated"}:
+            reviewed += 1
+        if materialization_status in {"Applied", "Corrected"}:
+            applied += 1
+
+        within_limit = size <= maximum
+        if within_limit:
+            within_size_counts[size] += 1
+            within_edges += len(rows)
+            within_records.update(records)
+
+            if edge_reason_sets and all(
+                "trusted_global_id_exact" in reasons for reasons in edge_reason_sets
+            ):
+                evidence_band = "trusted_identifier_exact_on_every_generated_edge"
+            elif edge_reason_sets and all(
+                "exact_name_plus_independent_evidence" in reasons
+                for reasons in edge_reason_sets
+            ):
+                evidence_band = "approved_name_route_on_every_generated_edge"
+            else:
+                evidence_band = "mixed_or_incomplete_component_evidence"
+            evidence_bands[evidence_band] += 1
+
+            is_candidate = (
+                not has_trusted_conflict
+                and review_status not in {"Agreed", "Adjudicated", "Stale"}
+                and materialization_status not in {
+                    "Applied",
+                    "Corrected",
+                    "Superseded",
+                    "Stale",
+                }
+            )
+            if is_candidate:
+                research_candidates += 1
+            if len(examples) < 12:
+                examples.append(
+                    {
+                        "component_review": review_name,
+                        "component_size": size,
+                        "edge_count": len(rows),
+                        "source_pattern": source_pattern or "unknown",
+                        "hard_trusted_identifier_conflict": has_trusted_conflict,
+                        "review_status": review_status,
+                        "materialization_status": materialization_status,
+                        "research_candidate": is_candidate,
+                    }
+                )
+
+    return {
+        "maximum_component_size": maximum,
+        "total_component_count": len(components),
+        "total_edge_count": total_edges,
+        "total_record_count": len(total_records),
+        "component_size_counts": dict(sorted(size_counts.items())),
+        "within_limit_component_count": sum(within_size_counts.values()),
+        "within_limit_edge_count": within_edges,
+        "within_limit_record_count": len(within_records),
+        "within_limit_size_counts": dict(sorted(within_size_counts.items())),
+        "above_limit_component_count": len(components) - sum(within_size_counts.values()),
+        "hard_trusted_identifier_conflict_count": hard_conflicts,
+        "final_reviewed_component_count": reviewed,
+        "applied_component_count": applied,
+        "unreviewed_research_candidate_count": research_candidates,
+        "source_pattern_counts": dict(
+            sorted(source_patterns.items(), key=lambda item: (-item[1], item[0]))
+        ),
+        "within_limit_evidence_band_counts": dict(sorted(evidence_bands.items())),
+        "examples": examples,
+        "neutral_missing_or_uncertain_fields": ["birthday", "hkid"],
+        "zero_write": True,
+    }

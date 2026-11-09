@@ -5,6 +5,7 @@ from fuzzy_matching.canary import (
     analyze_canary_edges,
     canonical_identity_groups,
     identity_partition_fingerprint,
+    summarize_one_to_many_research,
 )
 
 
@@ -13,6 +14,84 @@ def edge(left, right, left_source, right_source, source_pair="A::B"):
 
 
 class CanaryGateTests(unittest.TestCase):
+    def test_one_to_many_research_defaults_to_three_and_treats_missing_fields_as_neutral(self):
+        rows = [
+            {
+                "cluster_fingerprint": "three",
+                "cluster_size": 3,
+                "left_record": "A",
+                "right_record": "B",
+                "left_source": "S1",
+                "right_source": "S2",
+                "reason_codes": ["exact_name_plus_independent_evidence"],
+                "safety_reasons": ["one_to_many_source_conflict"],
+                "component_review": "review-three",
+            },
+            {
+                "cluster_fingerprint": "three",
+                "cluster_size": 3,
+                "left_record": "A",
+                "right_record": "C",
+                "left_source": "S1",
+                "right_source": "S2",
+                "reason_codes": ["exact_name_plus_independent_evidence"],
+                "safety_reasons": ["one_to_many_source_conflict"],
+                "component_review": "review-three",
+            },
+        ]
+        result = summarize_one_to_many_research(rows)
+        self.assertEqual(result["maximum_component_size"], 3)
+        self.assertEqual(result["within_limit_component_count"], 1)
+        self.assertEqual(result["unreviewed_research_candidate_count"], 1)
+        self.assertEqual(
+            result["neutral_missing_or_uncertain_fields"], ["birthday", "hkid"]
+        )
+
+    def test_one_to_many_research_size_is_configurable_and_trusted_conflict_is_hard(self):
+        rows = [
+            {
+                "cluster_fingerprint": "four",
+                "cluster_size": 4,
+                "left_record": "A",
+                "right_record": "B",
+                "left_source": "S1",
+                "right_source": "S2",
+                "reason_codes": ["exact_name_plus_independent_evidence"],
+                "safety_reasons": [
+                    "one_to_many_source_conflict",
+                    "transitive_trusted_identifier_conflict:hkid",
+                ],
+            },
+            {
+                "cluster_fingerprint": "four",
+                "cluster_size": 4,
+                "left_record": "A",
+                "right_record": "C",
+                "left_source": "S1",
+                "right_source": "S2",
+                "reason_codes": ["exact_name_plus_independent_evidence"],
+                "safety_reasons": ["one_to_many_source_conflict"],
+            },
+            {
+                "cluster_fingerprint": "four",
+                "cluster_size": 4,
+                "left_record": "A",
+                "right_record": "D",
+                "left_source": "S1",
+                "right_source": "S2",
+                "reason_codes": ["exact_name_plus_independent_evidence"],
+                "safety_reasons": ["one_to_many_source_conflict"],
+            },
+        ]
+        default_result = summarize_one_to_many_research(rows)
+        configured_result = summarize_one_to_many_research(
+            rows, maximum_component_size=4
+        )
+        self.assertEqual(default_result["above_limit_component_count"], 1)
+        self.assertEqual(configured_result["within_limit_component_count"], 1)
+        self.assertEqual(configured_result["hard_trusted_identifier_conflict_count"], 1)
+        self.assertEqual(configured_result["unreviewed_research_candidate_count"], 0)
+
     def test_partial_review_pairs_close_transitively_and_keep_singletons(self):
         groups = canonical_identity_groups(
             ["D", "B", "A", "C"],

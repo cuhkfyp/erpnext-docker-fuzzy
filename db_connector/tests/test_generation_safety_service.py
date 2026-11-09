@@ -212,7 +212,9 @@ class CanaryGenerationSafetyTests(unittest.TestCase):
         self.assertEqual(result["component_count"], 1)
         self.assertEqual(result["recommendation_count"], 1)
         database.bulk_update.assert_called_once()
-        values = database.bulk_update.call_args.args[1][0]
+        updates = database.bulk_update.call_args.args[1]
+        self.assertEqual(set(updates), {"rec1"})
+        values = updates["rec1"]
         self.assertEqual(values["status"], "Superseded")
         self.assertEqual(values["rollout_state"], "Superseded")
         self.assertEqual(values["identity_group"], "group1")

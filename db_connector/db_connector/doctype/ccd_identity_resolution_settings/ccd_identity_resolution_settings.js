@@ -4,6 +4,7 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		add_unified_qc_workbench(frm);
 		add_qc_control(frm);
 		add_tiered_control(frm);
+		add_tiered_one_to_many_research(frm);
 		add_breaker_control(frm);
 		add_splink_control(frm);
 		add_hybrid_research_control(frm);
@@ -18,20 +19,66 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 				__("Run One Automatic Cycle Now"),
 				() => frappe.confirm(
 					__("Run one bounded automatic Tiered cycle using the current limits and fresh safety checks?"),
-					() => frappe.call({
-						method: "db_connector.api_identity_automation.run_automatic_tiered_now",
-						freeze: true,
-						callback(response) {
-							show_result(response.message || {});
-							frm.reload_doc();
-						},
-					}),
+					() => start_automatic_tiered_cycle(frm),
 				),
 				__("Automation"),
 			);
 		}
 	},
 });
+
+function add_tiered_one_to_many_research(frm) {
+	frm.add_custom_button(
+		__("Preview Tiered One-to-Many Research"),
+		() => {
+			if (frm.is_dirty()) {
+				frappe.msgprint(__("Save the component-size setting before running the preview."));
+				return;
+			}
+			frappe.call({
+				method: "db_connector.api_fuzzy_canary.preview_tiered_one_to_many_research",
+				freeze: true,
+				callback(response) {
+					render_tiered_one_to_many_research(response.message || {});
+				},
+			});
+		},
+		__("Tiered One-to-Many Research"),
+	);
+}
+
+function render_tiered_one_to_many_research(result) {
+	const sizes = Object.entries(result.within_limit_size_counts || {})
+		.map(([size, count]) => `${esc(size)}: ${esc(count)}`)
+		.join(", ") || __("None");
+	const evidence = Object.entries(result.within_limit_evidence_band_counts || {})
+		.map(([band, count]) => `${esc(band)}: ${esc(count)}`)
+		.join("<br>") || __("None");
+	const examples = (result.examples || []).map((item) => {
+		const review = item.component_review
+			? `<a href="/app/ccd-match-component-review/${encodeURIComponent(item.component_review)}">${esc(item.component_review)}</a>`
+			: __("No review document");
+		return `<li>${review} — ${esc(item.component_size)} ${__("records")}, ${esc(item.edge_count)} ${__("edges")}, ${esc(item.source_pattern)}${item.hard_trusted_identifier_conflict ? ` — <strong>${__("trusted identifier conflict")}</strong>` : ""}</li>`;
+	}).join("");
+	frappe.msgprint({
+		title: __("Zero-write Tiered one-to-many research"),
+		indicator: (result.hard_trusted_identifier_conflict_count || 0) ? "orange" : "blue",
+		wide: true,
+		message:
+			`<p>${__("Canary")}: ${esc(result.run)} (${esc(result.run_status)})</p>` +
+			`<p>${__("Configured maximum component size")}: ${esc(result.maximum_component_size)}</p>` +
+			`<p>${__("All one-to-many components / edges / records")}: ${esc(result.total_component_count)} / ${esc(result.total_edge_count)} / ${esc(result.total_record_count)}</p>` +
+			`<p>${__("Within limit components / edges / records")}: ${esc(result.within_limit_component_count)} / ${esc(result.within_limit_edge_count)} / ${esc(result.within_limit_record_count)}</p>` +
+			`<p>${__("Within-limit component sizes")}: ${sizes}</p>` +
+			`<p>${__("Above-limit components")}: ${esc(result.above_limit_component_count)}</p>` +
+			`<p>${__("Unreviewed research candidates")}: ${esc(result.unreviewed_research_candidate_count)}</p>` +
+			`<p>${__("Complete trusted-identifier conflicts")}: ${esc(result.hard_trusted_identifier_conflict_count)}</p>` +
+			`<p><strong>${__("Evidence bands (research only)")}</strong><br>${evidence}</p>` +
+			`<p>${esc(result.notice)}</p>` +
+			(examples ? `<p><strong>${__("Deterministic examples")}</strong></p><ol>${examples}</ol>` : "") +
+			`<p><strong>${__("No records were written.")}</strong></p>`,
+	});
+}
 
 function add_unified_qc_workbench(frm) {
 	frm.add_custom_button(
@@ -1130,6 +1177,79 @@ function preview_automatic(frm) {
 					`<p>${__("Operational blockers")}: ${(result.operational_blockers || []).length ? result.operational_blockers.map(esc).join("<br>") : __("None")}</p>` +
 					`<p><strong>${__("No records were written.")}</strong></p>`,
 			});
+		},
+	});
+}
+
+function start_automatic_tiered_cycle(frm) {
+	if (frm.__ccd_automatic_cycle_starting) return;
+	frm.__ccd_automatic_cycle_starting = true;
+	const progress = new frappe.ui.Dialog({
+		title: __("Running Automatic Tiered Cycle"),
+		fields: [{ fieldname: "operation_status_html", fieldtype: "HTML" }],
+	});
+	progress.show();
+	update_automatic_cycle_progress(progress, __("Queueing the governed cycle…"));
+	frappe.call({
+		method: "db_connector.api_identity_automation.start_automatic_tiered_cycle",
+		callback(response) {
+			frm.__ccd_automatic_cycle_starting = false;
+			const token = response.message?.operation_token;
+			if (!token) {
+				progress.hide();
+				frappe.msgprint(__("No operation token was returned. Check the last automatic status before retrying."));
+				return;
+			}
+			poll_automatic_tiered_cycle(frm, token, progress);
+		},
+		error() {
+			frm.__ccd_automatic_cycle_starting = false;
+			progress.hide();
+		},
+	});
+}
+
+function update_automatic_cycle_progress(dialog, message) {
+	const field = dialog.get_field("operation_status_html");
+	if (!field?.$wrapper) return;
+	field.$wrapper.html(
+		`<p>${esc(message)}</p>`
+		+ `<p class="text-muted small">${__("The cycle continues on the long queue even if you close this dialog. Its configured safety checks and control revision still apply.")}</p>`,
+	);
+}
+
+function poll_automatic_tiered_cycle(frm, operationToken, dialog) {
+	frappe.call({
+		method: "db_connector.api_identity_automation.get_automatic_tiered_operation",
+		args: { operation_token: operationToken },
+		callback(response) {
+			const operation = response.message || {};
+			if (["Queued", "Running"].includes(operation.status)) {
+				update_automatic_cycle_progress(
+					dialog,
+					operation.status === "Queued"
+						? __("Waiting for the long-queue worker…")
+						: __("Selecting, validating, and applying the bounded cycle…"),
+				);
+				setTimeout(() => poll_automatic_tiered_cycle(frm, operationToken, dialog), 4000);
+				return;
+			}
+			dialog.hide();
+			if (operation.status === "Completed") {
+				show_result(operation.result || {});
+				frm.reload_doc();
+				return;
+			}
+			frappe.msgprint({
+				title: operation.status === "Failed" ? __("Automatic Tiered cycle failed") : __("Automatic Tiered result unavailable"),
+				indicator: operation.status === "Failed" ? "red" : "orange",
+				message: esc(operation.error || __("Check the last automatic status and batch before retrying.")),
+			});
+			frm.reload_doc();
+		},
+		error() {
+			update_automatic_cycle_progress(dialog, __("The status check was interrupted. Retrying…"));
+			setTimeout(() => poll_automatic_tiered_cycle(frm, operationToken, dialog), 4000);
 		},
 	});
 }
