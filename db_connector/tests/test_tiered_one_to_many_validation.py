@@ -9,6 +9,7 @@ from fuzzy_matching.tiered_one_to_many_validation import (
     component_precision_gate,
     deterministic_qc_sample,
     holdout_and_combined_gate,
+    ongoing_qc_plan,
     select_component_cohorts,
     validate_seed,
 )
@@ -94,6 +95,23 @@ class TieredOneToManyValidationTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 7)
 
+    def test_nonblocking_qc_capacity_shortfall_does_not_block_materialization(self):
+        gated = ongoing_qc_plan(
+            10, 10, 0, capacity_gate_required=True
+        )
+        nonblocking = ongoing_qc_plan(
+            10, 10, 0, capacity_gate_required=False
+        )
+        available = ongoing_qc_plan(
+            10, 10, 1, capacity_gate_required=False
+        )
+        self.assertTrue(gated["blocked"])
+        self.assertEqual(gated["requested"], 1)
+        self.assertFalse(nonblocking["blocked"])
+        self.assertEqual(nonblocking["unassigned"], 1)
+        self.assertEqual(available["assigned"], 1)
+        self.assertEqual(available["unassigned"], 0)
+
 
 class TieredOneToManyDeskContractTests(unittest.TestCase):
     def setUp(self):
@@ -117,6 +135,7 @@ class TieredOneToManyDeskContractTests(unittest.TestCase):
         self.assertIn("Review Next Holdout Component", validation)
         self.assertIn("Apply Final Validation Decisions", validation)
         self.assertIn("Review Next Ongoing QC Component", validation)
+        self.assertIn("Accept Non-Blocking One-to-Many QC Risk", settings)
 
     def test_component_review_advances_inside_frozen_governed_cohort(self):
         component_review = (

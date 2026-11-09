@@ -77,6 +77,7 @@ function enable_wrapped_page_actions(frm) {
 }
 
 function add_tiered_one_to_many_research(frm) {
+	add_one_to_many_qc_capacity_control(frm);
 	frm.add_custom_button(
 		__("Preview Tiered One-to-Many Research"),
 		() => {
@@ -143,8 +144,11 @@ function add_tiered_one_to_many_research(frm) {
 					title: __("Zero-write one-to-many bulk preview"),
 					indicator: (result.blockers || []).length ? "orange" : "green",
 					message: `<p>${__("Eligible / selected components")}: ${result.eligible_component_count || 0} / ${result.selected_component_count || 0}</p>` +
-						`<p>${__("Deterministic QC sample")}: ${result.requested_qc_sample_count || 0}<br>${__("Shared weekly QC remaining")}: ${result.shared_weekly_qc_remaining || 0}</p>` +
+						`<p>${__("QC capacity mode")}: <strong>${esc(result.qc_capacity_mode || "Capacity Gated")}</strong><br>` +
+						`${__("Requested / assignable / risk-accepted unassigned QC")}: ${result.requested_qc_sample_count || 0} / ${result.assignable_qc_sample_count || 0} / ${result.unassigned_qc_sample_count || 0}<br>` +
+						`${__("Shared weekly QC remaining")}: ${result.shared_weekly_qc_remaining || 0}</p>` +
 						`<p>${__("Blockers")}: ${(result.blockers || []).length ? result.blockers.map(esc).join("<br>") : __("None")}</p>` +
+						(result.qc_capacity_gate_required ? "" : `<p class="text-warning"><strong>${__("Management accepted non-blocking QC risk. Materialization may proceed when QC capacity is unavailable.")}</strong></p>`) +
 						`<p><strong>${__("No records were written.")}</strong></p>`,
 				});
 			},
@@ -154,7 +158,7 @@ function add_tiered_one_to_many_research(frm) {
 	if (enabled) {
 		frm.add_custom_button(__("Run One One-to-Many Cycle Now"), () => {
 			frappe.confirm(
-				__("Apply one bounded component-atomic cycle and assign only the deterministic QC sample?"),
+				__("Apply one bounded component-atomic cycle? Deterministic QC will be assigned when capacity exists; an audited non-blocking mode may proceed without it."),
 				() => frappe.call({
 					method: "db_connector.api_tiered_one_to_many.start_bulk_cycle",
 					callback(response) {
@@ -170,6 +174,41 @@ function add_tiered_one_to_many_research(frm) {
 			);
 		}, __("Tiered One-to-Many Automation"));
 	}
+}
+
+function add_one_to_many_qc_capacity_control(frm) {
+	frappe.call({
+		method: "db_connector.api_tiered_one_to_many.get_one_to_many_qc_capacity_mode",
+		callback(response) {
+			const mode = response.message || {};
+			const gate_required = mode.capacity_gate_required !== false;
+			const action = gate_required
+				? __("Accept Non-Blocking One-to-Many QC Risk")
+				: __("Restore One-to-Many QC Capacity Gate");
+			const phrase = gate_required
+				? "ACCEPT NON-BLOCKING ONE-TO-MANY QC RISK"
+				: "RESTORE GATED ONE-TO-MANY QC";
+			frm.set_df_property(
+				"tiered_one_to_many_qc_percent",
+				"description",
+				gate_required
+					? __("Capacity-gated: the complete deterministic QC sample must fit before a bulk cycle can write identities.")
+					: __("NON-BLOCKING RISK ACCEPTED: available QC is assigned best-effort; capacity shortage does not block reversible identity writes. Event: {0}", [mode.event || ""]),
+			);
+			frm.add_custom_button(action, () => frappe.prompt(
+				[
+					{ fieldname: "reason", fieldtype: "Small Text", label: __("Management risk decision reason"), reqd: 1 },
+					{ fieldname: "confirm_phrase", fieldtype: "Data", label: __("Type {0} exactly", [phrase]), reqd: 1 },
+				],
+				(values) => frappe.call({
+					method: "db_connector.api_tiered_one_to_many.set_one_to_many_qc_capacity_gate",
+					args: { enabled: gate_required ? 0 : 1, ...values },
+					callback: () => frm.reload_doc(),
+				}),
+				action,
+			), __("Tiered One-to-Many Automation"));
+		},
+	});
 }
 
 function render_tiered_one_to_many_research(result) {

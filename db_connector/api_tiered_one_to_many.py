@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import secrets
 from collections import Counter, defaultdict
 from typing import Any, Iterable
@@ -19,6 +18,7 @@ from db_connector.api_fuzzy_canary import (
     _component_stale,
 )
 from db_connector.api_identity_resolution import (
+    _append_event,
     materialization_enabled,
     materialize_identity,
 )
@@ -32,6 +32,7 @@ from db_connector.fuzzy_matching.tiered_one_to_many_validation import (
     component_stratum,
     deterministic_qc_sample,
     holdout_and_combined_gate,
+    ongoing_qc_plan,
     select_component_cohorts,
     validate_seed,
 )
@@ -44,7 +45,9 @@ RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 CANARY_DOCTYPE = "CCD Match Canary Run"
 SETTINGS_DOCTYPE = "CCD Identity Resolution Settings"
 INVESTIGATION_DOCTYPE = "CCD Identity QC Investigation"
+IDENTITY_EVENT_DOCTYPE = "CCD Identity Event"
 ONE_TO_MANY_REASON = "one_to_many_source_conflict"
+QC_CAPACITY_GATE_CONTROL = "one_to_many_qc_capacity_gate"
 OPEN_REVIEW_STATUSES = {
     "Unreviewed",
     "Partially Reviewed",
@@ -895,6 +898,146 @@ def _weekly_qc_remaining() -> int:
     return max(20 - int(_weekly_assigned_count()), 0)
 
 
+def _one_to_many_qc_capacity_mode(
+    validation_name: str | None = None,
+) -> dict[str, Any]:
+    selected_validation = str(
+        validation_name
+        or frappe.db.get_single_value(
+            SETTINGS_DOCTYPE, "tiered_one_to_many_validation"
+        )
+        or ""
+    )
+    if not selected_validation:
+        return {
+            "capacity_gate_required": True,
+            "mode": "Capacity Gated",
+            "risk_accepted": False,
+            "event": "",
+            "reason": "",
+            "actor": "",
+            "event_at": "",
+            "validation": "",
+        }
+    rows = frappe.get_all(
+        IDENTITY_EVENT_DOCTYPE,
+        filters={
+            "entity_doctype": VALIDATION_DOCTYPE,
+            "entity_name": selected_validation,
+            "event_type": ["in", ["Enable", "Disable"]],
+        },
+        fields=[
+            "name",
+            "to_status",
+            "reason",
+            "actor",
+            "event_at",
+            "metadata_json",
+        ],
+        order_by="event_at desc, creation desc",
+        limit_page_length=100,
+    )
+    latest = None
+    for row in rows:
+        try:
+            metadata = json.loads(row.metadata_json or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        if metadata.get("control") == QC_CAPACITY_GATE_CONTROL:
+            latest = row
+            break
+    gate_required = not latest or str(latest.to_status or "") != "Non-Blocking"
+    return {
+        "capacity_gate_required": gate_required,
+        "mode": "Capacity Gated" if gate_required else "Non-Blocking",
+        "risk_accepted": not gate_required,
+        "event": str(latest.name) if latest else "",
+        "reason": str(latest.reason or "") if latest else "",
+        "actor": str(latest.actor or "") if latest else "",
+        "event_at": str(latest.event_at or "") if latest else "",
+        "validation": selected_validation,
+    }
+
+
+@frappe.whitelist()
+def get_one_to_many_qc_capacity_mode() -> dict[str, Any]:
+    _require_reviewer()
+    return _one_to_many_qc_capacity_mode()
+
+
+@frappe.whitelist(methods=["POST"])
+def set_one_to_many_qc_capacity_gate(
+    enabled: int | str,
+    reason: str,
+    confirm_phrase: str,
+) -> dict[str, Any]:
+    """Govern the explicit risk acceptance that decouples QC from writes."""
+    _require_manager()
+    desired_gate = str(enabled or "0").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    exact = (
+        "RESTORE GATED ONE-TO-MANY QC"
+        if desired_gate
+        else "ACCEPT NON-BLOCKING ONE-TO-MANY QC RISK"
+    )
+    if str(confirm_phrase or "").strip() != exact:
+        frappe.throw(f"Type {exact} exactly to confirm")
+    normalized_reason = str(reason or "").strip()
+    if not normalized_reason:
+        frappe.throw("A management risk decision reason is required")
+    settings = frappe.get_single(SETTINGS_DOCTYPE)
+    validation_name = str(settings.tiered_one_to_many_validation or "")
+    if not desired_gate:
+        if not validation_name:
+            frappe.throw("No authorized One-to-Many validation is configured")
+        validation = frappe.get_doc(VALIDATION_DOCTYPE, validation_name)
+        if validation.status != "Authorized" or validation.second_approval_status != "Approved":
+            frappe.throw("Complete One-to-Many validation and holdout approval first")
+        _require_frozen_provenance(validation)
+    current = _one_to_many_qc_capacity_mode(validation_name)
+    target_status = "Capacity Gated" if desired_gate else "Non-Blocking"
+    if current["mode"] == target_status:
+        return {**current, "unchanged": True}
+    revision = int(settings.automation_control_revision or 0) + 1
+    event = _append_event(
+        entity_doctype=VALIDATION_DOCTYPE,
+        entity_name=validation_name,
+        event_type="Enable" if desired_gate else "Disable",
+        reason=normalized_reason,
+        nonce=hashlib.sha256(
+            f"one-to-many-qc-capacity-gate\x1f{revision}\x1f{desired_gate}\x1f{normalized_reason}".encode()
+        ).hexdigest(),
+        from_status=str(current["mode"]),
+        to_status=target_status,
+        metadata={
+            "control": QC_CAPACITY_GATE_CONTROL,
+            "revision": revision,
+            "validation": validation_name,
+            "risk_accepted": not desired_gate,
+            "effect": (
+                "QC remains best effort and capacity shortfall does not block identity writes"
+                if not desired_gate
+                else "Complete requested QC capacity is required before identity writes"
+            ),
+        },
+    )
+    _set_settings({"automation_control_revision": revision})
+    frappe.db.commit()
+    return {
+        "capacity_gate_required": desired_gate,
+        "mode": target_status,
+        "risk_accepted": not desired_gate,
+        "event": event,
+        "reason": normalized_reason,
+        "actor": frappe.session.user,
+        "event_at": str(now_datetime()),
+    }
+
+
 def _bulk_candidates(validation: Any) -> list[str]:
     inventory = _component_inventory(
         str(validation.canary_run), int(validation.maximum_component_size)
@@ -931,11 +1074,14 @@ def preview_bulk_cycle(validation_name: str | None = None) -> dict[str, Any]:
     limit = max(int(settings.tiered_one_to_many_components_per_run or 10), 1)
     selected_count = min(len(candidates), limit)
     percent = float(settings.tiered_one_to_many_qc_percent or 10)
-    requested_qc = min(
+    capacity_mode = _one_to_many_qc_capacity_mode(validation.name)
+    remaining_capacity = _weekly_qc_remaining()
+    qc_plan = ongoing_qc_plan(
         selected_count,
-        max(1 if selected_count else 0, int(math.ceil(selected_count * percent / 100.0))),
+        percent,
+        remaining_capacity,
+        capacity_gate_required=bool(capacity_mode["capacity_gate_required"]),
     )
-    remaining = _weekly_qc_remaining()
     blockers = []
     if validation.status != "Authorized":
         blockers.append("validation_not_authorized")
@@ -945,15 +1091,22 @@ def preview_bulk_cycle(validation_name: str | None = None) -> dict[str, Any]:
         blockers.append("one_to_many_automation_paused")
     if not settings.materialization_enabled:
         blockers.append("live_materialization_disabled")
-    if selected_count and remaining < requested_qc:
-        blockers.append(f"shared_weekly_qc_capacity:{remaining}:{requested_qc}")
+    if qc_plan["blocked"]:
+        blockers.append(
+            f"shared_weekly_qc_capacity:{qc_plan['assigned']}:{qc_plan['requested']}"
+        )
     return {
         "zero_write": True,
         "validation": validation.name,
         "eligible_component_count": len(candidates),
         "selected_component_count": selected_count,
-        "requested_qc_sample_count": requested_qc,
-        "shared_weekly_qc_remaining": remaining,
+        "requested_qc_sample_count": qc_plan["requested"],
+        "assignable_qc_sample_count": qc_plan["assigned"],
+        "unassigned_qc_sample_count": qc_plan["unassigned"],
+        "shared_weekly_qc_remaining": remaining_capacity,
+        "qc_capacity_mode": capacity_mode["mode"],
+        "qc_capacity_gate_required": capacity_mode["capacity_gate_required"],
+        "qc_risk_acceptance_event": capacity_mode["event"],
         "blockers": blockers,
     }
 
@@ -1089,12 +1242,15 @@ def apply_one_to_many_batch(batch_name: str) -> dict[str, Any]:
     if batch.batch_type == "Scheduled Bulk One-to-Many" and applied:
         settings = frappe.get_single(SETTINGS_DOCTYPE)
         percent = float(settings.tiered_one_to_many_qc_percent or 10)
-        qc_count = min(
+        capacity_mode = _one_to_many_qc_capacity_mode(validation.name)
+        qc_plan = ongoing_qc_plan(
             len(applied),
-            max(1, int(math.ceil(len(applied) * percent / 100.0))),
+            percent,
             _weekly_qc_remaining(),
+            capacity_gate_required=bool(capacity_mode["capacity_gate_required"]),
         )
-        if qc_count < max(1, int(math.ceil(len(applied) * percent / 100.0))):
+        qc_count = int(qc_plan["assigned"])
+        if qc_plan["blocked"]:
             # This should be prevented by the start-time preview. If capacity
             # changed concurrently, fail closed by pausing further cycles; the
             # completed identity writes remain visible and recoverable.
@@ -1123,6 +1279,27 @@ def apply_one_to_many_batch(batch_name: str) -> dict[str, Any]:
                     "tiered_qc_due_at": due,
                 },
                 update_modified=False,
+            )
+        if qc_plan["unassigned"] and not qc_plan["capacity_gate_required"]:
+            _append_event(
+                entity_doctype=BATCH_DOCTYPE,
+                entity_name=batch.name,
+                event_type="QC Assign",
+                reason="risk_accepted_non_blocking_qc_capacity_shortfall",
+                nonce=hashlib.sha256(
+                    f"one-to-many-unassigned-qc\x1f{batch.name}\x1f{qc_plan['requested']}\x1f{qc_count}".encode()
+                ).hexdigest(),
+                from_status=f"Requested {qc_plan['requested']}",
+                to_status=f"Assigned {qc_count}",
+                metadata={
+                    "channel": "Tiered One-to-Many",
+                    "validation": validation.name,
+                    "requested_qc": qc_plan["requested"],
+                    "assigned_qc": qc_count,
+                    "risk_accepted_unassigned_qc": qc_plan["unassigned"],
+                    "capacity_mode": capacity_mode["mode"],
+                    "risk_acceptance_event": capacity_mode["event"],
+                },
             )
     status = "Applied with Exceptions" if exceptions else "Applied"
     batch.db_set(

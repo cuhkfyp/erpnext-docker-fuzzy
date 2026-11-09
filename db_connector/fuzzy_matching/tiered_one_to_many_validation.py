@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from collections import Counter, defaultdict
 from typing import Any, Iterable
@@ -221,3 +222,35 @@ def deterministic_qc_sample(
             key=lambda name: _rank(frozen_seed, f"ongoing-qc:{batch_key}", name),
         )[: max(int(count), 0)]
     )
+
+
+def ongoing_qc_plan(
+    selected_count: int,
+    sample_percent: float,
+    remaining_capacity: int,
+    *,
+    capacity_gate_required: bool,
+) -> dict[str, int | bool]:
+    """Plan sampled QC without conflating monitoring with materialization.
+
+    Capacity-gated mode fails closed when the complete requested sample cannot
+    be assigned. Explicit non-blocking mode assigns the deterministic prefix
+    that fits and records the remainder as risk-accepted unassigned monitoring.
+    """
+    selected = max(int(selected_count), 0)
+    percent = float(sample_percent)
+    if percent <= 0 or percent > 100:
+        raise ValueError("Ongoing QC sample percent must be greater than 0 and at most 100")
+    requested = min(
+        selected,
+        max(1 if selected else 0, int(math.ceil(selected * percent / 100.0))),
+    )
+    assigned = min(requested, max(int(remaining_capacity), 0))
+    unassigned = requested - assigned
+    return {
+        "requested": requested,
+        "assigned": assigned,
+        "unassigned": unassigned,
+        "capacity_gate_required": bool(capacity_gate_required),
+        "blocked": bool(capacity_gate_required and unassigned),
+    }
