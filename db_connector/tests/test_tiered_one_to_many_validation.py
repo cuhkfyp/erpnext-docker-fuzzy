@@ -206,6 +206,23 @@ class TieredOneToManyDeskContractTests(unittest.TestCase):
         self.assertIn("shared_weekly_qc_capacity", service)
         self.assertIn('CHANNEL_ONE_TO_MANY = "Tiered One-to-Many"', workbench)
 
+    def test_one_to_many_run_cap_is_live_and_other_guards_are_channel_scoped(self):
+        settings_controller = (
+            self.app
+            / "db_connector/doctype/ccd_identity_resolution_settings/ccd_identity_resolution_settings.py"
+        ).read_text(encoding="utf-8")
+        settings_client = (
+            self.app
+            / "db_connector/doctype/ccd_identity_resolution_settings/ccd_identity_resolution_settings.js"
+        ).read_text(encoding="utf-8")
+        guard_manifest = settings_controller.split("channel_guards = (", 1)[1].split(
+            "blocked_changes = []", 1
+        )[0]
+        self.assertNotIn("tiered_one_to_many_components_per_run", guard_manifest)
+        self.assertIn("tiered_one_to_many_qc_percent", guard_manifest)
+        self.assertIn("Stop only the affected automatic channel", settings_controller)
+        self.assertIn("already-created batch keeps its frozen selection", settings_client)
+
     def test_frappe_controller_names_preserve_lowercase_hyphenated_to(self):
         validation_controller = (
             self.app

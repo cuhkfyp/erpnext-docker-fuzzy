@@ -77,6 +77,11 @@ function enable_wrapped_page_actions(frm) {
 }
 
 function add_tiered_one_to_many_research(frm) {
+	frm.set_df_property(
+		"tiered_one_to_many_components_per_run",
+		"description",
+		__("Positive manager-selected cap for the next component-atomic bulk cycle. It can be changed while automation is enabled; an already-created batch keeps its frozen selection."),
+	);
 	add_one_to_many_qc_capacity_control(frm);
 	frm.add_custom_button(
 		__("Preview Tiered One-to-Many Research"),
