@@ -1292,3 +1292,14 @@ representatives and component edges remain auditable as `Not Selected`. The
 main Splink circuit breaker still reacts to a confirmed sampled failure or
 overdue selected QC. Deployment leaves the new control disabled and creates no
 identity state.
+
+Migration followed verified full Development backup `20261109_174054`. Its
+site configuration parsed, the 602.7 MiB compressed database passed gzip
+verification, the 1.6 GiB public and 30.7 MiB private archives listed
+successfully, and all four artifacts received SHA-256 digests. The superseded
+local `20261109_131425` set was removed after verification; the off-machine
+copy was not touched. Migration, asset build, cache clear, and backend,
+scheduler, and worker restarts completed successfully. Deployed JavaScript
+syntax and 50 targeted service/identity tests pass. Post-deployment audit finds
+zero `Splink Incomplete Automated` decisions and zero populated corroboration
+batch items; the control remains disabled until a manager uses the Desk action.
