@@ -137,6 +137,14 @@ class TieredOneToManyDeskContractTests(unittest.TestCase):
         self.assertIn("Review Next Ongoing QC Component", validation)
         self.assertIn("Accept Non-Blocking One-to-Many QC Risk", settings)
 
+        batch = (
+            self.app
+            / "db_connector/doctype/ccd_tiered_one_to_many_batch/ccd_tiered_one_to_many_batch.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Live Batch Progress", batch)
+        self.assertIn("get_one_to_many_batch_progress", batch)
+        self.assertIn("Outcome / Reason", batch)
+
     def test_component_review_advances_inside_frozen_governed_cohort(self):
         component_review = (
             self.app

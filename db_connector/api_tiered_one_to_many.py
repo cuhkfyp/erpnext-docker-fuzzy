@@ -1176,6 +1176,100 @@ def start_bulk_cycle() -> dict[str, Any]:
     return {"status": "Queued", "batch": batch.name, **preview}
 
 
+@frappe.whitelist()
+def get_one_to_many_batch_progress(batch_name: str) -> dict[str, Any]:
+    """Return live, component-level progress for one immutable batch manifest."""
+    _require_reviewer()
+    batch = frappe.get_doc(BATCH_DOCTYPE, batch_name)
+    names = tuple(json.loads(batch.component_reviews_json or "[]"))
+    if _sha(names) != str(batch.selection_manifest_sha256):
+        frappe.throw("The frozen one-to-many batch manifest is corrupt")
+
+    rows = frappe.get_all(
+        COMPONENT_DOCTYPE,
+        filters={"name": ["in", list(names)]},
+        fields=[
+            "name",
+            "tiered_automation_status",
+            "materialization_status",
+            "materialization_error",
+            "identity_decision",
+            "identity_groups_json",
+        ],
+        limit_page_length=max(len(names), 1),
+    ) if names else []
+    by_name = {str(row.name): row for row in rows}
+    try:
+        exception_rows = json.loads(batch.exception_manifest_json or "[]")
+    except (TypeError, ValueError):
+        exception_rows = []
+    exception_by_name = {
+        str(row.get("review") or ""): str(row.get("error") or "")
+        for row in exception_rows
+        if isinstance(row, dict) and row.get("review")
+    }
+
+    items: list[dict[str, Any]] = []
+    applied = 0
+    exceptions = 0
+    for name in names:
+        row = by_name.get(str(name))
+        automation_status = str(
+            getattr(row, "tiered_automation_status", "") or ""
+        )
+        materialization_status = str(
+            getattr(row, "materialization_status", "") or ""
+        )
+        reason = exception_by_name.get(str(name)) or str(
+            getattr(row, "materialization_error", "") or ""
+        )
+        if reason or automation_status == "Exception" or materialization_status == "Exception":
+            outcome = "Exception"
+            exceptions += 1
+        elif materialization_status in {"Applied", "Corrected", "Superseded"}:
+            outcome = "Applied"
+            applied += 1
+        elif str(batch.status or "") == "Queued":
+            outcome = "Queued"
+        else:
+            outcome = "Pending"
+        try:
+            groups = json.loads(getattr(row, "identity_groups_json", "") or "[]")
+        except (TypeError, ValueError):
+            groups = []
+        items.append(
+            {
+                "component_review": str(name),
+                "outcome": outcome,
+                "reason": reason,
+                "automation_status": automation_status,
+                "materialization_status": materialization_status,
+                "identity_decision": str(
+                    getattr(row, "identity_decision", "") or ""
+                ),
+                "identity_groups": groups,
+            }
+        )
+
+    selected = len(names)
+    completed = applied + exceptions
+    return {
+        "batch": batch.name,
+        "batch_type": batch.batch_type,
+        "status": batch.status,
+        "selected_component_count": selected,
+        "completed_component_count": completed,
+        "pending_component_count": max(selected - completed, 0),
+        "applied_component_count": applied,
+        "exception_component_count": exceptions,
+        "qc_selected_count": int(batch.qc_selected_count or 0),
+        "percent_complete": round((completed / selected * 100.0), 2) if selected else 100.0,
+        "started_at": str(batch.started_at or ""),
+        "completed_at": str(batch.completed_at or ""),
+        "items": items,
+    }
+
+
 def apply_one_to_many_batch(batch_name: str) -> dict[str, Any]:
     batch = frappe.get_doc(BATCH_DOCTYPE, batch_name)
     validation = frappe.get_doc(VALIDATION_DOCTYPE, batch.validation)
@@ -1206,6 +1300,15 @@ def apply_one_to_many_batch(batch_name: str) -> dict[str, Any]:
                 _apply_human_validation_component(str(name))
             else:
                 _apply_component(str(name), batch.name)
+            frappe.db.set_value(
+                BATCH_DOCTYPE,
+                batch.name,
+                {
+                    "applied_component_count": len(applied) + 1,
+                    "exception_component_count": len(exceptions),
+                },
+                update_modified=False,
+            )
             frappe.db.commit()
             applied.append(str(name))
         except Exception as exc:
@@ -1219,6 +1322,16 @@ def apply_one_to_many_batch(batch_name: str) -> dict[str, Any]:
                     "tiered_automation_status": "Exception",
                     "materialization_status": "Exception",
                     "materialization_error": message[:140],
+                },
+                update_modified=False,
+            )
+            frappe.db.set_value(
+                BATCH_DOCTYPE,
+                batch.name,
+                {
+                    "applied_component_count": len(applied),
+                    "exception_component_count": len(exceptions),
+                    "exception_manifest_json": _json(exceptions),
                 },
                 update_modified=False,
             )
