@@ -154,6 +154,13 @@ def tiered_result(
             reasons.append("identifier_conflict_gate")
     elif exact_ids:
         tier = MatchTier.HIGH
+        # A pair can satisfy both approved High entry routes at the same time.
+        # Preserve the name-plus-independent-evidence authorization marker even
+        # when the trusted-identifier route wins the tier decision.  Canary
+        # safety uses this marker to distinguish the prospectively validated
+        # rule from an identifier-only High result.
+        if (chinese_exact or english_exact) and exact_secondary:
+            reasons.append("exact_name_plus_independent_evidence")
         if name_disagreement:
             reasons.append("name_conflict_warning")
     elif (chinese_exact or english_exact) and exact_secondary:

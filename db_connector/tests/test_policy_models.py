@@ -125,6 +125,38 @@ class IdentifierPolicyTests(unittest.TestCase):
         self.assertEqual(result.tiered_gated.tier, MatchTier.HIGH)
         self.assertIn("name_conflict_warning", result.tiered_gated.reasons)
 
+    def test_exact_trusted_id_does_not_hide_approved_name_route(self):
+        policy = self.global_policy()
+        left = {
+            "record_id": "L",
+            "source": "A",
+            "hkid": "B836060(5)",
+            "birthday": "1939-07-13",
+            "chi_surname": "謝",
+            "chi_firstname": "鳳卿",
+            "eng_surname": "TSE",
+            "eng_firstname": "Fung Hing",
+        }
+        right = {
+            "record_id": "R",
+            "source": "B",
+            "hkid": "B8360605",
+            "birthday": "1939/07/13",
+            "chi_surname": "O",
+            "chi_firstname": "PD 謝鳳卿",
+            "eng_surname": "Tse",
+            "eng_firstname": "Fung Hing",
+        }
+
+        result = compare_all_models(pair(), left, right, policy)
+
+        self.assertEqual(result.tiered_gated.tier, MatchTier.HIGH)
+        self.assertIn(
+            "exact_name_plus_independent_evidence",
+            result.tiered_gated.reasons,
+        )
+        self.assertIn("name_conflict_warning", result.tiered_gated.reasons)
+
     def test_trusted_id_conflict_has_two_safe_shadow_variants(self):
         policy = self.global_policy()
         left = {
