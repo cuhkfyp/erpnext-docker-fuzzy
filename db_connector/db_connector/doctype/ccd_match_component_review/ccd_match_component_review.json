@@ -6,7 +6,7 @@
  "field_order": [
   "canary_run", "review_key", "cluster_fingerprint", "cluster_size", "recommendation_count",
   "review_status", "final_decision", "stale", "finalized_at", "finalized_by",
-  "final_groups_json", "review_submissions", "materialization_status", "identity_decision", "identity_groups_json", "materialization_error",
+  "final_groups_json", "review_submissions", "tiered_governance_section", "tiered_one_to_many_validation", "tiered_governance_cohort", "tiered_automation_status", "tiered_automation_batch", "tiered_sample_order", "tiered_qc_assigned_at", "tiered_qc_due_at", "tiered_qc_finalized_at", "tiered_qc_failure_action", "materialization_status", "identity_decision", "identity_groups_json", "materialization_error",
   "correction_decision", "corrected_at", "corrected_by", "correction_reason", "evidence_html"
  ],
  "fields": [
@@ -22,6 +22,16 @@
   {"fieldname": "finalized_by", "fieldtype": "Link", "label": "Finalized By", "options": "User", "read_only": 1},
   {"fieldname": "final_groups_json", "fieldtype": "Code", "hidden": 1, "label": "Final Identity Groups", "options": "JSON", "permlevel": 1, "read_only": 1},
   {"fieldname": "review_submissions", "fieldtype": "Table", "hidden": 1, "label": "Review Submissions", "options": "CCD Match Component Review Submission", "permlevel": 2, "read_only": 1},
+  {"fieldname": "tiered_governance_section", "fieldtype": "Section Break", "label": "Tiered One-to-Many Governance"},
+  {"fieldname": "tiered_one_to_many_validation", "fieldtype": "Link", "in_list_view": 1, "label": "One-to-Many Validation", "options": "CCD Tiered One-to-Many Validation", "read_only": 1},
+  {"fieldname": "tiered_governance_cohort", "fieldtype": "Select", "in_list_view": 1, "label": "Governed Cohort", "options": "\nValidation\nBlinded Holdout\nScheduled Bulk\nOngoing QC", "read_only": 1},
+  {"fieldname": "tiered_automation_status", "fieldtype": "Select", "in_list_view": 1, "label": "One-to-Many Automation Lifecycle", "options": "\nReserved Validation\nReserved Holdout\nValidation Final\nRollout Planned\nApplied\nQC Selected\nQC Complete\nException\nIneligible\nStale", "read_only": 1},
+  {"fieldname": "tiered_automation_batch", "fieldtype": "Link", "label": "One-to-Many Automation Batch", "options": "CCD Tiered One-to-Many Batch", "read_only": 1},
+  {"default": "0", "fieldname": "tiered_sample_order", "fieldtype": "Int", "label": "Frozen Cohort Order", "permlevel": 2, "read_only": 1},
+  {"fieldname": "tiered_qc_assigned_at", "fieldtype": "Datetime", "label": "One-to-Many QC Assigned At", "read_only": 1},
+  {"fieldname": "tiered_qc_due_at", "fieldtype": "Datetime", "label": "One-to-Many QC Due At", "read_only": 1},
+  {"fieldname": "tiered_qc_finalized_at", "fieldtype": "Datetime", "label": "One-to-Many QC Finalized At", "read_only": 1},
+  {"fieldname": "tiered_qc_failure_action", "fieldtype": "Small Text", "label": "One-to-Many QC Failure Action", "read_only": 1},
   {"default": "Not Final", "fieldname": "materialization_status", "fieldtype": "Select", "in_list_view": 1, "label": "Identity Materialization", "options": "Not Final\nPending\nApplied\nException\nStale\nCorrected\nSuperseded", "read_only": 1},
   {"fieldname": "identity_decision", "fieldtype": "Link", "label": "Identity Decision", "options": "CCD Identity Decision", "read_only": 1},
   {"fieldname": "identity_groups_json", "fieldtype": "Code", "hidden": 1, "label": "Identity Groups", "options": "JSON", "permlevel": 1, "read_only": 1},

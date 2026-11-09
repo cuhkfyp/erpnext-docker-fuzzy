@@ -1168,6 +1168,9 @@ def run_qc_monitor() -> dict[str, Any]:
         from db_connector.api_splink_automation import monitor_splink_and_run_automatic
 
         result["splink"] = monitor_splink_and_run_automatic()
+        from db_connector.api_tiered_one_to_many import monitor_ongoing_qc
+
+        result["tiered_one_to_many"] = monitor_ongoing_qc()
         result["status"] = "Completed"
     except Exception as exc:
         frappe.db.rollback()

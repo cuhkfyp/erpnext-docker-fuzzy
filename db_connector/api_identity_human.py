@@ -811,6 +811,21 @@ def materialize_final_component_if_enabled(review_name: str) -> dict[str, Any]:
     review = frappe.get_doc(COMPONENT_DOCTYPE, review_name)
     if review.review_status not in FINAL_REVIEW_STATUSES or not review.final_decision:
         return {"status": "Not Final"}
+    # Prospective validation, blinded holdout QC, and sampled ongoing QC are
+    # evidence about an already-frozen automation rule. They must never turn
+    # into a second human-origin identity write merely because the global live
+    # switch happens to be enabled while a reviewer submits the final label.
+    if getattr(review, "tiered_one_to_many_validation", None):
+        from db_connector.api_tiered_one_to_many import (
+            record_component_review_outcome,
+        )
+
+        result = record_component_review_outcome(review.name)
+        return {
+            "status": str(result.get("status") or "Governance Evidence"),
+            "governance_evidence_only": True,
+            **result,
+        }
     if review.stale:
         _set_outcome(COMPONENT_DOCTYPE, review.name, status="Stale")
         return {"status": "Stale"}

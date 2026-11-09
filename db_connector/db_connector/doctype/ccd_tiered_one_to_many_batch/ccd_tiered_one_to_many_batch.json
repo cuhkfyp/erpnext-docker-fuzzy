@@ -1,0 +1,37 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["validation", "canary_run", "batch_type", "status", "selection_seed", "selection_manifest_sha256", "selected_component_count", "applied_component_count", "exception_component_count", "qc_selected_count", "started_at", "completed_at", "created_by", "component_reviews_json", "exception_manifest_json", "error_summary"],
+ "fields": [
+  {"fieldname": "validation", "fieldtype": "Link", "in_list_view": 1, "label": "Authorized Validation", "options": "CCD Tiered One-to-Many Validation", "read_only": 1, "reqd": 1},
+  {"fieldname": "canary_run", "fieldtype": "Link", "label": "Frozen Canary Run", "options": "CCD Match Canary Run", "read_only": 1, "reqd": 1},
+  {"fieldname": "batch_type", "fieldtype": "Select", "in_list_view": 1, "label": "Batch Type", "options": "Validation Label Activation\nBlinded Holdout Rollout\nScheduled Bulk One-to-Many", "read_only": 1, "reqd": 1},
+  {"default": "Queued", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Queued\nApplying\nApplied\nApplied with Exceptions\nFailed", "read_only": 1, "reqd": 1},
+  {"fieldname": "selection_seed", "fieldtype": "Data", "label": "Deterministic Selection Seed", "permlevel": 2, "read_only": 1, "reqd": 1},
+  {"fieldname": "selection_manifest_sha256", "fieldtype": "Data", "label": "Selection Manifest SHA-256", "permlevel": 2, "read_only": 1, "reqd": 1},
+  {"default": "0", "fieldname": "selected_component_count", "fieldtype": "Int", "label": "Selected Components", "read_only": 1},
+  {"default": "0", "fieldname": "applied_component_count", "fieldtype": "Int", "label": "Applied Components", "read_only": 1},
+  {"default": "0", "fieldname": "exception_component_count", "fieldtype": "Int", "label": "Exceptions", "read_only": 1},
+  {"default": "0", "fieldname": "qc_selected_count", "fieldtype": "Int", "label": "Deterministic QC Samples", "read_only": 1},
+  {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At", "read_only": 1},
+  {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At", "read_only": 1},
+  {"fieldname": "created_by", "fieldtype": "Link", "label": "Requested By", "options": "User", "read_only": 1},
+  {"fieldname": "component_reviews_json", "fieldtype": "Code", "label": "Frozen Component Reviews", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"fieldname": "exception_manifest_json", "fieldtype": "Code", "label": "Exception Manifest", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"fieldname": "error_summary", "fieldtype": "Small Text", "label": "Failure Summary", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Tiered One-to-Many Batch",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "report": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

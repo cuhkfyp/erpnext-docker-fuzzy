@@ -46,6 +46,7 @@ PROVENANCE_CLASS_BY_ORIGIN = {
     "Tiered Evidence": "Validated Deterministic Automation",
     "Splink Automated": "Validated Probabilistic Automation",
     "Hybrid Automated": "Validated Probabilistic Automation",
+    "Tiered One-to-Many Automated": "Validated Deterministic Automation",
     "Governance Override": "Governance Correction/Override",
 }
 
@@ -86,6 +87,8 @@ def materialization_enabled(*, automated: bool = True, channel: str = "tiered") 
         return not bool(settings.hybrid_automation_paused)
     if channel == "splink":
         return not bool(settings.splink_automation_paused)
+    if channel == "one_to_many":
+        return not bool(settings.tiered_one_to_many_automation_paused)
     return not bool(settings.automation_paused)
 
 
@@ -350,7 +353,12 @@ def preview_materialization(
     if (
         memberships
         and not existing_decision
-        and origin in {"Splink Validation", "Splink Automated", "Hybrid Automated"}
+        and origin in {
+            "Splink Validation",
+            "Splink Automated",
+            "Hybrid Automated",
+            "Tiered One-to-Many Automated",
+        }
     ):
         conflicts.add("existing_group_overlap")
     exclusion_conflicts = fingerprint_scoped_exclusion_conflicts(
@@ -366,7 +374,7 @@ def preview_materialization(
         source_counts = Counter(str(records[item].get("source") or "") for item in group)
         if any(count > 1 for source, count in source_counts.items() if source):
             same_source_groups.append(group)
-    if same_source_groups and origin not in HUMAN_ORIGINS:
+    if same_source_groups and origin not in HUMAN_ORIGINS and origin != "Tiered One-to-Many Automated":
         conflicts.add("same_source_duplicates_require_human_decision")
 
     multi_record_groups = [group for group in plan.groups if len(group) > 1]
@@ -525,6 +533,73 @@ def _validate_origin(
                     "The Development Hybrid authorization is not current and approved"
                 )
         return dict(values)
+    elif origin == "Tiered One-to-Many Automated":
+        if origin_doctype != "CCD Match Component Review":
+            frappe.throw(
+                "Tiered One-to-Many Automated must originate from a Component Review"
+            )
+        values = frappe.db.get_value(
+            origin_doctype,
+            origin_document,
+            [
+                "canary_run",
+                "cluster_fingerprint",
+                "tiered_one_to_many_validation",
+                "tiered_automation_batch",
+                "tiered_automation_status",
+            ],
+            as_dict=True,
+        )
+        if (
+            not values
+            or not values.tiered_one_to_many_validation
+            or not values.tiered_automation_batch
+            or values.tiered_automation_status != "Rollout Planned"
+        ):
+            frappe.throw("The one-to-many component is not in an approved rollout batch")
+        batch = frappe.db.get_value(
+            "CCD Tiered One-to-Many Batch",
+            values.tiered_automation_batch,
+            ["validation", "canary_run", "batch_type", "status", "component_reviews_json"],
+            as_dict=True,
+        )
+        if (
+            not batch
+            or str(batch.validation) != str(values.tiered_one_to_many_validation)
+            or str(batch.canary_run) != str(values.canary_run)
+            or batch.status not in {"Queued", "Applying", "Applied", "Applied with Exceptions"}
+        ):
+            frappe.throw("The one-to-many automation batch is not current and approved")
+        component_names = {
+            str(name) for name in json.loads(batch.component_reviews_json or "[]")
+        }
+        if origin_document not in component_names:
+            frappe.throw("The component is not present in the frozen automation batch")
+        validation = frappe.db.get_value(
+            "CCD Tiered One-to-Many Validation",
+            values.tiered_one_to_many_validation,
+            ["status", "first_approval_status", "second_approval_status", "canary_run"],
+            as_dict=True,
+        )
+        holdout = batch.batch_type == "Blinded Holdout Rollout"
+        if (
+            not validation
+            or str(validation.canary_run) != str(values.canary_run)
+            or validation.first_approval_status != "Approved"
+            or (
+                holdout
+                and validation.status not in {"Approved", "Holdout Applying", "Holdout Reviewing"}
+            )
+            or (
+                not holdout
+                and (
+                    validation.status != "Authorized"
+                    or validation.second_approval_status != "Approved"
+                )
+            )
+        ):
+            frappe.throw("The one-to-many prospective authorization is not current")
+        return dict(values)
     elif origin == "Component Review":
         if origin_doctype != "CCD Match Component Review":
             frappe.throw("Component Review must originate from a Component Review")
@@ -639,6 +714,28 @@ def _validate_origin_plan(
         )
         if decision_type != expected_type:
             frappe.throw("The identity plan contradicts its governed Splink outcome")
+    elif origin == "Tiered One-to-Many Automated":
+        if decision_type != "Same":
+            frappe.throw("Tiered One-to-Many automation may materialize only All Same")
+        component = str((review_context or {}).get("component_fingerprint") or "")
+        if not component or component != str(provenance.get("cluster_fingerprint") or ""):
+            frappe.throw("The automated one-to-many component fingerprint is inconsistent")
+        recommendations = frappe.get_all(
+            "CCD Match Recommendation",
+            filters={
+                "canary_run": provenance.get("canary_run"),
+                "cluster_fingerprint": component,
+            },
+            fields=["left_record", "right_record"],
+            limit_page_length=100_000,
+        )
+        origin_records = {
+            str(record_id)
+            for row in recommendations
+            for record_id in (row.left_record, row.right_record)
+        }
+        if not recommendations or origin_records != set(plan.record_ids):
+            frappe.throw("The identity plan does not match the frozen one-to-many component")
     elif origin == "Component Review":
         final_groups = tuple(
             tuple(str(item) for item in group)
@@ -711,6 +808,7 @@ def materialize_identity(
 ) -> dict[str, Any]:
     is_automated = origin in {
         "Tiered Evidence",
+        "Tiered One-to-Many Automated",
         "Splink Automated",
         "Hybrid Automated",
     }
@@ -719,6 +817,8 @@ def materialize_identity(
         if origin == "Hybrid Automated"
         else "splink"
         if origin == "Splink Automated"
+        else "one_to_many"
+        if origin == "Tiered One-to-Many Automated"
         else "tiered"
     )
     if require_enabled and not materialization_enabled(automated=is_automated, channel=channel):

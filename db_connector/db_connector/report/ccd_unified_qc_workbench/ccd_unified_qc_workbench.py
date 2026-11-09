@@ -16,16 +16,20 @@ RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 CANDIDATE_DOCTYPE = "CCD Match Review Candidate"
 CANARY_DOCTYPE = "CCD Match Canary Run"
 LABEL_DOCTYPE = "CCD Match Review Label"
+COMPONENT_DOCTYPE = "CCD Match Component Review"
+COMPONENT_SUBMISSION_DOCTYPE = "CCD Match Component Review Submission"
 
 CHANNEL_TIERED_ACTIVE = "Tiered — Active Canary"
 CHANNEL_TIERED_BACKLOG = "Tiered — Mandatory Backlog"
 CHANNEL_SPLINK = "Ultra-high Splink"
 CHANNEL_HYBRID = "Development Hybrid"
+CHANNEL_ONE_TO_MANY = "Tiered One-to-Many"
 CHANNELS = {
     CHANNEL_TIERED_ACTIVE,
     CHANNEL_TIERED_BACKLOG,
     CHANNEL_SPLINK,
     CHANNEL_HYBRID,
+    CHANNEL_ONE_TO_MANY,
 }
 WORK_STATES = {
     "Pending",
@@ -231,6 +235,50 @@ def _assigned_cases(active_canary: str) -> list[dict[str, Any]]:
                 "batch": str(candidate.automation_batch or ""),
             }
         )
+    component_reviews = frappe.get_all(
+        COMPONENT_DOCTYPE,
+        filters={
+            "tiered_governance_cohort": ["in", ["Blinded Holdout", "Ongoing QC"]],
+            "tiered_qc_assigned_at": ["is", "set"],
+        },
+        fields=[
+            "name",
+            "canary_run",
+            "tiered_one_to_many_validation",
+            "tiered_automation_batch",
+            "tiered_qc_assigned_at",
+            "tiered_qc_due_at",
+            "review_status",
+            "final_decision",
+            "stale",
+        ],
+        limit_page_length=100_000,
+    )
+    for component in component_reviews:
+        rows.append(
+            {
+                "channel": CHANNEL_ONE_TO_MANY,
+                "reference_doctype": COMPONENT_DOCTYPE,
+                "qc_case": str(component.name),
+                "governance_doctype": "CCD Tiered One-to-Many Validation",
+                "governance_reference": str(
+                    component.tiered_one_to_many_validation or ""
+                ),
+                "governance_scope": str(component.canary_run or ""),
+                "source_pair": "",
+                "assigned_at": component.tiered_qc_assigned_at,
+                "due_at": component.tiered_qc_due_at,
+                "review_status": str(component.review_status or "Unreviewed"),
+                "final_label": str(component.final_decision or ""),
+                "stale": cint(component.stale),
+                "batch_doctype": (
+                    "CCD Tiered One-to-Many Batch"
+                    if component.tiered_automation_batch
+                    else ""
+                ),
+                "batch": str(component.tiered_automation_batch or ""),
+            }
+        )
     return rows
 
 
@@ -238,25 +286,28 @@ def _review_labels(cases: Iterable[dict[str, Any]]) -> dict[tuple[str, str], lis
     case_names: dict[str, list[str]] = {
         RECOMMENDATION_DOCTYPE: [],
         CANDIDATE_DOCTYPE: [],
+        COMPONENT_DOCTYPE: [],
     }
     for case in cases:
         case_names[case["reference_doctype"]].append(case["qc_case"])
 
     labels: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    parent_fields = {
-        RECOMMENDATION_DOCTYPE: "qc_review_labels",
-        CANDIDATE_DOCTYPE: "automated_qc_review_labels",
+    review_sources = {
+        RECOMMENDATION_DOCTYPE: (LABEL_DOCTYPE, "qc_review_labels"),
+        CANDIDATE_DOCTYPE: (LABEL_DOCTYPE, "automated_qc_review_labels"),
+        COMPONENT_DOCTYPE: (COMPONENT_SUBMISSION_DOCTYPE, "review_submissions"),
     }
     for parenttype, names in case_names.items():
+        label_doctype, parentfield = review_sources[parenttype]
         for offset in range(0, len(names), 500):
             chunk = names[offset : offset + 500]
             if not chunk:
                 continue
             for label in frappe.get_all(
-                LABEL_DOCTYPE,
+                label_doctype,
                 filters={
                     "parenttype": parenttype,
-                    "parentfield": parent_fields[parenttype],
+                    "parentfield": parentfield,
                     "parent": ["in", chunk],
                 },
                 fields=["parent", "reviewer", "is_adjudication"],
@@ -429,6 +480,7 @@ def _message(
             CHANNEL_TIERED_BACKLOG,
             CHANNEL_SPLINK,
             CHANNEL_HYBRID,
+            CHANNEL_ONE_TO_MANY,
         )
     )
     prefix = _(

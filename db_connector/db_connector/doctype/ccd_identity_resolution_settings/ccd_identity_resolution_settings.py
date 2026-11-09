@@ -17,6 +17,10 @@ class CCDIdentityResolutionSettings(Document):
             self.automatic_tiered_schedule = "Daily"
         if not self.maximum_tiered_one_to_many_component_size:
             self.maximum_tiered_one_to_many_component_size = 3
+        if not self.tiered_one_to_many_components_per_run:
+            self.tiered_one_to_many_components_per_run = 10
+        if self.tiered_one_to_many_qc_percent in (None, ""):
+            self.tiered_one_to_many_qc_percent = 10
         if not self.automatic_splink_components_per_run:
             self.automatic_splink_components_per_run = 10
         if not self.maximum_splink_component_size:
@@ -31,6 +35,9 @@ class CCDIdentityResolutionSettings(Document):
             "automatic_tiered_canary",
             "automatic_tiered_policy",
             "automatic_tiered_components_per_run",
+            "tiered_one_to_many_validation",
+            "tiered_one_to_many_components_per_run",
+            "tiered_one_to_many_qc_percent",
             "qc_cases_per_week",
             "qc_assignment_interval_days",
             "rolling_qc_window",
@@ -58,6 +65,7 @@ class CCDIdentityResolutionSettings(Document):
             or before.automatic_qc_assignment_enabled
             or before.automatic_splink_enabled
             or before.automatic_hybrid_enabled
+            or before.automatic_tiered_one_to_many_enabled
         ):
             changed = [
                 self.meta.get_label(fieldname)
@@ -77,10 +85,11 @@ class CCDIdentityResolutionSettings(Document):
                 before.automatic_tiered_enabled
                 or before.automatic_splink_enabled
                 or before.automatic_hybrid_enabled
+                or before.automatic_tiered_one_to_many_enabled
             )
         ):
             frappe.throw(
-                "Stop Automatic Tiered, Automatic Splink, and Development Hybrid before re-enabling Live Identity Materialization"
+                "Stop Automatic Tiered, Automatic Splink, Development Hybrid, and One-to-Many automation before re-enabling Live Identity Materialization"
             )
         for fieldname in (
             "initial_pilot_wave_components",
@@ -94,6 +103,7 @@ class CCDIdentityResolutionSettings(Document):
             "automatic_splink_components_per_run",
             "maximum_splink_component_size",
             "automatic_hybrid_components_per_run",
+            "tiered_one_to_many_components_per_run",
         ):
             if int(self.get(fieldname) or 0) < 0:
                 frappe.throw(f"{self.meta.get_label(fieldname)} cannot be negative")
@@ -113,6 +123,11 @@ class CCDIdentityResolutionSettings(Document):
                 )
         if int(self.automatic_hybrid_components_per_run or 0) < 1:
             frappe.throw("Maximum Hybrid Components per Run must be at least 1")
+        if int(self.tiered_one_to_many_components_per_run or 0) < 1:
+            frappe.throw("Maximum One-to-Many Components per Run must be at least 1")
+        qc_percent = float(self.tiered_one_to_many_qc_percent or 0)
+        if qc_percent <= 0 or qc_percent > 100:
+            frappe.throw("Ongoing One-to-Many QC Sample must be greater than 0 and at most 100 percent")
         if int(self.maximum_tiered_one_to_many_component_size or 0) < 3 or int(
             self.maximum_tiered_one_to_many_component_size or 0
         ) > 100:
@@ -198,3 +213,24 @@ class CCDIdentityResolutionSettings(Document):
             frappe.throw(
                 "Development Hybrid Materialization must be enabled before scheduled execution"
             )
+        if self.automatic_tiered_one_to_many_enabled:
+            if not self.materialization_enabled:
+                frappe.throw(
+                    "Live Identity Materialization is required for One-to-Many automation"
+                )
+            if not self.tiered_one_to_many_validation:
+                frappe.throw(
+                    "An authorized One-to-Many validation is required before enabling automation"
+                )
+            validation = frappe.db.get_value(
+                "CCD Tiered One-to-Many Validation",
+                self.tiered_one_to_many_validation,
+                ["status", "second_approval_status"],
+                as_dict=True,
+            )
+            if (
+                not validation
+                or validation.status != "Authorized"
+                or validation.second_approval_status != "Approved"
+            ):
+                frappe.throw("The selected One-to-Many authorization is not current and approved")

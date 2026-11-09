@@ -1587,3 +1587,41 @@ Historical Splink authorization records keep the legacy cutoff, frozen source
 allocation, fingerprint, and 0.95 gate. The new protocol does not rewrite or
 reinterpret those records, and it does not change the independently frozen
 upper bounds of already-completed Development Hybrid studies.
+
+### 27.13 Governed Tiered one-to-many validation and bounded automation
+
+Tiered components that contain more than one record from the same source do
+not become ordinary High recommendations merely because every visible edge is
+High. They use a separate, Development-only authorization. A System Manager
+chooses a maximum component size (default three), creates one persistent
+proposal from the current Ready/Active canary, and records exactly one random
+64-character hexadecimal seed. The system then freezes 165 source-pattern and
+component-size-stratified Validation components plus 50 disjoint blinded
+Holdout components. Both cohorts are reserved from all other assignment and
+automation paths.
+
+Each Validation component receives two independent masked reviews;
+disagreement, Partial Match, All Different, or Unsure requires the existing
+component adjudication path. At least 150 current components and a 95% Wilson
+precision lower bound of at least 0.95 are required. At the complete 165 size,
+no more than two non-`All Same` decisions pass. Management approval does not
+itself write identity state.
+
+The blinded rollout applies each current eligible Holdout component atomically
+and idempotently, with a floor of 45 applied components. **Every applied
+Holdout component receives two-reviewer QC.** This full-QC rule applies only
+to the frozen set of approximately 50; it does not assign every component in
+the remaining population. Final holdout and combined metrics require a second
+management approval. Only then may the already-final Validation decisions be
+activated and the separate one-to-many automation control be enabled.
+
+Ongoing cycles are bounded by the saved positive component limit. They select
+deterministically from current, untouched, exactly authorized components and
+apply with the dedicated `Tiered One-to-Many Automated` provenance. Only a
+deterministic percentage sample enters two-reviewer QC, and that sample must
+fit in the common twenty-case weekly capacity before the cycle starts. The
+remainder stays auditable but has no reviewer, due date, or SLA. A confirmed
+non-`All Same`, stale or overdue sampled case, or a completed rolling window
+below the 0.95 Wilson requirement pauses only one-to-many automation and opens
+the governed investigation/correction path. Tiered, ultra-high Splink, and
+Hybrid controls remain independent.

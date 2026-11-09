@@ -25,6 +25,7 @@ frappe.query_reports["CCD Unified QC Workbench"] = {
 				"Tiered — Mandatory Backlog",
 				"Ultra-high Splink",
 				"Development Hybrid",
+				"Tiered One-to-Many",
 			].join("\n"),
 		},
 		{
@@ -68,6 +69,7 @@ frappe.query_reports["CCD Unified QC Workbench"] = {
 				"Tiered — Mandatory Backlog": "orange",
 				"Ultra-high Splink": "blue",
 				"Development Hybrid": "purple",
+				"Tiered One-to-Many": "orange",
 			}[data.channel] || "gray";
 			return `<span class="indicator-pill ${colour}">${rendered}</span>`;
 		}

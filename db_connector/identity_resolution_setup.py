@@ -45,6 +45,11 @@ def _backfill_fail_closed_automation_defaults() -> dict[str, int]:
         "automation_control_revision": 0,
         "automatic_tiered_components_per_run": 10,
         "automatic_tiered_schedule": "Daily",
+        "maximum_tiered_one_to_many_component_size": 3,
+        "automatic_tiered_one_to_many_enabled": 0,
+        "tiered_one_to_many_automation_paused": 0,
+        "tiered_one_to_many_components_per_run": 10,
+        "tiered_one_to_many_qc_percent": 10,
         "qc_assignment_interval_days": 7,
         "automatic_splink_enabled": 0,
         "splink_automation_paused": 0,
@@ -72,6 +77,8 @@ def _backfill_fail_closed_automation_defaults() -> dict[str, int]:
         "maximum_splink_component_size": 2,
         "automatic_splink_components_per_run": 10,
         "automatic_hybrid_components_per_run": 1,
+        "tiered_one_to_many_components_per_run": 10,
+        "tiered_one_to_many_qc_percent": 10,
     }.items():
         if int(frappe.db.get_single_value(SETTINGS_DOCTYPE, fieldname) or 0) <= 0:
             frappe.db.set_single_value(SETTINGS_DOCTYPE, fieldname, value)
@@ -363,6 +370,7 @@ def _backfill_identity_provenance_classes() -> dict[str, int]:
         "Splink Validation": "Human Confirmed",
         "Component Review": "Human Confirmed",
         "Tiered Evidence": "Validated Deterministic Automation",
+        "Tiered One-to-Many Automated": "Validated Deterministic Automation",
         "Splink Automated": "Validated Probabilistic Automation",
         "Hybrid Automated": "Validated Probabilistic Automation",
         "Governance Override": "Governance Correction/Override",

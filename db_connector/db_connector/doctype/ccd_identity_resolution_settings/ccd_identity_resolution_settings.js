@@ -45,6 +45,82 @@ function add_tiered_one_to_many_research(frm) {
 		},
 		__("Tiered One-to-Many Research"),
 	);
+	frm.add_custom_button(
+		__("Create One-to-Many Validation Proposal"),
+		() => {
+			if (frm.is_dirty()) {
+				frappe.msgprint(__("Save the component-size setting before preparing validation."));
+				return;
+			}
+			frappe.confirm(
+				__("Create one persistent Development-only proposal and generate one governance seed? The seed will be recorded and cannot be re-rolled inside the proposal."),
+				() => frappe.call({
+					method: "db_connector.api_tiered_one_to_many.create_validation_proposal",
+					args: { maximum_component_size: frm.doc.maximum_tiered_one_to_many_component_size },
+					freeze: true,
+					callback(response) {
+						if (response.message?.validation) {
+							frappe.set_route("Form", "CCD Tiered One-to-Many Validation", response.message.validation);
+						}
+					},
+				}),
+			);
+		},
+		__("Tiered One-to-Many Research"),
+	);
+
+	const enabled = Boolean(frm.doc.automatic_tiered_one_to_many_enabled);
+	const action = enabled ? __("Disable One-to-Many Automation") : __("Enable One-to-Many Automation");
+	const phrase = enabled ? "DISABLE ONE-TO-MANY AUTOMATION" : "ENABLE ONE-TO-MANY AUTOMATION";
+	frm.add_custom_button(action, () => frappe.prompt(
+		[
+			{ fieldname: "reason", fieldtype: "Small Text", label: __("Control-change reason"), reqd: 1 },
+			{ fieldname: "confirm_phrase", fieldtype: "Data", label: __("Type {0} exactly", [phrase]), reqd: 1 },
+		],
+		(values) => frappe.call({
+			method: "db_connector.api_tiered_one_to_many.set_one_to_many_automation",
+			args: { enabled: enabled ? 0 : 1, ...values },
+			callback: () => frm.reload_doc(),
+		}),
+		action,
+	), __("Tiered One-to-Many Automation"));
+
+	frm.add_custom_button(__("Preview One-to-Many Bulk Cycle"), () => {
+		frappe.call({
+			method: "db_connector.api_tiered_one_to_many.preview_bulk_cycle",
+			callback(response) {
+				const result = response.message || {};
+				frappe.msgprint({
+					title: __("Zero-write one-to-many bulk preview"),
+					indicator: (result.blockers || []).length ? "orange" : "green",
+					message: `<p>${__("Eligible / selected components")}: ${result.eligible_component_count || 0} / ${result.selected_component_count || 0}</p>` +
+						`<p>${__("Deterministic QC sample")}: ${result.requested_qc_sample_count || 0}<br>${__("Shared weekly QC remaining")}: ${result.shared_weekly_qc_remaining || 0}</p>` +
+						`<p>${__("Blockers")}: ${(result.blockers || []).length ? result.blockers.map(esc).join("<br>") : __("None")}</p>` +
+						`<p><strong>${__("No records were written.")}</strong></p>`,
+				});
+			},
+		});
+	}, __("Tiered One-to-Many Automation"));
+
+	if (enabled) {
+		frm.add_custom_button(__("Run One One-to-Many Cycle Now"), () => {
+			frappe.confirm(
+				__("Apply one bounded component-atomic cycle and assign only the deterministic QC sample?"),
+				() => frappe.call({
+					method: "db_connector.api_tiered_one_to_many.start_bulk_cycle",
+					callback(response) {
+						const result = response.message || {};
+						frappe.msgprint({
+							title: __("One-to-Many cycle"),
+							indicator: result.status === "Queued" ? "blue" : "orange",
+							message: `${__("Status")}: ${esc(result.status)}<br>${__("Batch")}: ${esc(result.batch || "")}`,
+						});
+						frm.reload_doc();
+					},
+				}),
+			);
+		}, __("Tiered One-to-Many Automation"));
+	}
 }
 
 function render_tiered_one_to_many_research(result) {

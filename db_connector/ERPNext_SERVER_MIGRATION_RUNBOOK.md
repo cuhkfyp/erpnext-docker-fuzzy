@@ -1487,6 +1487,45 @@ the separate guarded controls below.
 10. Do not copy Development data or authorization to UAT/Production. Repeat the
     backup, prospective validation, holdout, and approval on target-local data.
 
+### 11.12 Tiered one-to-many prospective validation and bulk operation
+
+Keep **Automatic Tiered One-to-Many Enabled** off during migration and after
+deployment. On Development, open **CCD Identity Resolution Settings**, save
+the intended maximum research component size (default three), use **Preview
+Tiered One-to-Many Research**, and then **Create One-to-Many Validation
+Proposal**. Open the resulting validation and:
+
+1. verify the frozen canary/policy, eligible count, allocations, and one
+   recorded 64-character seed;
+2. use **Freeze 165 Validation + 50 Holdout** once;
+3. complete two independent masked reviews on all 165 Validation components,
+   adjudicating every unresolved result;
+4. finalize, inspect the Wilson interval and provenance, and record the first
+   management decision;
+5. take and verify the required activation checkpoint, temporarily enable
+   Live Identity Materialization, and use **Create Blinded Holdout Rollout**;
+6. complete two-reviewer QC on every applied Holdout component (normally 50,
+   never the full remaining population), finalize the combined gate, and
+   record the second management decision;
+7. use **Apply Final Validation Decisions** for the already-final human labels;
+   and
+8. disable Live Identity Materialization until the separately approved bulk
+   test window.
+
+For ongoing work, choose a bounded **Maximum Tiered One-to-Many Components per
+Run** and QC percentage, enable the separate control with its exact phrase,
+and inspect **Preview One-to-Many Bulk Cycle**. The preview must show enough
+shared weekly QC capacity for the deterministic sample. **Run One One-to-Many
+Cycle Now** assigns two-reviewer QC only to that sample; all other applied
+components remain unassigned and have no SLA. Review assigned cases in **CCD
+Unified QC Workbench** with channel `Tiered One-to-Many`. A non-`All Same`,
+overdue/stale sampled case, or failing rolling Wilson window must pause only
+this channel and enter its QC Investigation before any resume.
+
+Do not copy the Development seed, cohorts, approvals, or identity data to UAT
+or Production. Re-run this complete workflow on target-local canary data after
+a verified target backup.
+
 ## 12. Sign-off checklist
 
 Before declaring transfer complete, record:

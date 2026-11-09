@@ -1222,3 +1222,36 @@ part of the selection fingerprint, deterministic seed, eligible manifest,
 prospective request fingerprint, Evaluation Run, frozen route scope, holdout
 recheck, and later automation provenance. Introducing the new profile therefore
 does not reuse or invalidate the original profile's completed evidence.
+
+## Tiered one-to-many governed path — 2026-11-09
+
+Development now includes persistent `CCD Tiered One-to-Many Validation` and
+`CCD Tiered One-to-Many Batch` workflows for the same-source-conflict
+components that remain outside ordinary Tiered High activation. The Desk flow
+creates one proposal, generates and records one 64-character seed, freezes
+165 Validation plus 50 blinded Holdout components across component-size and
+source-pattern strata, provides masked component review navigation,
+calculates component-level Wilson gates, records two management approvals,
+and activates work only through idempotent background batches.
+
+The 50 Holdout components are the only cohort with mandatory full
+two-reviewer QC. Authorized ongoing batches use deterministic sampled QC
+within the existing shared twenty-case weekly capacity. Unsampled applied
+components do not receive an assignee, due date, or SLA. One confirmed sampled
+non-`All Same` pauses only the new channel, suspends the affected identity
+group, and opens a `Tiered One-to-Many` QC Investigation. Current fingerprints,
+hard trusted-identifier conflicts, existing identity overlap, exclusions,
+staleness, frozen canary/policy/component provenance, and batch membership are
+rechecked before every write.
+
+The workflow was migrated to Development with its new one-to-many automation
+control default-off; pre-existing Tiered, Splink, Hybrid, QC, and live
+materialization controls were not changed. No proposal, cohort, batch, or
+identity was created by deployment. Live schema
+checks confirm both DocTypes and all Settings/Component Review fields, the
+zero-write maximum-size-three inventory runs against canary `tv4onkha70`, and
+the Unified QC Workbench returns the new channel with zero assigned cases.
+Nine pure regression tests, Python compilation, JSON parsing, deployed Node
+syntax checks, migration, controller loading, and report execution pass. A
+fresh full backup `20261109_131425` was verified before migration; the
+superseded local `20261108_223339` full set was removed after verification.

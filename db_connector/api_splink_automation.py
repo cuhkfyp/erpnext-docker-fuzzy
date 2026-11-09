@@ -1859,7 +1859,17 @@ def _weekly_assigned_count() -> int:
         start=start,
         extra_filters={"automation_reserved": 0},
     )
-    return int(recommendation) + int(splink) + int(optional)
+    one_to_many = 0
+    if frappe.db.table_exists("CCD Match Component Review"):
+        one_to_many = frappe.db.count(
+            "CCD Match Component Review",
+            {
+                "tiered_qc_assigned_at": [">=", start],
+                "stale": 0,
+                "tiered_governance_cohort": "Ongoing QC",
+            },
+        )
+    return int(recommendation) + int(splink) + int(optional) + int(one_to_many)
 
 
 def _mandatory_unassigned() -> tuple[list[Any], list[Any]]:

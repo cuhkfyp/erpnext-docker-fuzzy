@@ -38,6 +38,7 @@ COMPONENT_REVIEW_DOCTYPE = "CCD Match Component Review"
 CANDIDATE_DOCTYPE = "CCD Match Review Candidate"
 SUPPORTED_SOURCE_ORIGINS = {
     "Tiered Evidence",
+    "Tiered One-to-Many Automated",
     "Component Review",
     "Splink Human Review",
     "Splink Validation",
@@ -532,7 +533,7 @@ def _mark_origin_corrected(
                     item_name,
                     {"status": "Corrected", "error_code": f"corrected_by:{correction_name}"},
                 )
-        elif origin == "Component Review" and frappe.db.exists(
+        elif origin in {"Component Review", "Tiered One-to-Many Automated"} and frappe.db.exists(
             COMPONENT_REVIEW_DOCTYPE, origin_document
         ):
             _set_existing_fields(
