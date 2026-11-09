@@ -1,5 +1,6 @@
 frappe.ui.form.on("CCD Identity Resolution Settings", {
 	refresh(frm) {
+		enable_wrapped_page_actions(frm);
 		if (!frappe.user.has_role("System Manager")) return;
 		add_unified_qc_workbench(frm);
 		add_qc_control(frm);
@@ -26,6 +27,54 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		}
 	},
 });
+
+function enable_wrapped_page_actions(frm) {
+	frm.page?.wrapper?.addClass("ccd-identity-resolution-settings-page");
+
+	const style_id = "ccd-identity-resolution-settings-page-actions";
+	if (document.getElementById(style_id)) return;
+
+	const style = document.createElement("style");
+	style.id = style_id;
+	style.textContent = `
+		.ccd-identity-resolution-settings-page .page-head .page-head-content {
+			height: auto;
+			min-height: var(--page-head-height);
+			flex-wrap: wrap;
+			align-items: flex-start;
+			row-gap: var(--margin-xs, 4px);
+		}
+
+		.ccd-identity-resolution-settings-page .page-head .page-actions {
+			min-width: 0;
+			max-width: 100%;
+			flex: 1 1 720px;
+			flex-wrap: wrap;
+			align-items: flex-start;
+			row-gap: var(--margin-xs, 4px);
+		}
+
+		.ccd-identity-resolution-settings-page .page-head .custom-actions {
+			min-width: 0;
+			max-width: 100%;
+			flex: 1 1 600px;
+			flex-wrap: wrap;
+			justify-content: flex-end;
+			align-items: flex-start;
+			row-gap: var(--margin-xs, 4px);
+		}
+
+		.ccd-identity-resolution-settings-page .page-head .custom-actions > .custom-btn-group {
+			flex: 0 0 auto;
+		}
+
+		.ccd-identity-resolution-settings-page .page-head .standard-actions {
+			flex: 0 0 auto;
+			align-items: flex-start;
+		}
+	`;
+	document.head.appendChild(style);
+}
 
 function add_tiered_one_to_many_research(frm) {
 	frm.add_custom_button(
