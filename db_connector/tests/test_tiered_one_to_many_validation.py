@@ -118,6 +118,22 @@ class TieredOneToManyDeskContractTests(unittest.TestCase):
         self.assertIn("Apply Final Validation Decisions", validation)
         self.assertIn("Review Next Ongoing QC Component", validation)
 
+    def test_component_review_advances_inside_frozen_governed_cohort(self):
+        component_review = (
+            self.app
+            / "db_connector/doctype/ccd_match_component_review/ccd_match_component_review.js"
+        ).read_text(encoding="utf-8")
+        service = (self.app / "api_tiered_one_to_many.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("configure_governed_component_navigation", component_review)
+        self.assertIn("open_adjacent_governed_component", component_review)
+        self.assertIn("get_adjacent_governed_component", component_review)
+        self.assertIn("get_adjacent_governed_component", service)
+        self.assertIn(
+            "No further {0} component needs your review.", component_review
+        )
+
     def test_schema_persists_component_cohorts_and_sampled_qc(self):
         component = json.loads(
             (

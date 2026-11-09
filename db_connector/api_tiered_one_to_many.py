@@ -394,14 +394,17 @@ def freeze_validation_cohorts(validation_name: str) -> dict[str, Any]:
     }
 
 
-def _next_review(validation_name: str, cohort: str) -> dict[str, str]:
-    _require_reviewer()
+def _pending_reviews_for_reviewer(
+    validation_name: str, cohort: str
+) -> tuple[Any, list[Any]]:
     validation = frappe.get_doc(VALIDATION_DOCTYPE, validation_name)
     allowed_statuses = {
         "Validation": {"Reviewing"},
         "Blinded Holdout": {"Holdout Reviewing"},
         "Ongoing QC": {"Authorized"},
     }
+    if cohort not in allowed_statuses:
+        frappe.throw("This governed cohort does not support reviewer navigation")
     if validation.status not in allowed_statuses[cohort]:
         frappe.throw(f"The {cohort} cohort is not open for review")
     filters: dict[str, Any] = {
@@ -419,19 +422,30 @@ def _next_review(validation_name: str, cohort: str) -> dict[str, str]:
         order_by="tiered_sample_order, name",
         limit_page_length=100_000,
     )
-    for row in candidates:
-        submitted = frappe.db.exists(
+    if not candidates:
+        return validation, []
+    submitted = set(
+        frappe.get_all(
             "CCD Match Component Review Submission",
-            {
-                "parent": row.name,
+            filters={
+                "parent": ["in", [row.name for row in candidates]],
                 "parenttype": COMPONENT_DOCTYPE,
                 "parentfield": "review_submissions",
                 "reviewer": frappe.session.user,
                 "is_adjudication": 0,
             },
+            pluck="parent",
+            limit_page_length=100_000,
         )
-        if not submitted:
-            return {"review": str(row.name), "cohort": cohort}
+    )
+    return validation, [row for row in candidates if row.name not in submitted]
+
+
+def _next_review(validation_name: str, cohort: str) -> dict[str, str]:
+    _require_reviewer()
+    _validation, candidates = _pending_reviews_for_reviewer(validation_name, cohort)
+    if candidates:
+        return {"review": str(candidates[0].name), "cohort": cohort}
     return {"review": "", "cohort": cohort}
 
 
@@ -448,6 +462,50 @@ def get_next_holdout_component(validation_name: str) -> dict[str, str]:
 @frappe.whitelist()
 def get_next_ongoing_qc_component(validation_name: str) -> dict[str, str]:
     return _next_review(validation_name, "Ongoing QC")
+
+
+@frappe.whitelist()
+def get_adjacent_governed_component(
+    review_name: str, direction: str = "next"
+) -> dict[str, str]:
+    """Navigate only within the current frozen cohort and reviewer workload."""
+    _require_reviewer()
+    review = frappe.get_doc(COMPONENT_DOCTYPE, review_name)
+    validation_name = str(review.tiered_one_to_many_validation or "")
+    cohort = str(review.tiered_governance_cohort or "")
+    if not validation_name or cohort not in {
+        "Validation",
+        "Blinded Holdout",
+        "Ongoing QC",
+    }:
+        frappe.throw("This component is not part of an open governed reviewer cohort")
+    normalized_direction = str(direction or "next").strip().lower()
+    if normalized_direction not in {"next", "previous"}:
+        frappe.throw("Direction must be next or previous")
+
+    validation, candidates = _pending_reviews_for_reviewer(validation_name, cohort)
+    current_key = (int(review.tiered_sample_order or 0), str(review.name))
+    before = [
+        row
+        for row in candidates
+        if (int(row.tiered_sample_order or 0), str(row.name)) < current_key
+    ]
+    after = [
+        row
+        for row in candidates
+        if (int(row.tiered_sample_order or 0), str(row.name)) > current_key
+    ]
+    ordered = (
+        after + before
+        if normalized_direction == "next"
+        else list(reversed(before)) + list(reversed(after))
+    )
+    target = ordered[0] if ordered else None
+    return {
+        "review": str(target.name) if target else "",
+        "validation": str(validation.name),
+        "cohort": cohort,
+    }
 
 
 def _cohort_rows(validation_name: str, cohort: str) -> list[Any]:

@@ -1,9 +1,77 @@
 frappe.ui.form.on("CCD Match Component Review", {
 	refresh(frm) {
 		if (frm.is_new()) return;
+		configure_governed_component_navigation(frm);
 		load_component_evidence(frm);
 	},
 });
+
+function governed_component_context(frm) {
+	const cohorts = ["Validation", "Blinded Holdout", "Ongoing QC"];
+	if (
+		!frm.doc.tiered_one_to_many_validation ||
+		!cohorts.includes(frm.doc.tiered_governance_cohort)
+	) {
+		return null;
+	}
+	return {
+		validation: frm.doc.tiered_one_to_many_validation,
+		cohort: frm.doc.tiered_governance_cohort,
+	};
+}
+
+function configure_governed_component_navigation(frm) {
+	if (!frm.__ccd_default_navigate_records) {
+		frm.__ccd_default_navigate_records = frm.navigate_records.bind(frm);
+	}
+	if (!governed_component_context(frm)) {
+		frm.navigate_records = frm.__ccd_default_navigate_records;
+		return;
+	}
+	frm.navigate_records = (previous) => open_adjacent_governed_component(
+		frm,
+		previous ? "previous" : "next",
+	);
+	frm.page.wrapper.find(".prev-doc")
+		.attr("title", __("Previous component needing your review"))
+		.attr("data-original-title", __("Previous component needing your review"));
+	frm.page.wrapper.find(".next-doc")
+		.attr("title", __("Next component needing your review"))
+		.attr("data-original-title", __("Next component needing your review"));
+}
+
+function open_adjacent_governed_component(
+	frm,
+	direction = "next",
+	return_when_complete = false,
+) {
+	const context = governed_component_context(frm);
+	if (!context) {
+		frm.__ccd_default_navigate_records(direction === "previous");
+		return;
+	}
+	frappe.call({
+		method: "db_connector.api_tiered_one_to_many.get_adjacent_governed_component",
+		args: { review_name: frm.doc.name, direction },
+		callback(response) {
+			const next_review = response.message?.review;
+			if (next_review) {
+				frappe.set_route("Form", "CCD Match Component Review", next_review);
+				return;
+			}
+			frappe.show_alert(
+				{
+					message: __("No further {0} component needs your review.", [context.cohort]),
+					indicator: "green",
+				},
+				7,
+			);
+			if (return_when_complete) {
+				frappe.set_route("Form", "CCD Tiered One-to-Many Validation", context.validation);
+			}
+		},
+	});
+}
 
 function component_esc(value) {
 	return frappe.utils.escape_html(String(value || ""));
@@ -212,6 +280,12 @@ function send_component_decision(frm, decision, same_pairs, notes, adjudication)
 			notes: notes || "",
 		},
 		freeze: true,
-		callback: () => frm.reload_doc(),
+		callback: () => {
+			if (!adjudication && governed_component_context(frm)) {
+				open_adjacent_governed_component(frm, "next", true);
+				return;
+			}
+			frm.reload_doc();
+		},
 	});
 }
