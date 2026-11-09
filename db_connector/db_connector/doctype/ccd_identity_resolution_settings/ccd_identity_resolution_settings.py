@@ -240,6 +240,19 @@ class CCDIdentityResolutionSettings(Document):
                 or not self.authorized_splink_cutoff
             ):
                 frappe.throw("Complete governed Splink authorization is required")
+        if self.automatic_splink_incomplete_enabled:
+            if not self.automatic_splink_enabled:
+                frappe.throw(
+                    "Automatic Splink must be enabled before incomplete ultra-high automation"
+                )
+            if (
+                str(self.splink_incomplete_rule_version or "")
+                != "ultra-high-incomplete-v1"
+                or not self.splink_incomplete_authorization_event
+            ):
+                frappe.throw(
+                    "Complete governed incomplete-component authorization is required"
+                )
         if self.automatic_hybrid_enabled:
             if not self.materialization_enabled or not self.automatic_qc_assignment_enabled:
                 frappe.throw(

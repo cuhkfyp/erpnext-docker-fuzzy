@@ -1625,3 +1625,43 @@ non-`All Same`, stale or overdue sampled case, or a completed rolling window
 below the 0.95 Wilson requirement pauses only one-to-many automation and opens
 the governed investigation/correction path. Tiered, ultra-high Splink, and
 Hybrid controls remain independent.
+
+### 27.14 Corroborated incomplete ultra-high Splink components
+
+An incomplete high-score graph is not automatically a complete identity
+component. Development may nevertheless materialize a bounded component when
+every absent edge is between two records from the same source and each absent
+edge independently passes the frozen strong deterministic corroboration rule.
+The visible cross-source edges must all remain at or above the currently
+authorized ultra-high Splink cutoff. A missing cross-source edge, trusted
+identifier conflict, confirmed precise-birthday conflict, active Different
+exclusion, stale record, existing-group overlap, unsupported missing edge, or
+component above the saved maximum excludes the whole component.
+
+Birthday values ending in `-01-01` are governed as year-only/unknown-day-and-
+month evidence. Two identical placeholders are positive exact evidence, and a
+placeholder versus a precise date in the same year is positive year-match
+evidence. A placeholder in a different year is neutral rather than a hard
+conflict. Only two different precise, confirmed dates create a birthday
+conflict. This rule is frozen as `ultra-high-incomplete-v1` and appears in the
+batch's missing-edge corroboration manifest.
+
+The path is a separate, default-off extension of Guarded Splink. Enabling it
+requires the current approved Splink authorization, the main Splink control to
+be enabled and unpaused, Live Identity Materialization, Automatic QC, a
+management reason, and exact confirmation. The ordinary maximum component
+size and maximum components per run also bound incomplete selection. Complete
+cliques are selected first; any remaining capacity is filled deterministically
+by eligible incomplete components. Application is component-atomic,
+idempotent, and uses the immutable `Splink Incomplete Automated` origin plus
+the full missing-edge evidence manifest.
+
+Applied output enters deterministic sampled QC inside the existing shared
+weekly capacity. It does not create mandatory QC for every applied component
+and does not wait for QC before materialization. One representative present
+edge per component becomes sampling-eligible; selected cases receive two
+masked reviewers and an SLA, while unselected cases become `Not Selected`
+without an assignee or due date. A confirmed sampled Different, overdue
+selected case, or failing rolling precision window pauses Splink and enters the
+existing governed investigation/correction path. Excluded components remain
+visible review/reconciliation work and are never silently forced into a group.

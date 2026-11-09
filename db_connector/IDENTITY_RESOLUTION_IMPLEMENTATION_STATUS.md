@@ -1255,3 +1255,40 @@ Nine pure regression tests, Python compilation, JSON parsing, deployed Node
 syntax checks, migration, controller loading, and report execution pass. A
 fresh full backup `20261109_131425` was verified before migration; the
 superseded local `20261108_223339` full set was removed after verification.
+
+## Corroborated incomplete ultra-high Splink path — 2026-11-09
+
+Development now contains a default-off governed extension for incomplete
+ultra-high Splink components. It never treats a merely connected component as
+a clique. Every missing edge must be same-source and independently satisfy the
+frozen `hybrid-research-v1` strong corroboration classifier without a hard
+conflict; current exclusions, fingerprints, identity overlap, component size,
+queue/policy/model/runtime authorization, and the authorized ultra-high cutoff
+are rechecked at preview, batch freeze, and apply time. Applied decisions use
+the separate `Splink Incomplete Automated` origin and preserve the exact
+missing-edge evidence in each batch item.
+
+The birthday classifier now treats `YYYY-01-01` as year-only evidence. The
+same placeholder on both records remains positive; a placeholder and precise
+date in the same year is positive; a different-year comparison involving a
+placeholder is neutral; only two differing precise confirmed dates are a hard
+conflict. This correction is shared by lower-score Hybrid research and the new
+incomplete-component corroboration check.
+
+The live zero-write inventory for queue `inqr69n5cd`, cutoff `0.997092444`, and
+maximum size seven found 125 incomplete components: 90 size-three, 22
+size-four, 7 size-five, 3 size-six, 1 size-seven, 1 size-eight, and 1
+size-eleven. Thirty-eight are currently eligible (33 size-three, 4 size-four,
+1 size-five). Eighty-seven are excluded; recorded reasons include existing
+group overlap, cross-source missing edges, insufficient corroboration, trusted
+HKID conflicts, and components above the maximum. Reason counts may overlap
+because one excluded component can fail more than one check.
+
+Ongoing QC is sampled and non-blocking, not full QC for every applied
+component. One deterministic representative edge per applied component enters
+the shared sampling population; only cases selected within the common weekly
+capacity receive two reviewers, due dates, and an SLA. All other applied
+representatives and component edges remain auditable as `Not Selected`. The
+main Splink circuit breaker still reacts to a confirmed sampled failure or
+overdue selected QC. Deployment leaves the new control disabled and creates no
+identity state.

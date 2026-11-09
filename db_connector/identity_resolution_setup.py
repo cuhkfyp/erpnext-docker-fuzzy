@@ -372,6 +372,7 @@ def _backfill_identity_provenance_classes() -> dict[str, int]:
         "Tiered Evidence": "Validated Deterministic Automation",
         "Tiered One-to-Many Automated": "Validated Deterministic Automation",
         "Splink Automated": "Validated Probabilistic Automation",
+        "Splink Incomplete Automated": "Validated Probabilistic Automation",
         "Hybrid Automated": "Validated Probabilistic Automation",
         "Governance Override": "Governance Correction/Override",
     }

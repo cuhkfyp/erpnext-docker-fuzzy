@@ -1526,6 +1526,48 @@ Do not copy the Development seed, cohorts, approvals, or identity data to UAT
 or Production. Re-run this complete workflow on target-local canary data after
 a verified target backup.
 
+### 11.13 Corroborated incomplete ultra-high Splink operation
+
+Keep **Automatic Incomplete Ultra-High Splink Enabled** off during migration
+and after deployment. This is an extension of an already approved Guarded
+Splink authorization, not a lower threshold and not a replacement validation.
+
+1. In **CCD Identity Resolution Settings → Splink Automation**, click
+   **Preview Incomplete Ultra-High Components**. Confirm the authorized run,
+   queue, cutoff, rule version, maximum size, eligible size distribution, and
+   exclusion reasons. Preview is zero-write.
+2. Verify Live Identity Materialization, Automatic QC Assignment, and the main
+   Automatic Splink control are enabled and Splink is not paused. Do not change
+   the approved cutoff or authorization provenance.
+3. Use **Enable Incomplete Ultra-High Automation**, enter a management reason,
+   and type the exact confirmation phrase shown by Desk. This records a
+   separate authorization event and does not itself create a group.
+4. Set the ordinary **Maximum Splink Component Size** and **Maximum Splink
+   Components per Run** to the intended bounded values during an approved
+   control-change window. Complete cliques consume the run limit first.
+5. Run the preview again, then click **Run One Automatic Splink Cycle Now**.
+   Follow the returned persistent **CCD Splink Automation Batch** until its
+   terminal status. Incomplete items show `Complete High-Score Clique = No`
+   and retain their missing-edge corroboration JSON.
+6. Verify each applied component has the `Splink Incomplete Automated` origin,
+   exact frozen Candidate/record set, no active exclusion or prior group
+   overlap, and one active component-atomic identity group. Review every
+   exception reason rather than forcing a partial write.
+7. Run or verify the shared QC allocator. Only its deterministic sample is
+   assigned two masked reviewers; unselected output has no reviewer, due date,
+   or SLA and does not block later materialization. Resolve any sampled failure
+   through the existing Splink investigation/correction workflow.
+8. Preview again. Applied or newly overlapping components should leave the
+   eligible inventory. Disable only the incomplete extension if the approved
+   test window has ended; the main Splink control remains independently
+   governed.
+
+`YYYY-01-01` means year-only birthday evidence in this path. Same-year
+placeholder/precise comparisons support corroboration; different-year
+placeholder comparisons are neutral. Do not manually edit batch evidence or
+promote a cross-source missing edge, hard trusted-ID conflict, precise-date
+conflict, stale component, or group overlap.
+
 ## 12. Sign-off checklist
 
 Before declaring transfer complete, record:

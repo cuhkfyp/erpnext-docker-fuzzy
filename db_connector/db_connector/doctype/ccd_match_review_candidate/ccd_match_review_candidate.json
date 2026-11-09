@@ -29,7 +29,7 @@
   {"fieldname": "review_threshold", "fieldtype": "Float", "label": "Approved Review Cutoff", "permlevel": 2, "precision": "12", "read_only": 1},
   {"fieldname": "priority_rank", "fieldtype": "Int", "in_list_view": 1, "label": "Priority Rank", "read_only": 1},
   {"fieldname": "automation_section", "fieldtype": "Section Break", "label": "Guarded Splink Automation Provenance"},
-  {"fieldname": "automation_channel", "fieldtype": "Select", "in_list_view": 1, "label": "Automation Channel", "options": "\nSplink\nHybrid Development", "read_only": 1},
+  {"fieldname": "automation_channel", "fieldtype": "Select", "in_list_view": 1, "label": "Automation Channel", "options": "\nSplink\nSplink Incomplete Component\nHybrid Development", "read_only": 1},
   {"fieldname": "automation_validation_run", "fieldtype": "Link", "label": "Automatic Validation Run", "options": "CCD Match Evaluation Run", "permlevel": 2, "read_only": 1},
   {"fieldname": "automation_cohort", "fieldtype": "Select", "label": "Reserved Cohort", "options": "\nValidation\nBlinded Rollout Holdout\nScheduled Splink\nDevelopment Hybrid", "permlevel": 2, "read_only": 1},
   {"default": "0", "fieldname": "automation_reserved", "fieldtype": "Check", "label": "Reserved from Optional Review", "permlevel": 2, "read_only": 1},

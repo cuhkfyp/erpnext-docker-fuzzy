@@ -62,6 +62,36 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         )
         self.assertIn("Retry", event_field["options"].splitlines())
 
+    def test_incomplete_splink_provenance_is_declared_in_schema(self):
+        doctype_root = (
+            Path(__file__).resolve().parents[1] / "db_connector" / "doctype"
+        )
+        decision = json.loads(
+            (
+                doctype_root
+                / "ccd_identity_decision"
+                / "ccd_identity_decision.json"
+            ).read_text()
+        )
+        origin = next(
+            field for field in decision["fields"] if field["fieldname"] == "origin"
+        )
+        self.assertIn("Splink Incomplete Automated", origin["options"].splitlines())
+
+        candidate = json.loads(
+            (
+                doctype_root
+                / "ccd_match_review_candidate"
+                / "ccd_match_review_candidate.json"
+            ).read_text()
+        )
+        channel = next(
+            field
+            for field in candidate["fields"]
+            if field["fieldname"] == "automation_channel"
+        )
+        self.assertIn(service.INCOMPLETE_COMPONENT_CHANNEL, channel["options"].splitlines())
+
     def test_queue_uses_approved_evaluation_high_cutoff(self):
         queue = types.SimpleNamespace(
             threshold_evaluation_run="evaluation-run",
@@ -390,7 +420,11 @@ class SplinkAutomationServiceTests(unittest.TestCase):
             service,
             "_assigned_capacity_count",
             side_effect=[3, 4, 5],
-        ) as assigned_count:
+        ) as assigned_count, patch.object(
+            service.frappe,
+            "db",
+            types.SimpleNamespace(table_exists=lambda _doctype: False),
+        ):
             result = service._weekly_assigned_count()
 
         self.assertEqual(result, 12)
@@ -732,6 +766,82 @@ class SplinkAutomationServiceTests(unittest.TestCase):
         self.assertEqual(summary["selected_component_count"], 1)
         self.assertEqual(summary["selected_candidate_count"], 3)
         self.assertEqual(summary["incomplete_component_count"], 1)
+
+    def test_incomplete_component_requires_same_source_corroborated_missing_edge(self):
+        rows = [
+            {"name": "AB", "left_record": "A", "right_record": "B"},
+            {"name": "AC", "left_record": "A", "right_record": "C"},
+        ]
+        records = {
+            "A": {"name": "A", "source": "source-a"},
+            "B": {"name": "B", "source": "source-b"},
+            "C": {"name": "C", "source": "source-b"},
+        }
+        classification = {
+            "selected_for_research": True,
+            "routes": ("exact_name+birthday_year_exact_placeholder",),
+            "hard_conflicts": (),
+            "birthday_status": "birthday_year_exact_placeholder",
+        }
+        with patch.object(
+            service.MatchingPolicy, "from_dict", return_value=object()
+        ), patch.object(
+            service, "_load_records", return_value=records
+        ), patch.object(
+            service, "_current_membership_records", return_value=set()
+        ), patch.object(
+            service, "_active_exclusion_pairs", return_value=set()
+        ), patch.object(
+            service, "_classify_pair", return_value=classification
+        ) as classify:
+            inventory = service._incomplete_component_inventory(
+                rows,
+                queue=types.SimpleNamespace(policy_snapshot_json="{}"),
+                maximum_size=3,
+            )
+
+        self.assertEqual(inventory["eligible_component_count"], 1)
+        self.assertEqual(inventory["eligible_size_counts"], {"3": 1})
+        component = inventory["eligible"][0]
+        self.assertFalse(component.complete_clique)
+        self.assertEqual(component.candidate_names, ("AB", "AC"))
+        self.assertEqual(
+            (component.corroboration[0]["left_record"], component.corroboration[0]["right_record"]),
+            ("B", "C"),
+        )
+        classify.assert_called_once()
+
+    def test_incomplete_component_rejects_cross_source_missing_edge(self):
+        rows = [
+            {"name": "AB", "left_record": "A", "right_record": "B"},
+            {"name": "AC", "left_record": "A", "right_record": "C"},
+        ]
+        records = {
+            "A": {"name": "A", "source": "source-a"},
+            "B": {"name": "B", "source": "source-b"},
+            "C": {"name": "C", "source": "source-c"},
+        }
+        with patch.object(
+            service.MatchingPolicy, "from_dict", return_value=object()
+        ), patch.object(
+            service, "_load_records", return_value=records
+        ), patch.object(
+            service, "_current_membership_records", return_value=set()
+        ), patch.object(
+            service, "_active_exclusion_pairs", return_value=set()
+        ), patch.object(service, "_classify_pair") as classify:
+            inventory = service._incomplete_component_inventory(
+                rows,
+                queue=types.SimpleNamespace(policy_snapshot_json="{}"),
+                maximum_size=3,
+            )
+
+        self.assertEqual(inventory["eligible_component_count"], 0)
+        self.assertEqual(
+            inventory["exclusion_reason_counts"],
+            {"missing_edge_not_same_source": 1},
+        )
+        classify.assert_not_called()
 
     def test_manual_splink_cycle_uses_requesting_manager(self):
         with patch.object(service, "_require_manager") as require_manager, patch.object(

@@ -10,6 +10,8 @@ import hashlib
 import json
 import traceback
 from collections import Counter
+from dataclasses import dataclass
+from itertools import combinations
 from typing import Any, Iterable
 
 import frappe
@@ -22,12 +24,22 @@ from db_connector.api_identity_resolution import (
     materialize_identity,
     preview_materialization,
 )
+from db_connector.api_hybrid_research import (
+    _active_exclusion_pairs,
+    _classify_pair,
+    _current_membership_records,
+    _load_records,
+)
 from db_connector.fuzzy_matching.automation import (
     cadence_due,
     current_shared_group,
     rolling_qc_summary,
 )
 from db_connector.fuzzy_matching.identity import expected_identity_fingerprints
+from db_connector.fuzzy_matching.hybrid_research import (
+    HYBRID_STRONG_CORROBORATION_RULE_VERSION,
+)
+from db_connector.fuzzy_matching.policy import MatchingPolicy
 from db_connector.fuzzy_matching.splink_automation import (
     FROZEN_AUTOMATIC_CUTOFF,
     HOLDOUT_SIZE,
@@ -65,6 +77,17 @@ OPEN_REVIEW_STATUSES = {
     "Positive Confirmation Required",
 }
 SPLINK_AUTHORIZATION_PROTOCOL = "evaluation-high-v2"
+INCOMPLETE_COMPONENT_RULE_VERSION = "ultra-high-incomplete-v1"
+INCOMPLETE_COMPONENT_CHANNEL = "Splink Incomplete Component"
+
+
+@dataclass(frozen=True)
+class CorroboratedIncompleteComponent:
+    fingerprint: str
+    records: tuple[str, ...]
+    candidate_names: tuple[str, ...]
+    complete_clique: bool
+    corroboration: tuple[dict[str, Any], ...]
 
 
 def _json(value: Any) -> str:
@@ -1062,6 +1085,7 @@ def _create_batch(
                 "complete_clique": int(item["complete_clique"]),
                 "candidate_names_json": _json(item["candidate_names"]),
                 "record_ids_json": _json(item["record_ids"]),
+                "corroboration_json": _json(item.get("corroboration") or []),
                 "status": "Planned" if item["eligible"] else "Ineligible",
                 "error_code": item.get("error", "")[:140],
             },
@@ -1083,11 +1107,18 @@ def _create_batch(
                 ),
             }
             if batch_type == "Scheduled Splink":
+                incomplete = not bool(item["complete_clique"])
                 candidate_values.update(
                     {
-                        "automation_channel": "Splink",
+                        "automation_channel": (
+                            INCOMPLETE_COMPONENT_CHANNEL if incomplete else "Splink"
+                        ),
                         "automation_validation_run": run.name,
-                        "automation_cohort": "Scheduled Splink",
+                        "automation_cohort": (
+                            "Scheduled Incomplete Ultra-High"
+                            if incomplete
+                            else "Scheduled Splink"
+                        ),
                     }
                 )
             elif batch_type == "Capped Holdout Rollout":
@@ -1408,8 +1439,12 @@ def _materialize_automated_item(batch: Any, item: Any, candidates: list[Any]) ->
             fingerprint_rows.append((key, fingerprint))
     fingerprints = expected_identity_fingerprints(fingerprint_rows)
     candidate_names = sorted(str(candidate.name) for candidate in candidates)
+    incomplete = batch.batch_type == "Scheduled Splink" and not bool(
+        item.complete_clique
+    )
+    corroboration = json.loads(getattr(item, "corroboration_json", "") or "[]")
     return materialize_identity(
-        origin="Splink Automated",
+        origin=("Splink Incomplete Automated" if incomplete else "Splink Automated"),
         origin_doctype=CANDIDATE_DOCTYPE,
         origin_document=candidate_names[0],
         policy_snapshot_json=run.policy_snapshot_json,
@@ -1420,13 +1455,24 @@ def _materialize_automated_item(batch: Any, item: Any, candidates: list[Any]) ->
         exclusions=[],
         expected_fingerprints=fingerprints,
         expected_modified=expected_modified,
-        reason_codes=["validated_probabilistic_automation", "ultra_high_frozen_cutoff"],
+        reason_codes=(
+            [
+                "validated_probabilistic_automation",
+                "ultra_high_frozen_cutoff",
+                "same_source_missing_edges_deterministically_corroborated",
+                INCOMPLETE_COMPONENT_RULE_VERSION,
+            ]
+            if incomplete
+            else ["validated_probabilistic_automation", "ultra_high_frozen_cutoff"]
+        ),
         review_context={
             "validation_run": run.name,
             "automation_batch": batch.name,
             "component_fingerprint": item.component_fingerprint,
             "candidate_names": candidate_names,
             "frozen_cutoff": float(run.frozen_automatic_cutoff),
+            "incomplete_component": incomplete,
+            "corroboration": corroboration,
         },
     )
 
@@ -1491,7 +1537,11 @@ def apply_splink_batch(batch_name: str, requested_by: str) -> dict[str, Any]:
                     },
                     update_modified=False,
                 )
-                for candidate in candidates:
+                incomplete = batch.batch_type == "Scheduled Splink" and not bool(
+                    item.complete_clique
+                )
+                ordered_candidates = sorted(candidates, key=lambda row: str(row.name))
+                for candidate_index, candidate in enumerate(ordered_candidates):
                     values = {
                         "automation_status": "Applied",
                         "identity_decision": result.get("identity_decision"),
@@ -1505,7 +1555,13 @@ def apply_splink_batch(batch_name: str, requested_by: str) -> dict[str, Any]:
                         values.update(
                             {
                                 "automated_applied_at": now_datetime(),
-                                "automated_qc_review_status": "Unreviewed",
+                                "automated_qc_review_status": (
+                                    "Sampling Eligible"
+                                    if incomplete and candidate_index == 0
+                                    else "Not Selected"
+                                    if incomplete
+                                    else "Unreviewed"
+                                ),
                             }
                         )
                     frappe.db.set_value(CANDIDATE_DOCTYPE, candidate.name, values, update_modified=False)
@@ -1911,13 +1967,15 @@ def _mandatory_unassigned() -> tuple[list[Any], list[Any]]:
         fields=["name", "pair_key", "automation_validation_run", "automation_channel"],
         limit_page_length=100_000,
     )
-    # Ongoing Development Hybrid output is sampled separately.  It must never
-    # become mandatory merely because it was materialized; only the bounded
-    # deterministic sample receives a reviewer assignment and SLA.
+    # Ongoing Development Hybrid and corroborated incomplete-component output
+    # are sampled separately. They must never become mandatory merely because
+    # they were materialized; only the bounded deterministic sample receives a
+    # reviewer assignment and SLA.
     splink = [
         row
         for row in candidate_rows
-        if str(getattr(row, "automation_channel", "") or "") != "Hybrid Development"
+        if str(getattr(row, "automation_channel", "") or "")
+        not in {"Hybrid Development", INCOMPLETE_COMPONENT_CHANNEL}
     ]
     return recommendations, splink
 
@@ -1927,6 +1985,20 @@ def _hybrid_sampling_eligible() -> list[Any]:
         CANDIDATE_DOCTYPE,
         filters={
             "automation_channel": "Hybrid Development",
+            "automation_status": "Applied",
+            "automated_qc_review_status": "Sampling Eligible",
+            "automated_qc_assigned_at": ["is", "not set"],
+        },
+        fields=["name", "pair_key", "automation_validation_run", "automated_applied_at"],
+        limit_page_length=100_000,
+    )
+
+
+def _incomplete_sampling_eligible() -> list[Any]:
+    return frappe.get_all(
+        CANDIDATE_DOCTYPE,
+        filters={
+            "automation_channel": INCOMPLETE_COMPONENT_CHANNEL,
             "automation_status": "Applied",
             "automated_qc_review_status": "Sampling Eligible",
             "automated_qc_assigned_at": ["is", "not set"],
@@ -2033,7 +2105,7 @@ def _advance_shared_recommendation_cadence(
 
 
 def run_shared_review_capacity() -> dict[str, Any]:
-    """Assign mandatory QC and a sampled Hybrid subset within one weekly cap."""
+    """Assign mandatory QC and bounded non-blocking sampled channels."""
     settings = frappe.get_single(SETTINGS_DOCTYPE)
     if not settings.automatic_qc_assignment_enabled:
         return {"status": "Disabled", "assigned": 0}
@@ -2041,6 +2113,10 @@ def run_shared_review_capacity() -> dict[str, Any]:
     available = max(WEEKLY_PAIR_CAPACITY - used, 0)
     recommendations, splink = _mandatory_unassigned()
     hybrid = _hybrid_sampling_eligible()
+    incomplete_enabled = bool(
+        getattr(settings, "automatic_splink_incomplete_enabled", 0)
+    )
+    incomplete = _incomplete_sampling_eligible() if incomplete_enabled else []
     week = _week_start()
     recent_candidate_volume = int(
         frappe.db.count(
@@ -2057,6 +2133,19 @@ def run_shared_review_capacity() -> dict[str, Any]:
             },
         )
     )
+    recent_incomplete_volume = (
+        int(
+            frappe.db.count(
+                CANDIDATE_DOCTYPE,
+                {
+                    "automation_channel": INCOMPLETE_COMPONENT_CHANNEL,
+                    "automated_applied_at": [">=", week],
+                },
+            )
+        )
+        if incomplete_enabled
+        else 0
+    )
     recent_volume = {
         "Recommendation": int(
             frappe.db.count(
@@ -2064,14 +2153,21 @@ def run_shared_review_capacity() -> dict[str, Any]:
                 {"rollout_state": "Applied", "activated_at": [">=", week]},
             )
         ),
-        "Splink": max(recent_candidate_volume - recent_hybrid_volume, 0),
+        "Splink": max(
+            recent_candidate_volume
+            - recent_hybrid_volume
+            - recent_incomplete_volume,
+            0,
+        ),
         "Hybrid": recent_hybrid_volume,
+        "Incomplete Splink": recent_incomplete_volume,
     }
     allocation = allocate_shared_capacity(
         {
             "Recommendation": len(recommendations),
             "Splink": len(splink),
             "Hybrid": len(hybrid),
+            "Incomplete Splink": len(incomplete),
         },
         capacity=available,
         recent_unattended_volume=recent_volume,
@@ -2081,9 +2177,20 @@ def run_shared_review_capacity() -> dict[str, Any]:
     rec_names = _deterministic_names("Recommendation", recommendations, allocation["Recommendation"])
     splink_names = _deterministic_names("Splink", splink, allocation["Splink"])
     hybrid_names = _deterministic_names("Hybrid", hybrid, allocation["Hybrid"])
+    incomplete_names = _deterministic_names(
+        "Incomplete Splink",
+        incomplete,
+        allocation["Incomplete Splink"],
+    )
     hybrid_name_set = set(hybrid_names)
     hybrid_not_selected = sorted(
         str(row.name) for row in hybrid if str(row.name) not in hybrid_name_set
+    )
+    incomplete_name_set = set(incomplete_names)
+    incomplete_not_selected = sorted(
+        str(row.name)
+        for row in incomplete
+        if str(row.name) not in incomplete_name_set
     )
     for name in rec_names:
         frappe.db.set_value(
@@ -2108,6 +2215,18 @@ def run_shared_review_capacity() -> dict[str, Any]:
             },
             update_modified=False,
         )
+    for name in incomplete_names:
+        frappe.db.set_value(
+            CANDIDATE_DOCTYPE,
+            name,
+            {
+                "automated_qc_assigned_at": now,
+                "automated_qc_due_at": due,
+                "automated_qc_review_status": "Unreviewed",
+                "automation_status": "QC Assigned",
+            },
+            update_modified=False,
+        )
     for name in hybrid_not_selected:
         frappe.db.set_value(
             CANDIDATE_DOCTYPE,
@@ -2120,7 +2239,24 @@ def run_shared_review_capacity() -> dict[str, Any]:
             },
             update_modified=False,
         )
-    mandatory_assigned = len(rec_names) + len(splink_names) + len(hybrid_names)
+    for name in incomplete_not_selected:
+        frappe.db.set_value(
+            CANDIDATE_DOCTYPE,
+            name,
+            {
+                "automated_qc_review_status": "Not Selected",
+                "automated_qc_assigned_at": None,
+                "automated_qc_due_at": None,
+                "automation_status": "Applied",
+            },
+            update_modified=False,
+        )
+    mandatory_assigned = (
+        len(rec_names)
+        + len(splink_names)
+        + len(hybrid_names)
+        + len(incomplete_names)
+    )
     optional_limit = max(available - mandatory_assigned, 0)
     optional_rows = []
     if optional_limit:
@@ -2180,6 +2316,8 @@ def run_shared_review_capacity() -> dict[str, Any]:
         "splink_qc": splink_names,
         "hybrid_qc": hybrid_names,
         "hybrid_not_selected": hybrid_not_selected,
+        "incomplete_splink_qc": incomplete_names,
+        "incomplete_splink_not_selected": incomplete_not_selected,
         "optional_splink": optional_names,
         "recommendation_cadence": recommendation_cadence,
         "remaining_capacity": available - assigned,
@@ -2341,11 +2479,96 @@ def set_automatic_splink(
             "automatic_splink_enabled": int(desired),
             "splink_control_revision": revision,
             "splink_automation_authorization_event": event if desired else None,
+            "automatic_splink_incomplete_enabled": (
+                int(getattr(settings, "automatic_splink_incomplete_enabled", 0))
+                if desired
+                else 0
+            ),
+            "splink_incomplete_authorization_event": (
+                getattr(settings, "splink_incomplete_authorization_event", None)
+                if desired
+                else None
+            ),
             "last_splink_status": "Enabled" if desired else "Disabled",
         }
     )
     frappe.db.commit()
     return {"status": "Enabled" if desired else "Disabled", "event": event, "revision": revision}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_incomplete_splink_automation(
+    enabled: int | str, reason: str, confirm_phrase: str
+) -> dict[str, Any]:
+    """Govern the separately default-off incomplete ultra-high extension."""
+    _require_manager()
+    desired = str(enabled or "0").strip().casefold() in {"1", "true", "yes", "on"}
+    exact = (
+        "ENABLE INCOMPLETE ULTRA HIGH SPLINK"
+        if desired
+        else "DISABLE INCOMPLETE ULTRA HIGH SPLINK"
+    )
+    if str(confirm_phrase or "").strip() != exact:
+        frappe.throw(f"Type {exact} exactly to confirm")
+    reason = str(reason or "").strip()
+    if not reason:
+        frappe.throw("A control-change reason is required")
+    _lock_settings()
+    settings = frappe.get_single(SETTINGS_DOCTYPE)
+    run_name = str(settings.authorized_splink_validation_run or "")
+    if desired:
+        if not settings.automatic_splink_enabled:
+            frappe.throw("Enable Automatic Splink before enabling incomplete components")
+        if settings.splink_automation_paused:
+            frappe.throw("Resume Splink automation before enabling incomplete components")
+        if not run_name:
+            frappe.throw("Select an authorized Splink validation run")
+        run = frappe.get_doc(RUN_DOCTYPE, run_name)
+        blockers = _automatic_splink_authorization_blockers(settings, run)
+        if blockers:
+            frappe.throw(
+                "Incomplete ultra-high Splink cannot be enabled: "
+                + ", ".join(blockers)
+            )
+    revision = int(settings.splink_control_revision or 0) + 1
+    event = _append_event(
+        entity_doctype=SETTINGS_DOCTYPE,
+        entity_name=SETTINGS_DOCTYPE,
+        event_type="Enable" if desired else "Disable",
+        reason=reason,
+        nonce=hashlib.sha256(
+            f"splink-incomplete-control\x1f{revision}\x1f{desired}\x1f{reason}".encode()
+        ).hexdigest(),
+        from_status=(
+            "Enabled"
+            if getattr(settings, "automatic_splink_incomplete_enabled", 0)
+            else "Disabled"
+        ),
+        to_status="Enabled" if desired else "Disabled",
+        metadata={
+            "channel": INCOMPLETE_COMPONENT_CHANNEL,
+            "revision": revision,
+            "validation_run": run_name,
+            "rule_version": INCOMPLETE_COMPONENT_RULE_VERSION,
+            "maximum_component_size": int(settings.maximum_splink_component_size or 2),
+            "qc_mode": "sampled_non_blocking",
+        },
+    )
+    _set_settings(
+        {
+            "automatic_splink_incomplete_enabled": int(desired),
+            "splink_incomplete_rule_version": INCOMPLETE_COMPONENT_RULE_VERSION,
+            "splink_incomplete_authorization_event": event if desired else None,
+            "splink_control_revision": revision,
+        }
+    )
+    frappe.db.commit()
+    return {
+        "status": "Enabled" if desired else "Disabled",
+        "event": event,
+        "revision": revision,
+        "rule_version": INCOMPLETE_COMPONENT_RULE_VERSION,
+    }
 
 
 @frappe.whitelist(methods=["POST"])
@@ -2432,6 +2655,169 @@ def _scheduled_candidates(run: Any, queue_run: str) -> list[dict[str, Any]]:
     ]
 
 
+def _incomplete_component_inventory(
+    rows: Iterable[dict[str, Any]],
+    *,
+    queue: Any,
+    maximum_size: int,
+) -> dict[str, Any]:
+    """Classify incomplete ultra-high components without changing lifecycle state.
+
+    A component is eligible only when every absent graph edge is between two
+    records from the same source and that pair independently satisfies the
+    strong deterministic corroboration profile.  This prevents a high-score
+    chain from silently turning an unevaluated cross-source pair into an
+    identity assertion.
+    """
+    materialized = [dict(row) for row in rows]
+    metadata = component_metadata(materialized)
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in materialized:
+        key = str(row.get("name") or row.get("pair_key") or "")
+        details = metadata.get(key)
+        if not details or details.get("complete_clique"):
+            continue
+        fingerprint = str(details["component_fingerprint"])
+        group = grouped.setdefault(
+            fingerprint,
+            {
+                "records": tuple(str(item) for item in details["component_records"]),
+                "candidate_names": [],
+                "present_edges": set(),
+            },
+        )
+        group["candidate_names"].append(str(row.get("name") or ""))
+        group["present_edges"].add(
+            tuple(sorted((str(row.get("left_record") or ""), str(row.get("right_record") or ""))))
+        )
+
+    record_ids = {
+        record
+        for group in grouped.values()
+        for record in group["records"]
+        if record
+    }
+    policy = MatchingPolicy.from_dict(json.loads(queue.policy_snapshot_json or "{}"))
+    records = _load_records(record_ids, policy)
+    memberships = _current_membership_records(record_ids)
+    exclusions = _active_exclusion_pairs(record_ids)
+    eligible: list[CorroboratedIncompleteComponent] = []
+    excluded: list[dict[str, Any]] = []
+    reason_counts: Counter[str] = Counter()
+    incomplete_size_counts: Counter[int] = Counter()
+    eligible_size_counts: Counter[int] = Counter()
+
+    for fingerprint in sorted(grouped):
+        group = grouped[fingerprint]
+        component_records = tuple(sorted(group["records"]))
+        component_size = len(component_records)
+        incomplete_size_counts[component_size] += 1
+        present_edges = set(group["present_edges"])
+        missing_pairs = [
+            tuple(sorted(pair))
+            for pair in combinations(component_records, 2)
+            if tuple(sorted(pair)) not in present_edges
+        ]
+        reasons: set[str] = set()
+        evidence: list[dict[str, Any]] = []
+        if component_size > int(maximum_size):
+            reasons.add("above_maximum_component_size")
+        if any(record in memberships for record in component_records):
+            reasons.add("existing_group_overlap")
+        for left_id, right_id in missing_pairs:
+            left = records.get(left_id)
+            right = records.get(right_id)
+            detail: dict[str, Any] = {
+                "left_record": left_id,
+                "right_record": right_id,
+                "rule_version": INCOMPLETE_COMPONENT_RULE_VERSION,
+            }
+            if not left or not right:
+                reasons.add("missing_current_record")
+                detail["eligible"] = False
+                detail["reason"] = "missing_current_record"
+                evidence.append(detail)
+                continue
+            left_source = str(left.get("source") or "")
+            right_source = str(right.get("source") or "")
+            detail["left_source"] = left_source
+            detail["right_source"] = right_source
+            if not left_source or left_source != right_source:
+                reasons.add("missing_edge_not_same_source")
+                detail["eligible"] = False
+                detail["reason"] = "missing_edge_not_same_source"
+                evidence.append(detail)
+                continue
+            if (left_id, right_id) in exclusions:
+                reasons.add("active_human_exclusion")
+                detail["eligible"] = False
+                detail["reason"] = "active_human_exclusion"
+                evidence.append(detail)
+                continue
+            classification = _classify_pair(
+                left,
+                right,
+                policy,
+                HYBRID_STRONG_CORROBORATION_RULE_VERSION,
+            )
+            detail.update(
+                {
+                    "birthday_status": str(classification.get("birthday_status") or ""),
+                    "routes": list(classification.get("routes") or ()),
+                    "hard_conflicts": list(classification.get("hard_conflicts") or ()),
+                    "eligible": bool(classification.get("selected_for_research")),
+                }
+            )
+            if classification.get("hard_conflicts"):
+                reasons.update(str(item) for item in classification["hard_conflicts"])
+            if not classification.get("selected_for_research"):
+                reasons.add("missing_edge_without_strong_corroboration")
+            evidence.append(detail)
+
+        if not missing_pairs:
+            reasons.add("incomplete_component_without_missing_edge")
+        candidate_names = tuple(sorted(name for name in group["candidate_names"] if name))
+        if reasons:
+            reason_counts.update(reasons)
+            excluded.append(
+                {
+                    "component_fingerprint": fingerprint,
+                    "component_size": component_size,
+                    "candidate_names": list(candidate_names),
+                    "record_ids": list(component_records),
+                    "missing_edge_count": len(missing_pairs),
+                    "reasons": sorted(reasons),
+                    "corroboration": evidence,
+                }
+            )
+            continue
+        eligible_size_counts[component_size] += 1
+        eligible.append(
+            CorroboratedIncompleteComponent(
+                fingerprint=fingerprint,
+                records=component_records,
+                candidate_names=candidate_names,
+                complete_clique=False,
+                corroboration=tuple(evidence),
+            )
+        )
+
+    return {
+        "eligible": tuple(eligible),
+        "excluded": excluded,
+        "incomplete_component_count": len(grouped),
+        "incomplete_size_counts": {
+            str(size): count for size, count in sorted(incomplete_size_counts.items())
+        },
+        "eligible_component_count": len(eligible),
+        "eligible_size_counts": {
+            str(size): count for size, count in sorted(eligible_size_counts.items())
+        },
+        "excluded_component_count": len(excluded),
+        "exclusion_reason_counts": dict(sorted(reason_counts.items())),
+    }
+
+
 def _automatic_splink_authorization_blockers(settings: Any, run: Any) -> list[str]:
     blockers = list(_holdout_acceptance_blockers(run))
     if run.second_management_approval_status != "Approved":
@@ -2450,6 +2836,10 @@ def _automatic_splink_authorization_blockers(settings: Any, run: Any) -> list[st
         - float(run.frozen_automatic_cutoff or 0)
     ) > 1e-12:
         blockers.append("authorized_cutoff_mismatch")
+    if bool(getattr(settings, "automatic_splink_incomplete_enabled", 0)) and not str(
+        getattr(settings, "splink_incomplete_authorization_event", "") or ""
+    ):
+        blockers.append("incomplete_component_authorization_event_missing")
     return sorted(set(blockers))
 
 
@@ -2467,11 +2857,30 @@ def _automatic_splink_selection(settings: Any, run: Any) -> dict[str, Any]:
         if not details["complete_clique"]
     }
     all_complete = automatic_components(rows, maximum_size=100)
-    eligible = tuple(
+    eligible_complete = tuple(
         component
         for component in all_complete
         if len(component.records) <= maximum_size
     )
+    incomplete_enabled = bool(
+        getattr(settings, "automatic_splink_incomplete_enabled", 0)
+    )
+    incomplete_inventory = {
+        "eligible": (),
+        "eligible_component_count": 0,
+        "eligible_size_counts": {},
+        "excluded_component_count": len(incomplete_fingerprints),
+        "exclusion_reason_counts": {},
+        "incomplete_size_counts": {},
+    }
+    if incomplete_enabled and incomplete_fingerprints:
+        incomplete_inventory = _incomplete_component_inventory(
+            rows,
+            queue=active_queue,
+            maximum_size=maximum_size,
+        )
+    eligible_incomplete = tuple(incomplete_inventory["eligible"])
+    eligible = tuple(eligible_complete) + eligible_incomplete
     selected = eligible[:component_limit]
 
     def size_counts(components: Iterable[Any]) -> dict[str, int]:
@@ -2492,12 +2901,28 @@ def _automatic_splink_selection(settings: Any, run: Any) -> dict[str, Any]:
             "component_limit": component_limit,
             "candidate_count": len(rows),
             "complete_component_count": len(all_complete),
+            "eligible_complete_component_count": len(eligible_complete),
             "eligible_component_count": len(eligible),
             "selected_component_count": len(selected),
             "selected_candidate_count": sum(
                 len(component.candidate_names) for component in selected
             ),
             "incomplete_component_count": len(incomplete_fingerprints),
+            "incomplete_automation_enabled": incomplete_enabled,
+            "corroborated_incomplete_component_count": len(eligible_incomplete),
+            "corroborated_incomplete_size_counts": size_counts(eligible_incomplete),
+            "incomplete_size_counts": incomplete_inventory.get(
+                "incomplete_size_counts", {}
+            ),
+            "incomplete_excluded_component_count": incomplete_inventory.get(
+                "excluded_component_count", 0
+            ),
+            "incomplete_exclusion_reason_counts": incomplete_inventory.get(
+                "exclusion_reason_counts", {}
+            ),
+            "selected_incomplete_component_count": sum(
+                not bool(component.complete_clique) for component in selected
+            ),
             "excluded_above_maximum_count": sum(
                 len(component.records) > maximum_size
                 for component in all_complete
@@ -2545,10 +2970,20 @@ def preview_automatic_splink_cycle() -> dict[str, Any]:
         ),
         "candidate_count": 0,
         "complete_component_count": 0,
+        "eligible_complete_component_count": 0,
         "eligible_component_count": 0,
         "selected_component_count": 0,
         "selected_candidate_count": 0,
         "incomplete_component_count": 0,
+        "incomplete_automation_enabled": bool(
+            getattr(settings, "automatic_splink_incomplete_enabled", 0)
+        ),
+        "corroborated_incomplete_component_count": 0,
+        "corroborated_incomplete_size_counts": {},
+        "incomplete_size_counts": {},
+        "incomplete_excluded_component_count": 0,
+        "incomplete_exclusion_reason_counts": {},
+        "selected_incomplete_component_count": 0,
         "excluded_above_maximum_count": 0,
         "available_complete_size_counts": {},
         "eligible_size_counts": {},
@@ -2574,6 +3009,73 @@ def preview_automatic_splink_cycle() -> dict[str, Any]:
         "authorization_blockers": authorization_blockers,
         "operational_blockers": blockers,
         "would_queue_now": not blockers and bool(summary["selected_component_count"]),
+    }
+
+
+@frappe.whitelist()
+def preview_incomplete_splink_components() -> dict[str, Any]:
+    """Explain which incomplete ultra-high components meet the governed rule."""
+    _require_manager()
+    settings = frappe.get_single(SETTINGS_DOCTYPE)
+    run_name = str(settings.authorized_splink_validation_run or "")
+    if not run_name or not frappe.db.exists(RUN_DOCTYPE, run_name):
+        return {
+            "zero_write": True,
+            "validation_run": run_name,
+            "rule_version": INCOMPLETE_COMPONENT_RULE_VERSION,
+            "enabled": bool(
+                getattr(settings, "automatic_splink_incomplete_enabled", 0)
+            ),
+            "blockers": ["authorized_validation_run_missing"],
+            "incomplete_component_count": 0,
+            "eligible_component_count": 0,
+            "eligible_size_counts": {},
+            "exclusion_reason_counts": {},
+            "eligible_examples": [],
+        }
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    queue = _active_queue_for_run(run)
+    rows = _scheduled_candidates(run, str(queue.name))
+    maximum_size = min(
+        max(2, int(settings.maximum_splink_component_size or 2)), 100
+    )
+    inventory = _incomplete_component_inventory(
+        rows,
+        queue=queue,
+        maximum_size=maximum_size,
+    )
+    examples = [
+        {
+            "component_fingerprint": component.fingerprint,
+            "component_size": len(component.records),
+            "record_ids": list(component.records),
+            "candidate_names": list(component.candidate_names),
+            "missing_edges": list(component.corroboration),
+        }
+        for component in inventory["eligible"][:10]
+    ]
+    return {
+        "zero_write": True,
+        "validation_run": run.name,
+        "queue_run": queue.name,
+        "frozen_cutoff": float(run.frozen_automatic_cutoff or 0),
+        "maximum_component_size": maximum_size,
+        "rule_version": INCOMPLETE_COMPONENT_RULE_VERSION,
+        "enabled": bool(
+            getattr(settings, "automatic_splink_incomplete_enabled", 0)
+        ),
+        "incomplete_component_count": inventory["incomplete_component_count"],
+        "incomplete_size_counts": inventory["incomplete_size_counts"],
+        "eligible_component_count": inventory["eligible_component_count"],
+        "eligible_size_counts": inventory["eligible_size_counts"],
+        "excluded_component_count": inventory["excluded_component_count"],
+        "exclusion_reason_counts": inventory["exclusion_reason_counts"],
+        "eligible_examples": examples,
+        "blockers": _automatic_splink_authorization_blockers(settings, run),
+        "notice": (
+            "Zero-write only. Missing YYYY-01-01 dates are never hard conflicts; "
+            "an equal year against a precise date is positive year evidence."
+        ),
     }
 
 
@@ -2609,6 +3111,7 @@ def run_automatic_splink_cycle(*, requested_by: str = "Administrator") -> dict[s
                 "complete_clique": component.complete_clique,
                 "candidate_names": list(component.candidate_names),
                 "record_ids": list(component.records),
+                "corroboration": list(getattr(component, "corroboration", ()) or ()),
                 "eligible": True,
                 "already_applied": False,
                 "error": "",

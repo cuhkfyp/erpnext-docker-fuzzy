@@ -307,6 +307,30 @@ function add_splink_control(frm) {
 		() => preview_automatic_splink(frm),
 		__("Splink Automation"),
 	);
+	frm.add_custom_button(
+		__("Preview Incomplete Ultra-High Components"),
+		() => preview_incomplete_splink(frm),
+		__("Splink Automation"),
+	);
+	const incompleteDesired = frm.doc.automatic_splink_incomplete_enabled ? 0 : 1;
+	const incompleteAction = incompleteDesired
+		? __("Enable Incomplete Ultra-High Automation")
+		: __("Disable Incomplete Ultra-High Automation");
+	const incompletePhrase = incompleteDesired
+		? "ENABLE INCOMPLETE ULTRA HIGH SPLINK"
+		: "DISABLE INCOMPLETE ULTRA HIGH SPLINK";
+	frm.add_custom_button(incompleteAction, () => frappe.prompt(
+		[
+			{ fieldname: "reason", fieldtype: "Small Text", label: __("Control-change reason"), reqd: 1 },
+			{ fieldname: "confirm_phrase", fieldtype: "Data", label: __("Type {0} exactly", [incompletePhrase]), reqd: 1 },
+		],
+		(values) => frappe.call({
+			method: "db_connector.api_splink_automation.set_incomplete_splink_automation",
+			args: { enabled: incompleteDesired, ...values },
+			callback: () => frm.reload_doc(),
+		}),
+		incompleteAction,
+	), __("Splink Automation"));
 	if (frm.doc.automatic_splink_enabled) {
 		frm.add_custom_button(
 			__("Run One Automatic Splink Cycle Now"),
@@ -577,11 +601,38 @@ function preview_automatic_splink(frm) {
 				message: `<p>${__("Maximum component size")}: ${esc(result.maximum_component_size || 0)}</p>` +
 					`<p>${__("Candidate edges")}: ${esc(result.candidate_count || 0)}</p>` +
 					`<p>${__("Complete components available by size")}: ${esc(format_size_counts(result.available_complete_size_counts))}</p>` +
+					`<p>${__("Incomplete automation enabled")}: ${result.incomplete_automation_enabled ? __("Yes") : __("No")}</p>` +
+					`<p>${__("Corroborated incomplete components by size")}: ${esc(format_size_counts(result.corroborated_incomplete_size_counts))}</p>` +
 					`<p>${__("Selected components by size")}: ${esc(format_size_counts(result.selected_size_counts))}</p>` +
 					`<p>${__("Selected components / candidate edges")}: ${esc(result.selected_component_count || 0)} / ${esc(result.selected_candidate_count || 0)}</p>` +
 					`<p>${__("Incomplete components excluded")}: ${esc(result.incomplete_component_count || 0)}</p>` +
 					`<p>${__("Complete components above maximum excluded")}: ${esc(result.excluded_above_maximum_count || 0)}</p>` +
 					`<p>${__("Operational blockers")}: ${blockers.length ? blockers.map(esc).join("<br>") : __("None")}</p>` +
+					`<p><strong>${__("No records were changed.")}</strong></p>`,
+			});
+		},
+	});
+}
+
+function preview_incomplete_splink(frm) {
+	frappe.call({
+		method: "db_connector.api_splink_automation.preview_incomplete_splink_components",
+		freeze: true,
+		callback(response) {
+			const result = response.message || {};
+			const blockers = result.blockers || [];
+			frappe.msgprint({
+				title: __("Zero-write incomplete ultra-high preview"),
+				indicator: blockers.length ? "orange" : "green",
+				message: `<p>${__("Rule version")}: ${esc(result.rule_version || "")}</p>` +
+					`<p>${__("Automation enabled")}: ${result.enabled ? __("Yes") : __("No")}</p>` +
+					`<p>${__("Maximum component size")}: ${esc(result.maximum_component_size || 0)}</p>` +
+					`<p>${__("Incomplete components by size")}: ${esc(format_size_counts(result.incomplete_size_counts))}</p>` +
+					`<p>${__("Eligible corroborated components by size")}: ${esc(format_size_counts(result.eligible_size_counts))}</p>` +
+					`<p>${__("Eligible / excluded")}: ${esc(result.eligible_component_count || 0)} / ${esc(result.excluded_component_count || 0)}</p>` +
+					`<p>${__("Exclusion reasons")}: ${esc(format_map(result.exclusion_reason_counts))}</p>` +
+					`<p>${__("Blockers")}: ${blockers.length ? blockers.map(esc).join("<br>") : __("None")}</p>` +
+					`<p>${esc(result.notice || "")}</p>` +
 					`<p><strong>${__("No records were changed.")}</strong></p>`,
 			});
 		},

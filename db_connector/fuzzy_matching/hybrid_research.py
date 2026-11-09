@@ -62,13 +62,20 @@ def quality_aware_birthday(
     """Classify asymmetric CCD birthday evidence.
 
     Matching normalized values are positive even when a source represents an
-    uncertain date as ``YYYY-01-01``.  A mismatch is negative only when both
-    sources explicitly confirm their birthdays; otherwise it is neutral.
+    uncertain date as ``YYYY-01-01``.  When either side is such a placeholder,
+    an equal year is also positive evidence: one source may know the complete
+    date while the other stored only the year.  A placeholder can never create
+    negative birthday evidence.  Other mismatches are negative only when both
+    sources explicitly confirm their birthdays; otherwise they are neutral.
     """
     left = norm.birthday(left_value)
     right = norm.birthday(right_value)
     left_confirmed = birthday_key_confirmed(left_key)
     right_confirmed = birthday_key_confirmed(right_key)
+    left_placeholder = bool(left and str(left).endswith("-01-01"))
+    right_placeholder = bool(right and str(right).endswith("-01-01"))
+    left_year = str(left)[:4] if left else ""
+    right_year = str(right)[:4] if right else ""
     if not left or not right:
         status = "birthday_missing"
         positive = conflict = False
@@ -80,6 +87,13 @@ def quality_aware_birthday(
         )
         positive = True
         conflict = False
+    elif (left_placeholder or right_placeholder) and left_year == right_year:
+        status = "birthday_year_exact_placeholder"
+        positive = True
+        conflict = False
+    elif left_placeholder or right_placeholder:
+        status = "birthday_mismatch_uncertain_neutral"
+        positive = conflict = False
     elif left_confirmed and right_confirmed:
         status = "birthday_mismatch_confirmed"
         positive = False

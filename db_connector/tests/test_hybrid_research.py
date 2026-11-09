@@ -57,9 +57,25 @@ class HybridResearchTests(unittest.TestCase):
         self.assertFalse(result["positive"])
         self.assertFalse(result["conflict"])
 
+    def test_placeholder_and_precise_date_in_same_year_are_positive(self):
+        result = quality_aware_birthday(
+            "1961-01-01", "1961-05-07", "No", "Yes"
+        )
+        self.assertEqual(result["status"], "birthday_year_exact_placeholder")
+        self.assertTrue(result["positive"])
+        self.assertFalse(result["conflict"])
+
+    def test_placeholder_never_conflicts_when_year_differs(self):
+        result = quality_aware_birthday(
+            "1957-01-01", "1961-05-07", "Yes", "Yes"
+        )
+        self.assertEqual(result["status"], "birthday_mismatch_uncertain_neutral")
+        self.assertFalse(result["positive"])
+        self.assertFalse(result["conflict"])
+
     def test_confirmed_birthday_mismatch_is_conflict(self):
         result = quality_aware_birthday(
-            "1961-10-06", "1959-01-01", "Yes", "Yes"
+            "1961-10-06", "1959-02-03", "Yes", "Yes"
         )
         self.assertEqual(result["status"], "birthday_mismatch_confirmed")
         self.assertTrue(result["conflict"])
