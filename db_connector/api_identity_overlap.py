@@ -51,6 +51,7 @@ from db_connector.fuzzy_matching.correction import (
 )
 from db_connector.fuzzy_matching.identity import (
     complete_hkid_conflicts,
+    expected_identity_fingerprints,
     identity_fingerprint,
 )
 from db_connector.fuzzy_matching.overlap import (
@@ -66,11 +67,20 @@ COMPONENT_DOCTYPE = "CCD Match Component Review"
 ACTIVATION_BATCH_DOCTYPE = "CCD Identity Activation Batch"
 ACTIVATION_ITEM_DOCTYPE = "CCD Identity Activation Item"
 RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
+SPLINK_BATCH_DOCTYPE = "CCD Splink Automation Batch"
+SPLINK_ITEM_DOCTYPE = "CCD Splink Automation Batch Item"
 SUPPORTED_SEED_DOCTYPES = {
     CANDIDATE_DOCTYPE,
     COMPONENT_DOCTYPE,
     ACTIVATION_ITEM_DOCTYPE,
 }
+AUTOMATIC_SEED_DOCTYPES = {
+    COMPONENT_DOCTYPE,
+    SPLINK_ITEM_DOCTYPE,
+}
+AUTOMATIC_OVERLAP_CONFLICTS = frozenset(
+    {"existing_group_overlap", "partial_existing_identity_group"}
+)
 MAX_INCLUDED_PENDING_SCOPES = 100
 MAX_ADJACENT_EVIDENCE_ROWS = 200
 
@@ -96,6 +106,28 @@ def _load_list(value: Any, label: str) -> list[Any]:
     if not isinstance(loaded, (list, tuple)):
         frappe.throw(f"{label} must be a JSON list")
     return list(loaded)
+
+
+def automatic_overlap_conflicts(error: Any) -> tuple[str, ...]:
+    """Return a normalized fail-closed conflict list from a materializer error."""
+    value = str(error or "").strip()
+    marker = "Identity safety checks failed:"
+    if marker not in value:
+        return ()
+    return tuple(
+        sorted(
+            {
+                item.strip()
+                for item in value.split(marker, 1)[1].split(",")
+                if item.strip()
+            }
+        )
+    )
+
+
+def automatic_overlap_error_is_eligible(error: Any) -> bool:
+    conflicts = set(automatic_overlap_conflicts(error))
+    return bool(conflicts) and conflicts.issubset(AUTOMATIC_OVERLAP_CONFLICTS)
 
 
 def _source_key(doctype: str, name: str) -> str:
@@ -201,6 +233,209 @@ def _component_scope(name: str) -> dict[str, Any]:
     }
 
 
+def _automatic_component_scope(name: str) -> dict[str, Any]:
+    """Load an authorized Tiered High exception without requiring human labels."""
+    from db_connector.api_tiered_one_to_many import (
+        _component_automation_plan,
+        _require_frozen_provenance,
+    )
+
+    review = frappe.get_doc(COMPONENT_DOCTYPE, name)
+    if review.stale:
+        frappe.throw("The Tiered overlap component is stale")
+    if (
+        str(review.materialization_status or "") != "Exception"
+        or str(review.tiered_automation_status or "") != "Exception"
+        or not automatic_overlap_error_is_eligible(review.materialization_error)
+    ):
+        frappe.throw("The component is not an overlap-only Tiered automation exception")
+    if review.review_status in FINAL_REVIEW_STATUSES and str(
+        review.final_decision or ""
+    ) != "All Same":
+        frappe.throw("A finalized non-All-Same component cannot be automatically recovered")
+
+    settings = frappe.get_single("CCD Identity Resolution Settings")
+    if str(settings.tiered_one_to_many_validation or "") != str(
+        review.tiered_one_to_many_validation or ""
+    ):
+        frappe.throw("The Tiered one-to-many authorization changed")
+    validation = frappe.get_doc(
+        "CCD Tiered One-to-Many Validation", review.tiered_one_to_many_validation
+    )
+    if (
+        str(validation.status or "") != "Authorized"
+        or str(validation.first_approval_status or "") != "Approved"
+        or str(validation.second_approval_status or "") != "Approved"
+    ):
+        frappe.throw("The Tiered one-to-many authorization is not fully approved")
+    canary = _require_frozen_provenance(validation)
+    plan = _component_automation_plan(review)
+    recommendations = frappe.get_all(
+        RECOMMENDATION_DOCTYPE,
+        filters={
+            "canary_run": review.canary_run,
+            "cluster_fingerprint": review.cluster_fingerprint,
+        },
+        fields=["name", "model_tier", "status", "left_record", "right_record"],
+        order_by="name",
+        limit_page_length=100_000,
+    )
+    if not recommendations or any(
+        str(row.model_tier or "") != "High"
+        or str(row.status or "") not in {"Exception", "Approved"}
+        for row in recommendations
+    ):
+        frappe.throw("The component no longer contains only governed Tiered High evidence")
+    records = tuple(sorted(str(value) for value in plan["record_ids"]))
+    return {
+        "key": _source_key(COMPONENT_DOCTYPE, review.name),
+        "doctype": COMPONENT_DOCTYPE,
+        "name": str(review.name),
+        "origin": "Tiered One-to-Many Automated",
+        "automation_overlap_origin": "Tiered Overlap Automated",
+        "automation_channel": "Tiered High",
+        "result": "All Same",
+        "records": records,
+        "groups": (records,),
+        "exclusions": (),
+        "policy_snapshot_json": str(canary.policy_snapshot_json or ""),
+        "policy_snapshot_sha256": str(canary.policy_snapshot_sha256 or ""),
+        "matching_policy": str(canary.matching_policy or ""),
+        "policy_version": str(canary.policy_version or ""),
+        "expected_fingerprints": dict(plan["expected_fingerprints"]),
+        "expected_modified": dict(plan["expected_modified"]),
+        "probability": None,
+        "recommendation_ids": tuple(sorted(str(row.name) for row in recommendations)),
+        "source_doctype": str(canary.doctype),
+        "source_document": str(canary.name),
+        "canary_run": str(canary.name),
+    }
+
+
+def _automatic_splink_item_scope(name: str) -> dict[str, Any]:
+    """Load one authorized ultra-high Splink batch exception as an All-Same seed."""
+    from db_connector.api_splink_automation import _authorization_current
+
+    item = frappe.get_doc(SPLINK_ITEM_DOCTYPE, name)
+    batch = frappe.get_doc(SPLINK_BATCH_DOCTYPE, item.parent)
+    if (
+        str(batch.batch_type or "") != "Scheduled Splink"
+        or str(item.status or "") != "Exception"
+        or not automatic_overlap_error_is_eligible(item.error_code)
+    ):
+        frappe.throw("The item is not an overlap-only Scheduled Splink exception")
+    settings = frappe.get_single("CCD Identity Resolution Settings")
+    if str(settings.authorized_splink_validation_run or "") != str(
+        batch.validation_run or ""
+    ):
+        frappe.throw("The authorized Splink validation changed")
+    run = frappe.get_doc("CCD Match Evaluation Run", batch.validation_run)
+    current, reasons = _authorization_current(run)
+    if not current or str(batch.authorization_fingerprint or "") != str(
+        run.authorization_fingerprint or ""
+    ):
+        frappe.throw(
+            "The Splink authorization is not current: "
+            + ", ".join(reasons or ["authorization_fingerprint_mismatch"])
+        )
+    names = tuple(sorted(str(value) for value in _load_list(
+        item.candidate_names_json or "[]", "Frozen Splink candidates"
+    )))
+    if not names:
+        frappe.throw("The Splink overlap item has no frozen candidates")
+    candidates = frappe.get_all(
+        CANDIDATE_DOCTYPE,
+        filters={"name": ["in", list(names)]},
+        fields=[
+            "name",
+            "left_record",
+            "right_record",
+            "left_modified_at",
+            "right_modified_at",
+            "left_identity_fingerprint",
+            "right_identity_fingerprint",
+            "probabilistic_score",
+            "stale",
+            "automation_batch",
+        ],
+        order_by="name",
+        limit_page_length=len(names),
+    )
+    cutoff = float(run.frozen_automatic_cutoff or 0)
+    if (
+        len(candidates) != len(names)
+        or any(row.stale for row in candidates)
+        or any(float(row.probabilistic_score or 0) < cutoff for row in candidates)
+        or any(str(row.automation_batch or "") != str(batch.name) for row in candidates)
+    ):
+        frappe.throw("The Splink exception no longer matches its frozen ultra-high component")
+
+    expected_modified: dict[str, str] = {}
+    fingerprint_rows: list[tuple[str, str]] = []
+    for candidate in candidates:
+        for record_id, modified, fingerprint in (
+            (
+                candidate.left_record,
+                candidate.left_modified_at,
+                candidate.left_identity_fingerprint,
+            ),
+            (
+                candidate.right_record,
+                candidate.right_modified_at,
+                candidate.right_identity_fingerprint,
+            ),
+        ):
+            record = str(record_id)
+            value = str(modified or "")
+            if record in expected_modified and expected_modified[record] != value:
+                frappe.throw("The Splink overlap component has inconsistent timestamps")
+            expected_modified[record] = value
+            fingerprint_rows.append((record, str(fingerprint or "")))
+    records = tuple(
+        sorted(
+            {
+                str(value)
+                for row in candidates
+                for value in (row.left_record, row.right_record)
+            }
+        )
+    )
+    queue_sha = str(
+        frappe.db.get_value(
+            "CCD Match Review Queue Run",
+            run.validation_queue_run,
+            "policy_snapshot_sha256",
+        )
+        or ""
+    )
+    return {
+        "key": _source_key(SPLINK_ITEM_DOCTYPE, item.name),
+        "doctype": SPLINK_ITEM_DOCTYPE,
+        "name": str(item.name),
+        "origin": "Splink Automated",
+        "automation_overlap_origin": "Splink Overlap Automated",
+        "automation_channel": "Ultra-High Splink",
+        "result": "All Same",
+        "records": records,
+        "groups": (records,),
+        "exclusions": (),
+        "policy_snapshot_json": str(run.policy_snapshot_json or ""),
+        "policy_snapshot_sha256": queue_sha,
+        "matching_policy": str(run.matching_policy or ""),
+        "policy_version": str(run.policy_version or ""),
+        "expected_fingerprints": expected_identity_fingerprints(fingerprint_rows),
+        "expected_modified": expected_modified,
+        "probability": min(float(row.probabilistic_score or 0) for row in candidates),
+        "candidate_ids": names,
+        "recommendation_ids": (),
+        "source_doctype": str(run.doctype),
+        "source_document": str(run.name),
+        "validation_run": str(run.name),
+        "automation_batch": str(batch.name),
+        "complete_clique": bool(item.complete_clique),
+    }
+
+
 def _activation_scope(name: str) -> dict[str, Any]:
     item = frappe.get_doc(ACTIVATION_ITEM_DOCTYPE, name)
     batch = frappe.get_doc(ACTIVATION_BATCH_DOCTYPE, item.parent)
@@ -274,7 +509,15 @@ def _activation_scope(name: str) -> dict[str, Any]:
     }
 
 
-def _load_scope(doctype: str, name: str) -> dict[str, Any]:
+def _load_scope(
+    doctype: str, name: str, *, automatic_overlap: bool = False
+) -> dict[str, Any]:
+    if automatic_overlap:
+        if doctype == COMPONENT_DOCTYPE:
+            return _automatic_component_scope(name)
+        if doctype == SPLINK_ITEM_DOCTYPE:
+            return _automatic_splink_item_scope(name)
+        frappe.throw("Unsupported automatic overlap seed DocType")
     if doctype == CANDIDATE_DOCTYPE:
         return _candidate_scope(name)
     if doctype == COMPONENT_DOCTYPE:
@@ -420,6 +663,8 @@ def _active_exclusions_touching(record_ids: Iterable[str]) -> list[Any]:
 
 def _expand_authoritative_scope(
     seed: dict[str, Any],
+    *,
+    include_pending: bool = True,
 ) -> tuple[set[str], list[Any], list[Any], list[dict[str, Any]]]:
     records = set(seed["records"])
     included = {seed["key"]: seed}
@@ -431,15 +676,16 @@ def _expand_authoritative_scope(
         expanded_records, memberships = _expand_complete_scope(records)
         records = set(expanded_records)
         touching_exclusions = _active_exclusions_touching(records)
-        records.update(
-            str(value)
-            for row in touching_exclusions
-            for value in (row.left_record, row.right_record)
-        )
-        for scope in _connected_finalized_pending_scopes(records):
-            if set(scope["records"]).intersection(records):
-                included[scope["key"]] = scope
-                records.update(scope["records"])
+        if include_pending:
+            records.update(
+                str(value)
+                for row in touching_exclusions
+                for value in (row.left_record, row.right_record)
+            )
+            for scope in _connected_finalized_pending_scopes(records):
+                if set(scope["records"]).intersection(records):
+                    included[scope["key"]] = scope
+                    records.update(scope["records"])
         if len(records) > MAX_CORRECTION_RECORDS:
             frappe.throw(
                 f"The complete overlap scope exceeds the bounded {MAX_CORRECTION_RECORDS}-record limit"
@@ -467,6 +713,8 @@ def _scope_summary(scope: dict[str, Any]) -> dict[str, Any]:
         "recommendations": scope.get("recommendation_ids", ()),
         "activation_batch": scope.get("activation_batch", ""),
         "canary_run": scope.get("canary_run", ""),
+        "automation_channel": scope.get("automation_channel", ""),
+        "candidates": scope.get("candidate_ids", ()),
     }
 
 
@@ -624,19 +872,60 @@ def _validate_frozen_sources(
     return sorted(conflicts)
 
 
-def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
+def _combined_context(
+    seed_doctype: str,
+    seed_document: str,
+    *,
+    automatic_overlap: bool = False,
+) -> dict[str, Any]:
     seed_doctype = str(seed_doctype or "").strip()
     seed_document = str(seed_document or "").strip()
-    if seed_doctype not in SUPPORTED_SEED_DOCTYPES or not seed_document:
-        frappe.throw("Select a finalized pending Splink, Component, or Activation Item")
-    seed = _load_scope(seed_doctype, seed_document)
-    records, memberships, _touching, included = _expand_authoritative_scope(seed)
+    supported = AUTOMATIC_SEED_DOCTYPES if automatic_overlap else SUPPORTED_SEED_DOCTYPES
+    if seed_doctype not in supported or not seed_document:
+        frappe.throw(
+            "Select an authorized overlap automation exception"
+            if automatic_overlap
+            else "Select a finalized pending Splink, Component, or Activation Item"
+        )
+    seed = _load_scope(
+        seed_doctype, seed_document, automatic_overlap=automatic_overlap
+    )
+    records, memberships, touching, included = _expand_authoritative_scope(
+        seed, include_pending=not automatic_overlap
+    )
     record_ids = tuple(sorted(records))
     record_rows = _record_rows(record_ids)
     frozen_conflicts = _validate_frozen_sources(included, record_rows)
+    control_blockers: list[str] = []
     settings = frappe.get_single("CCD Identity Resolution Settings")
-    if bool(settings.automation_paused):
+    if not automatic_overlap and bool(settings.automation_paused):
         frozen_conflicts.append("identity_automation_circuit_breaker_paused")
+    if automatic_overlap:
+        if not bool(getattr(settings, "automatic_overlap_enabled", 0)):
+            control_blockers.append("automatic_overlap_disabled")
+        maximum_records = max(
+            int(getattr(settings, "maximum_automatic_overlap_records", 10) or 10),
+            2,
+        )
+        if len(record_ids) > maximum_records:
+            frozen_conflicts.append(
+                f"automatic_overlap_scope_above_maximum:{len(record_ids)}:{maximum_records}"
+            )
+        if touching:
+            frozen_conflicts.append("active_human_exclusion")
+        channel = str(seed.get("automation_channel") or "")
+        if channel == "Tiered High":
+            if not bool(settings.automatic_tiered_one_to_many_enabled):
+                control_blockers.append("tiered_one_to_many_automation_disabled")
+            if bool(settings.tiered_one_to_many_automation_paused):
+                control_blockers.append("tiered_one_to_many_automation_paused")
+        elif channel == "Ultra-High Splink":
+            if not bool(settings.automatic_splink_enabled):
+                control_blockers.append("splink_automation_disabled")
+            if bool(settings.splink_automation_paused):
+                control_blockers.append("splink_automation_paused")
+        else:
+            frozen_conflicts.append("unsupported_automatic_overlap_channel")
 
     group_names = sorted({str(row.identity_group) for row in memberships})
     groups = (
@@ -703,7 +992,10 @@ def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
     constraint_conflicts = conflicting_different_pairs(
         default_groups, different_constraints
     )
-    adjacent, adjacent_total = _adjacent_unreviewed(record_ids, included)
+    if automatic_overlap:
+        adjacent, adjacent_total = [], 0
+    else:
+        adjacent, adjacent_total = _adjacent_unreviewed(record_ids, included)
 
     seed_policy = _policy(seed["policy_snapshot_json"])
     sensitive_values_visible = _has_sensitive_access()
@@ -849,6 +1141,7 @@ def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
             "expected_fingerprints": scope["expected_fingerprints"],
             "expected_modified": scope["expected_modified"],
             "recommendation_ids": scope.get("recommendation_ids", ()),
+            "candidate_ids": scope.get("candidate_ids", ()),
             "source_doctype": scope.get("source_doctype", ""),
             "source_document": scope.get("source_document", ""),
             "activation_batch": scope.get("activation_batch", ""),
@@ -905,6 +1198,9 @@ def _combined_context(seed_doctype: str, seed_document: str) -> dict[str, Any]:
         "different_constraints": tuple(sorted(set(different_constraints))),
         "constraint_conflicts": constraint_conflicts,
         "hard_conflicts": frozen_conflicts,
+        "control_blockers": sorted(set(control_blockers)),
+        "touching_exclusions": touching,
+        "automatic_overlap": automatic_overlap,
         "automation_paused": bool(settings.automation_paused),
         "pause_scope": str(settings.pause_scope or ""),
         "pause_reason": str(settings.pause_reason or ""),
@@ -942,8 +1238,12 @@ def _preview(
     seed_doctype: str,
     seed_document: str,
     replacement_groups_json: Any | None = None,
+    *,
+    automatic_overlap: bool = False,
 ) -> dict[str, Any]:
-    context = _combined_context(seed_doctype, seed_document)
+    context = _combined_context(
+        seed_doctype, seed_document, automatic_overlap=automatic_overlap
+    )
     if replacement_groups_json in (None, ""):
         replacement_groups = context["default_groups"]
     else:
@@ -1004,6 +1304,21 @@ def _preview(
     if same_source_groups:
         warnings.append("same_source_duplicates_governance_override")
 
+    hard_conflicts = list(context["hard_conflicts"])
+    if automatic_overlap:
+        if _decision_type(replacement_groups) != "Same":
+            hard_conflicts.append("automatic_overlap_requires_all_same_closure")
+        if hkid_conflicts:
+            hard_conflicts.append("complete_hkid_conflict")
+        if contradicted_different or context["constraint_conflicts"]:
+            hard_conflicts.append("active_human_exclusion")
+    hard_conflicts = sorted(set(hard_conflicts))
+
+    automatic_channel = str(context["seed"].get("automation_channel") or "")
+    materialization_channel = (
+        "splink" if automatic_channel == "Ultra-High Splink" else "one_to_many"
+    )
+
     key = stable_payload_fingerprint(
         {
             "seed": context["seed"]["key"],
@@ -1013,11 +1328,14 @@ def _preview(
     )
     return {
         "zero_write": True,
-        "eligible": not context["hard_conflicts"],
+        "eligible": not hard_conflicts,
         "seed_doctype": context["seed"]["doctype"],
         "seed_document": context["seed"]["name"],
         "seed_origin": context["seed"]["origin"],
-        "materialization_enabled": materialization_enabled(automated=False),
+        "materialization_enabled": materialization_enabled(
+            automated=automatic_overlap,
+            channel=materialization_channel if automatic_overlap else "tiered",
+        ),
         "requires_materialization_enabled": changed,
         "scope_fingerprint": context["scope_fingerprint"],
         "resolution_key": key,
@@ -1036,7 +1354,10 @@ def _preview(
         "adjacent_unreviewed_scopes": context["adjacent"],
         "adjacent_unreviewed_count": context["adjacent_total"],
         "adjacent_unreviewed_truncated": context["adjacent_truncated"],
-        "hard_conflicts": context["hard_conflicts"],
+        "hard_conflicts": hard_conflicts,
+        "control_blockers": context["control_blockers"],
+        "automatic_overlap": automatic_overlap,
+        "automatic_overlap_channel": automatic_channel,
         "automation_paused": context["automation_paused"],
         "pause_scope": context["pause_scope"],
         "pause_reason": context["pause_reason"],
@@ -1087,6 +1408,21 @@ def get_combined_component_context(
     """Return the authoritative combined scope and adjacent evidence without writes."""
     _require_manager()
     return _public(_preview(seed_doctype, seed_document))
+
+
+@frappe.whitelist()
+def preview_automatic_overlap_resolution(
+    seed_doctype: str, seed_document: str
+) -> dict[str, Any]:
+    """Zero-write preview of one authorized unattended complete-group closure."""
+    _require_manager()
+    return _public(
+        _preview(
+            seed_doctype,
+            seed_document,
+            automatic_overlap=True,
+        )
+    )
 
 
 @frappe.whitelist()
@@ -1142,7 +1478,9 @@ def _lock_frozen_source_documents(context: dict[str, Any]) -> None:
         include(scope["doctype"], (scope["name"],))
         include(scope.get("source_doctype", ""), (scope.get("source_document", ""),))
         include(RECOMMENDATION_DOCTYPE, scope.get("recommendation_ids", ()))
+        include(CANDIDATE_DOCTYPE, scope.get("candidate_ids", ()))
         include(ACTIVATION_BATCH_DOCTYPE, (scope.get("activation_batch", ""),))
+        include(SPLINK_BATCH_DOCTYPE, (scope.get("automation_batch", ""),))
     for adjacent in context["adjacent"]:
         include(adjacent["doctype"], adjacent.get("documents", ()))
 
@@ -1191,6 +1529,67 @@ def _mark_pending_sources(
                     "corrected_at": frappe.utils.now_datetime() if not satisfied else None,
                     "corrected_by": frappe.session.user if not satisfied else None,
                     "correction_reason": reason if not satisfied else None,
+                    "tiered_automation_status": (
+                        "Applied" if satisfied else "Exception"
+                    ),
+                },
+            )
+        elif scope["doctype"] == SPLINK_ITEM_DOCTYPE:
+            item = frappe.get_doc(SPLINK_ITEM_DOCTYPE, scope["name"])
+            _set_existing_fields(
+                SPLINK_ITEM_DOCTYPE,
+                item.name,
+                {
+                    "status": "Applied" if satisfied else "Exception",
+                    "identity_decisions_json": _json(
+                        [decision_value] if satisfied and decision_value else []
+                    ),
+                    "identity_groups_json": _json(identity_groups if satisfied else []),
+                    "error_code": outcome_note,
+                },
+            )
+            now = frappe.utils.now_datetime()
+            for candidate_name in scope.get("candidate_ids", ()):
+                _set_existing_fields(
+                    CANDIDATE_DOCTYPE,
+                    str(candidate_name),
+                    {
+                        "materialization_status": "Applied" if satisfied else "Exception",
+                        "identity_decision": decision_value if satisfied else None,
+                        "identity_groups_json": _json(identity_groups if satisfied else []),
+                        "materialization_error": outcome_note,
+                        "automation_status": "Applied" if satisfied else "Exception",
+                        "automation_ineligibility_reason": None if satisfied else reason,
+                        "automated_applied_at": now if satisfied else None,
+                        "automated_qc_review_status": (
+                            "Sampling Eligible" if satisfied else None
+                        ),
+                    },
+                )
+            statuses = frappe.get_all(
+                SPLINK_ITEM_DOCTYPE,
+                filters={"parent": item.parent},
+                fields=["status"],
+                limit_page_length=100_000,
+            )
+            applied_count = sum(
+                str(row.status or "") in {"Applied", "Already Applied"}
+                for row in statuses
+            )
+            exception_count = sum(str(row.status or "") == "Exception" for row in statuses)
+            stale_count = sum(str(row.status or "") == "Stale" for row in statuses)
+            _set_existing_fields(
+                SPLINK_BATCH_DOCTYPE,
+                item.parent,
+                {
+                    "status": (
+                        "Applied"
+                        if not exception_count and not stale_count
+                        else "Applied with Exceptions"
+                    ),
+                    "applied_count": applied_count,
+                    "exception_count": exception_count,
+                    "stale_count": stale_count,
                 },
             )
         elif scope["doctype"] == ACTIVATION_ITEM_DOCTYPE:
@@ -1369,6 +1768,7 @@ def apply_combined_component_resolution(
     confirm_seed_document: str,
     confirm_safety_warnings: int | str = 0,
     is_demonstration: int | str = 0,
+    automatic_overlap: int | str = 0,
 ) -> dict[str, Any]:
     """Atomically apply one frozen, recursively expanded identity partition."""
     _require_manager()
@@ -1376,7 +1776,9 @@ def apply_combined_component_resolution(
     seed_document = str(seed_document or "").strip()
     expected_scope_fingerprint = str(expected_scope_fingerprint or "").strip()
     reason = str(reason or "").strip()
-    if seed_doctype not in SUPPORTED_SEED_DOCTYPES:
+    automated = _as_bool(automatic_overlap)
+    supported = AUTOMATIC_SEED_DOCTYPES if automated else SUPPORTED_SEED_DOCTYPES
+    if seed_doctype not in supported:
         frappe.throw("Unsupported overlap-resolution seed DocType")
     if not seed_document or str(confirm_seed_document or "").strip() != seed_document:
         frappe.throw("Type the exact seed document ID to confirm this resolution")
@@ -1385,17 +1787,38 @@ def apply_combined_component_resolution(
     if not reason:
         frappe.throw("A resolution reason is required")
     demonstration = _as_bool(is_demonstration)
-    _require_activation_seed_approved_for_apply(seed_doctype, seed_document)
+    if not automated:
+        _require_activation_seed_approved_for_apply(seed_doctype, seed_document)
 
     submitted_groups = _load_list(replacement_groups_json, "Final identity partition")
-    preliminary = _preview(seed_doctype, seed_document, submitted_groups)
+    preliminary = _preview(
+        seed_doctype,
+        seed_document,
+        submitted_groups,
+        automatic_overlap=automated,
+    )
     if preliminary["scope_fingerprint"] != expected_scope_fingerprint:
         frappe.throw("The combined identity scope changed after preview; preview it again")
     if preliminary["hard_conflicts"]:
         frappe.throw("Combined identity safety checks failed: " + ", ".join(preliminary["hard_conflicts"]))
-    if preliminary["requires_safety_confirmation"] and not _as_bool(confirm_safety_warnings):
+    if automated and preliminary["control_blockers"]:
+        frappe.throw(
+            "Automatic overlap recovery is blocked: "
+            + ", ".join(preliminary["control_blockers"])
+        )
+    if preliminary["requires_safety_confirmation"] and not (
+        automated or _as_bool(confirm_safety_warnings)
+    ):
         frappe.throw("Explicitly confirm every safety warning shown by the preview")
-    if preliminary["changed"] and not materialization_enabled(automated=False):
+    channel = (
+        "splink"
+        if preliminary.get("automatic_overlap_channel") == "Ultra-High Splink"
+        else "one_to_many"
+    )
+    if preliminary["changed"] and not materialization_enabled(
+        automated=automated,
+        channel=channel if automated else "tiered",
+    ):
         frappe.throw("Enable Live Identity Materialization, then run the combined preview again")
 
     existing = frappe.db.get_value(
@@ -1420,7 +1843,12 @@ def apply_combined_component_resolution(
         _lock_named_rows(EXCLUSION_DOCTYPE, [row.name for row in context["exclusions"]])
         _lock_frozen_source_documents(context)
 
-        locked = _preview(seed_doctype, seed_document, submitted_groups)
+        locked = _preview(
+            seed_doctype,
+            seed_document,
+            submitted_groups,
+            automatic_overlap=automated,
+        )
         if (
             locked["scope_fingerprint"] != expected_scope_fingerprint
             or locked["resolution_key"] != preliminary["resolution_key"]
@@ -1428,6 +1856,11 @@ def apply_combined_component_resolution(
             frappe.throw("The combined identity scope changed while locking; preview it again")
         if locked["hard_conflicts"]:
             frappe.throw("Combined identity safety checks failed: " + ", ".join(locked["hard_conflicts"]))
+        if automated and locked["control_blockers"]:
+            frappe.throw(
+                "Automatic overlap recovery is blocked after locking: "
+                + ", ".join(locked["control_blockers"])
+            )
         context = locked["_context"]
         resolution = _create_resolution_doc(locked, reason, demonstration)
         now = frappe.utils.now_datetime()
@@ -1546,8 +1979,13 @@ def apply_combined_component_resolution(
             )
 
         seed = context["seed"]
+        materialization_origin = (
+            str(seed.get("automation_overlap_origin") or "")
+            if automated
+            else "Governance Override"
+        )
         result = materialize_identity(
-            origin="Governance Override",
+            origin=materialization_origin,
             origin_doctype=RESOLUTION_DOCTYPE,
             origin_document=resolution.name,
             policy_snapshot_json=seed["policy_snapshot_json"],
@@ -1558,7 +1996,11 @@ def apply_combined_component_resolution(
             exclusions=locked["replacement_exclusions"],
             expected_fingerprints=context["fingerprints"],
             expected_modified=context["modified"],
-            reason_codes=["manager_complete_overlap_resolution"],
+            reason_codes=[
+                "automatic_complete_overlap_closure"
+                if automated
+                else "manager_complete_overlap_resolution"
+            ],
             review_context={
                 "overlap_resolution": resolution.name,
                 "seed_doctype": seed_doctype,
@@ -1566,6 +2008,10 @@ def apply_combined_component_resolution(
                 "included_pending_scopes": context["included_summaries"],
                 "resolution_reason": reason,
                 "accepted_warnings": locked["warnings"],
+                "automatic_overlap": automated,
+                "automatic_overlap_channel": locked.get(
+                    "automatic_overlap_channel", ""
+                ),
             },
             governance_override=bool(locked["warnings"]),
             governance_notes=reason if locked["warnings"] else "",

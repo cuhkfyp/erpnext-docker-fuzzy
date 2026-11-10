@@ -6,6 +6,7 @@ frappe.ui.form.on("CCD Identity Resolution Settings", {
 		add_qc_control(frm);
 		add_tiered_control(frm);
 		add_tiered_one_to_many_research(frm);
+		add_automatic_overlap_control(frm);
 		add_breaker_control(frm);
 		add_splink_control(frm);
 		add_hybrid_research_control(frm);
@@ -191,6 +192,166 @@ function add_tiered_one_to_many_research(frm) {
 			);
 		}, __("Tiered One-to-Many Automation"));
 	}
+}
+
+function add_automatic_overlap_control(frm) {
+	frm.set_df_property(
+		"automatic_overlap_components_per_run",
+		"description",
+		__("Positive per-cycle cap. It can be changed while recovery is enabled; every created batch keeps its own frozen selection."),
+	);
+	const enabled = Boolean(frm.doc.automatic_overlap_enabled);
+	const action = enabled
+		? __("Disable Automatic Overlap Recovery")
+		: __("Enable Automatic Overlap Recovery");
+	const phrase = enabled
+		? "DISABLE AUTOMATIC OVERLAP RECOVERY"
+		: "ENABLE AUTOMATIC OVERLAP RECOVERY";
+	frm.add_custom_button(action, () => frappe.prompt(
+		[
+			{ fieldname: "reason", fieldtype: "Small Text", label: __("Control-change reason"), reqd: 1 },
+			{ fieldname: "confirm_phrase", fieldtype: "Data", label: __("Type {0} exactly", [phrase]), reqd: 1 },
+		],
+		(values) => frappe.call({
+			method: "db_connector.api_automatic_overlap.set_automatic_overlap",
+			args: { enabled: enabled ? 0 : 1, ...values },
+			callback: () => frm.reload_doc(),
+		}),
+		action,
+	), __("Automatic Overlap Recovery"));
+
+	frm.add_custom_button(
+		__("Preview Complete-Group Recovery"),
+		() => preview_automatic_overlap(frm),
+		__("Automatic Overlap Recovery"),
+	);
+	if (enabled) {
+		frm.add_custom_button(
+			__("Run One Overlap Recovery Cycle Now"),
+			() => frappe.confirm(
+				__("Queue one bounded component-atomic recovery cycle? It expands complete active identity groups. Birthday disagreement and missing or partial identifiers are not hard conflicts; active exclusions and contradictory complete validated HKIDs remain blocked."),
+				() => run_automatic_overlap_now(frm),
+			),
+			__("Automatic Overlap Recovery"),
+		);
+	}
+}
+
+function overlap_seed_link(item) {
+	if (!item.seed_document) return __("None");
+	if (item.seed_doctype === "CCD Match Component Review") {
+		return `<a href="/app/ccd-match-component-review/${encodeURIComponent(item.seed_document)}">${esc(item.seed_document)}</a>`;
+	}
+	return esc(item.seed_document);
+}
+
+function preview_automatic_overlap(frm) {
+	frappe.call({
+		method: "db_connector.api_automatic_overlap.preview_automatic_overlap_cycle",
+		freeze: true,
+		freeze_message: __("Expanding current complete identity-group closures without writing…"),
+		callback(response) {
+			const result = response.message || {};
+			const selected = (result.selected_components || []).map((item) =>
+				`<li><strong>${esc(item.channel)}</strong> — ${overlap_seed_link(item)} — ${esc(item.initial_record_count)} → ${esc(item.expanded_record_count)} ${__("records")}</li>`,
+			).join("");
+			const blockers = format_map(result.control_blocker_counts);
+			frappe.msgprint({
+				title: __("Zero-write complete-group overlap recovery preview"),
+				indicator: result.would_queue_now ? "green" : "orange",
+				wide: true,
+				message:
+					`<p>${__("Source overlap exceptions / structurally eligible / selected")}: ${esc(result.source_exception_count || 0)} / ${esc(result.structurally_eligible_count || 0)} / ${esc(result.selected_component_count || 0)}</p>` +
+					`<p>${__("Available by authorized signal")}: ${esc(format_map(result.available_by_channel))}<br>` +
+					`${__("Eligible by authorized signal")}: ${esc(format_map(result.eligible_by_channel))}<br>` +
+					`${__("Selected by authorized signal")}: ${esc(format_map(result.selected_by_channel))}</p>` +
+					`<p>${__("Per-cycle component cap / expanded-scope record cap")}: ${esc(result.maximum_components || 0)} / ${esc(result.maximum_scope_records || 0)}<br>` +
+					`${__("Non-blocking post-apply QC sample")}: ${esc(result.qc_sample_percent || 0)}%</p>` +
+					`<p>${__("Control blockers")}: ${esc(blockers)}<br>` +
+					`${__("Excluded or deferred reasons")}: ${esc(format_map(result.excluded_reason_counts))}</p>` +
+					(selected ? `<p><strong>${__("Frozen-order selection preview")}</strong></p><ol>${selected}</ol>` : "") +
+					`<p class="small">${__("A precise birthday disagreement is not a hard conflict in this path. A complete contradictory validated HKID, active Different exclusion, stale source fingerprint, or over-limit closure remains blocked.")}</p>` +
+					`<p><strong>${__("No identity or candidate state was changed.")}</strong></p>`,
+			});
+		},
+	});
+}
+
+function run_automatic_overlap_now(frm) {
+	if (frm.__ccd_overlap_cycle_starting) return;
+	frm.__ccd_overlap_cycle_starting = true;
+	frappe.call({
+		method: "db_connector.api_automatic_overlap.start_automatic_overlap_cycle",
+		freeze: true,
+		freeze_message: __("Freezing and queueing the complete-group recovery batch…"),
+		callback(response) {
+			frm.__ccd_overlap_cycle_starting = false;
+			const result = response.message || {};
+			if (!result.batch) {
+				frappe.msgprint({
+					title: __("Automatic overlap recovery"),
+					indicator: result.status === "No Eligible Components" ? "green" : "orange",
+					message: `<p>${__("Status")}: ${esc(result.status || "")}</p>` +
+						`<p>${__("Selected components")}: ${esc(result.selected_component_count || 0)}</p>`,
+				});
+				frm.reload_doc();
+				return;
+			}
+			const dialog = new frappe.ui.Dialog({
+				title: __("Automatic complete-group overlap recovery"),
+				fields: [{ fieldname: "automatic_overlap_progress_html", fieldtype: "HTML" }],
+			});
+			dialog.show();
+			update_automatic_overlap_progress(dialog, result);
+			poll_automatic_overlap_progress(frm, result.batch, dialog);
+		},
+		error() {
+			frm.__ccd_overlap_cycle_starting = false;
+		},
+	});
+}
+
+function update_automatic_overlap_progress(dialog, result) {
+	const field = dialog.get_field("automatic_overlap_progress_html");
+	if (!field?.$wrapper) return;
+	const batch = result.batch || "";
+	const batchLink = batch
+		? `<a href="/app/ccd-automatic-overlap-batch/${encodeURIComponent(batch)}">${esc(batch)}</a>`
+		: __("None");
+	const terminal = ["Applied", "Applied with Exceptions", "Failed"].includes(result.status);
+	const itemRows = (result.items || []).map((item) =>
+		`<tr><td>${esc(item.channel)}</td><td>${overlap_seed_link(item)}</td><td>${esc(item.initial_records)} → ${esc(item.expanded_records)}</td><td>${esc(item.status)}</td><td>${esc(item.error || "")}</td></tr>`,
+	).join("");
+	field.$wrapper.html(
+		`<div class="alert alert-${result.status === "Applied" ? "success" : (result.status === "Failed" ? "danger" : "info")}">` +
+			`<p><strong>${__("Status")}: ${esc(result.status || "Queued")}</strong><br>${__("Batch")}: ${batchLink}</p>` +
+			`<p>${__("Selected / Tiered High / Ultra-High Splink")}: ${esc(result.selected || result.selected_component_count || 0)} / ${esc(result.tiered || result.tiered_component_count || 0)} / ${esc(result.splink || result.splink_component_count || 0)}<br>` +
+			`${__("Applied / exceptions / stale")}: ${esc(result.applied || 0)} / ${esc(result.exceptions || 0)} / ${esc(result.stale || 0)}<br>` +
+			`${__("QC requested / assigned / risk-accepted unassigned")}: ${esc(result.qc_requested || 0)} / ${esc(result.qc_assigned || 0)} / ${esc(result.qc_unassigned || 0)}</p>` +
+			(itemRows ? `<div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>${__("Signal")}</th><th>${__("Seed")}</th><th>${__("Records")}</th><th>${__("Outcome")}</th><th>${__("Reason")}</th></tr></thead><tbody>${itemRows}</tbody></table></div>` : "") +
+			(result.error ? `<p class="text-danger">${esc(result.error)}</p>` : "") +
+			(terminal ? "" : `<p>${__("The long worker is continuing independently. You may close this dialog or leave the page.")}</p>`) +
+		`</div>`,
+	);
+}
+
+function poll_automatic_overlap_progress(frm, batch, dialog) {
+	frappe.call({
+		method: "db_connector.api_automatic_overlap.get_automatic_overlap_batch_progress",
+		args: { batch_name: batch },
+		callback(response) {
+			const result = response.message || {};
+			update_automatic_overlap_progress(dialog, result);
+			if (["Queued", "Applying"].includes(result.status)) {
+				setTimeout(() => poll_automatic_overlap_progress(frm, batch, dialog), 4000);
+				return;
+			}
+			frm.reload_doc();
+		},
+		error() {
+			setTimeout(() => poll_automatic_overlap_progress(frm, batch, dialog), 4000);
+		},
+	});
 }
 
 function add_one_to_many_qc_capacity_control(frm) {

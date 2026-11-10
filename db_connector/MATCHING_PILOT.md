@@ -587,6 +587,35 @@ F1, reviewer agreement, source-pair coverage, candidate truncation, and cluster
 conflicts. A separate reviewed change is required before any policy is allowed
 to affect live matching.
 
+## Complete-group overlap recovery
+
+Development includes a separate, default-off unattended recovery path for
+materialization exceptions whose complete cause set is limited to
+`existing_group_overlap` and `partial_existing_identity_group`. The seed must
+still be authorized Tiered High evidence or a candidate from the current
+authorized ultra-high Splink run. The worker expands every active member of
+each touched identity group, freezes the complete replacement closure in a
+persistent `CCD Automatic Overlap Batch`, and applies each component in its own
+atomic and idempotent transaction.
+
+The path treats birthday disagreement, including precise dates and
+`YYYY-01-01` partial dates, as non-hard evidence. Missing or partial HKID is
+also non-hard. A contradictory complete validated HKID, an active Different
+exclusion, changed source fingerprint/timestamp, changed authorization, or an
+expanded scope above the configured bound remains a hard exception. Tiered
+High work is selected before ultra-high Splink work, and overlapping selections
+within one batch are deferred to a later refreshed cycle.
+
+Desk exposes governed enable/disable, zero-write preview, manual background
+cycle, persistent batch details, and live item progress. The component cap may
+be changed while the channel is enabled; every created batch keeps its frozen
+cap and selection. Post-apply QC is a deterministic percentage sample using
+only remaining shared weekly capacity. Any capacity shortfall is recorded as
+risk-accepted unassigned QC and never blocks or rolls back the reversible
+identity write. The daily orchestrator invokes this recovery after ordinary
+Tiered and Splink monitoring. Deployment leaves the control disabled until a
+manager explicitly enables it in Desk.
+
 ## Privacy and repository boundary
 
 - GitHub contains code and synthetic tests only.

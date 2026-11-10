@@ -25,6 +25,12 @@ class CCDIdentityResolutionSettings(Document):
             self.automatic_splink_components_per_run = 10
         if not self.maximum_splink_component_size:
             self.maximum_splink_component_size = 2
+        if not self.automatic_overlap_components_per_run:
+            self.automatic_overlap_components_per_run = 10
+        if not self.maximum_automatic_overlap_records:
+            self.maximum_automatic_overlap_records = 10
+        if self.automatic_overlap_qc_percent in (None, ""):
+            self.automatic_overlap_qc_percent = 10
         if not self.automatic_hybrid_components_per_run:
             self.automatic_hybrid_components_per_run = 1
         self.qc_cases_per_week = 20
@@ -73,6 +79,14 @@ class CCDIdentityResolutionSettings(Document):
                     ),
                 ),
                 (
+                    "Automatic Overlap Recovery",
+                    before.automatic_overlap_enabled,
+                    (
+                        "maximum_automatic_overlap_records",
+                        "automatic_overlap_qc_percent",
+                    ),
+                ),
+                (
                     "Development Hybrid",
                     before.automatic_hybrid_enabled,
                     (
@@ -111,6 +125,7 @@ class CCDIdentityResolutionSettings(Document):
                     before.automatic_splink_enabled,
                     before.automatic_hybrid_enabled,
                     before.automatic_tiered_one_to_many_enabled,
+                    before.automatic_overlap_enabled,
                 )
             )
             if provenance_changed and materialization_channel_active:
@@ -132,10 +147,11 @@ class CCDIdentityResolutionSettings(Document):
                 or before.automatic_splink_enabled
                 or before.automatic_hybrid_enabled
                 or before.automatic_tiered_one_to_many_enabled
+                or before.automatic_overlap_enabled
             )
         ):
             frappe.throw(
-                "Stop Automatic Tiered, Automatic Splink, Development Hybrid, and One-to-Many automation before re-enabling Live Identity Materialization"
+                "Stop Automatic Tiered, Automatic Splink, Development Hybrid, One-to-Many, and Automatic Overlap Recovery before re-enabling Live Identity Materialization"
             )
         for fieldname in (
             "initial_pilot_wave_components",
@@ -150,6 +166,8 @@ class CCDIdentityResolutionSettings(Document):
             "maximum_splink_component_size",
             "automatic_hybrid_components_per_run",
             "tiered_one_to_many_components_per_run",
+            "automatic_overlap_components_per_run",
+            "maximum_automatic_overlap_records",
         ):
             if int(self.get(fieldname) or 0) < 0:
                 frappe.throw(f"{self.meta.get_label(fieldname)} cannot be negative")
@@ -171,6 +189,19 @@ class CCDIdentityResolutionSettings(Document):
             frappe.throw("Maximum Hybrid Components per Run must be at least 1")
         if int(self.tiered_one_to_many_components_per_run or 0) < 1:
             frappe.throw("Maximum One-to-Many Components per Run must be at least 1")
+        if int(self.automatic_overlap_components_per_run or 0) < 1:
+            frappe.throw("Maximum Overlap Components per Run must be at least 1")
+        if int(self.maximum_automatic_overlap_records or 0) < 2 or int(
+            self.maximum_automatic_overlap_records or 0
+        ) > 25:
+            frappe.throw(
+                "Maximum Records per Expanded Overlap Scope must be between 2 and 25"
+            )
+        overlap_qc_percent = float(self.automatic_overlap_qc_percent or 0)
+        if overlap_qc_percent <= 0 or overlap_qc_percent > 100:
+            frappe.throw(
+                "Automatic Overlap QC Sample must be greater than 0 and at most 100 percent"
+            )
         qc_percent = float(self.tiered_one_to_many_qc_percent or 0)
         if qc_percent <= 0 or qc_percent > 100:
             frappe.throw("Ongoing One-to-Many QC Sample must be greater than 0 and at most 100 percent")
@@ -293,3 +324,15 @@ class CCDIdentityResolutionSettings(Document):
                 or validation.second_approval_status != "Approved"
             ):
                 frappe.throw("The selected One-to-Many authorization is not current and approved")
+        if self.automatic_overlap_enabled:
+            if not self.materialization_enabled:
+                frappe.throw(
+                    "Live Identity Materialization is required for Automatic Overlap Recovery"
+                )
+            if not (
+                self.automatic_tiered_one_to_many_enabled
+                or self.automatic_splink_enabled
+            ):
+                frappe.throw(
+                    "Enable Tiered One-to-Many or Automatic Splink before Automatic Overlap Recovery"
+                )

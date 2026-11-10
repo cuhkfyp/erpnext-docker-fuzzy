@@ -1171,6 +1171,11 @@ def run_qc_monitor() -> dict[str, Any]:
         from db_connector.api_tiered_one_to_many import monitor_ongoing_qc
 
         result["tiered_one_to_many"] = monitor_ongoing_qc()
+        from db_connector.api_automatic_overlap import (
+            monitor_and_run_automatic_overlap,
+        )
+
+        result["automatic_overlap"] = monitor_and_run_automatic_overlap()
         result["status"] = "Completed"
     except Exception as exc:
         frappe.db.rollback()

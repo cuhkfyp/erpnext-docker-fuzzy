@@ -1,0 +1,53 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "status", "selection_manifest_sha256", "idempotency_key", "authorization_event", "tiered_validation", "splink_validation", "maximum_components", "maximum_scope_records", "qc_sample_percent",
+  "selected_component_count", "tiered_component_count", "splink_component_count", "applied_component_count", "exception_component_count", "stale_component_count", "qc_requested_count", "qc_assigned_count", "qc_unassigned_count",
+  "previewed_at", "previewed_by", "started_at", "completed_at", "requested_by", "preview_json", "error_summary", "items"
+ ],
+ "fields": [
+  {"default": "Previewed", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Previewed\nQueued\nApplying\nApplied\nApplied with Exceptions\nFailed", "read_only": 1, "reqd": 1},
+  {"fieldname": "selection_manifest_sha256", "fieldtype": "Data", "hidden": 1, "label": "Frozen Selection Manifest", "read_only": 1, "reqd": 1},
+  {"fieldname": "idempotency_key", "fieldtype": "Data", "hidden": 1, "label": "Idempotency Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"fieldname": "authorization_event", "fieldtype": "Link", "label": "Overlap Authorization Event", "options": "CCD Identity Event", "read_only": 1, "reqd": 1},
+  {"fieldname": "tiered_validation", "fieldtype": "Link", "label": "Tiered One-to-Many Authorization", "options": "CCD Tiered One-to-Many Validation", "read_only": 1},
+  {"fieldname": "splink_validation", "fieldtype": "Link", "label": "Ultra-High Splink Authorization", "options": "CCD Match Evaluation Run", "read_only": 1},
+  {"fieldname": "maximum_components", "fieldtype": "Int", "label": "Frozen Maximum Components", "read_only": 1},
+  {"fieldname": "maximum_scope_records", "fieldtype": "Int", "label": "Frozen Maximum Records per Expanded Scope", "read_only": 1},
+  {"fieldname": "qc_sample_percent", "fieldtype": "Percent", "label": "Frozen Post-Apply QC Sample", "read_only": 1},
+  {"fieldname": "selected_component_count", "fieldtype": "Int", "in_list_view": 1, "label": "Selected Components", "read_only": 1},
+  {"fieldname": "tiered_component_count", "fieldtype": "Int", "label": "Tiered High Components", "read_only": 1},
+  {"fieldname": "splink_component_count", "fieldtype": "Int", "label": "Ultra-High Splink Components", "read_only": 1},
+  {"fieldname": "applied_component_count", "fieldtype": "Int", "in_list_view": 1, "label": "Applied Components", "read_only": 1},
+  {"fieldname": "exception_component_count", "fieldtype": "Int", "in_list_view": 1, "label": "Exceptions", "read_only": 1},
+  {"fieldname": "stale_component_count", "fieldtype": "Int", "label": "Stale Components", "read_only": 1},
+  {"fieldname": "qc_requested_count", "fieldtype": "Int", "label": "Post-Apply QC Requested", "read_only": 1},
+  {"fieldname": "qc_assigned_count", "fieldtype": "Int", "label": "Post-Apply QC Assigned", "read_only": 1},
+  {"fieldname": "qc_unassigned_count", "fieldtype": "Int", "label": "Risk-Accepted Unassigned QC", "read_only": 1},
+  {"fieldname": "previewed_at", "fieldtype": "Datetime", "label": "Previewed At", "read_only": 1},
+  {"fieldname": "previewed_by", "fieldtype": "Link", "label": "Previewed By", "options": "User", "read_only": 1},
+  {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At", "read_only": 1},
+  {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At", "read_only": 1},
+  {"fieldname": "requested_by", "fieldtype": "Link", "label": "Requested By", "options": "User", "read_only": 1},
+  {"fieldname": "preview_json", "fieldtype": "Code", "label": "Frozen Zero-Write Preview", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"fieldname": "error_summary", "fieldtype": "Small Text", "label": "Error Summary", "read_only": 1},
+  {"fieldname": "items", "fieldtype": "Table", "label": "Component-Atomic Items", "options": "CCD Automatic Overlap Batch Item", "permlevel": 1, "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Automatic Overlap Batch",
+ "permissions": [
+  {"export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager"},
+  {"read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 1, "read": 1, "role": "System Manager"},
+  {"permlevel": 1, "read": 1, "role": "CCD Match Sensitive Reviewer"},
+  {"permlevel": 2, "read": 1, "role": "System Manager"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

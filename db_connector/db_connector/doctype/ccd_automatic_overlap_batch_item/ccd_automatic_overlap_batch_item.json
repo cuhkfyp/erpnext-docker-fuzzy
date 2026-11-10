@@ -1,0 +1,27 @@
+{
+ "actions": [],
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": ["channel", "seed_doctype", "seed_document", "status", "initial_record_count", "expanded_record_count", "scope_fingerprint", "replacement_groups_json", "warnings_json", "hard_conflicts_json", "resolution", "error_code"],
+ "fields": [
+  {"fieldname": "channel", "fieldtype": "Select", "in_list_view": 1, "label": "Authorized Signal", "options": "Tiered High\nUltra-High Splink", "read_only": 1, "reqd": 1},
+  {"fieldname": "seed_doctype", "fieldtype": "Link", "label": "Seed DocType", "options": "DocType", "read_only": 1, "reqd": 1},
+  {"fieldname": "seed_document", "fieldtype": "Dynamic Link", "in_list_view": 1, "label": "Seed Document", "options": "seed_doctype", "read_only": 1, "reqd": 1},
+  {"default": "Planned", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Planned\nApplying\nApplied\nNo Change\nException\nStale", "read_only": 1},
+  {"fieldname": "initial_record_count", "fieldtype": "Int", "label": "Initial Records", "read_only": 1},
+  {"fieldname": "expanded_record_count", "fieldtype": "Int", "in_list_view": 1, "label": "Expanded Scope Records", "read_only": 1},
+  {"fieldname": "scope_fingerprint", "fieldtype": "Data", "hidden": 1, "label": "Frozen Scope Fingerprint", "read_only": 1, "reqd": 1},
+  {"fieldname": "replacement_groups_json", "fieldtype": "Code", "label": "Frozen Complete Closure", "options": "JSON", "permlevel": 1, "read_only": 1},
+  {"fieldname": "warnings_json", "fieldtype": "Code", "label": "Accepted Non-Hard Warnings", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"fieldname": "hard_conflicts_json", "fieldtype": "Code", "label": "Hard Conflicts", "options": "JSON", "permlevel": 2, "read_only": 1},
+  {"fieldname": "resolution", "fieldtype": "Link", "in_list_view": 1, "label": "Overlap Resolution", "options": "CCD Identity Overlap Resolution", "read_only": 1},
+  {"fieldname": "error_code", "fieldtype": "Small Text", "label": "Safety or Error Code", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "module": "Db Connector",
+ "name": "CCD Automatic Overlap Batch Item",
+ "permissions": []
+}

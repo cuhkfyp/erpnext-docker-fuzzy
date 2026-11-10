@@ -36,13 +36,16 @@ RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 ACTIVATION_ITEM_DOCTYPE = "CCD Identity Activation Item"
 COMPONENT_REVIEW_DOCTYPE = "CCD Match Component Review"
 CANDIDATE_DOCTYPE = "CCD Match Review Candidate"
+OVERLAP_RESOLUTION_DOCTYPE = "CCD Identity Overlap Resolution"
 SUPPORTED_SOURCE_ORIGINS = {
     "Tiered Evidence",
     "Tiered One-to-Many Automated",
+    "Tiered Overlap Automated",
     "Component Review",
     "Splink Human Review",
     "Splink Validation",
     "Splink Automated",
+    "Splink Overlap Automated",
     "Hybrid Automated",
     "Governance Override",
 }
@@ -582,6 +585,17 @@ def _mark_origin_corrected(
                         "materialization_error": None,
                     },
                 )
+        elif origin in {"Tiered Overlap Automated", "Splink Overlap Automated"} and frappe.db.exists(
+            OVERLAP_RESOLUTION_DOCTYPE, origin_document
+        ):
+            _set_existing_fields(
+                OVERLAP_RESOLUTION_DOCTYPE,
+                origin_document,
+                {
+                    "status": "Superseded",
+                    "superseded_by_identity_decision": replacement_decision,
+                },
+            )
         elif origin == "Governance Override" and decision.origin_doctype == CORRECTION_DOCTYPE:
             if frappe.db.exists(CORRECTION_DOCTYPE, origin_document):
                 _set_existing_fields(

@@ -48,6 +48,8 @@ PROVENANCE_CLASS_BY_ORIGIN = {
     "Splink Incomplete Automated": "Validated Probabilistic Automation",
     "Hybrid Automated": "Validated Probabilistic Automation",
     "Tiered One-to-Many Automated": "Validated Deterministic Automation",
+    "Tiered Overlap Automated": "Validated Deterministic Automation",
+    "Splink Overlap Automated": "Validated Probabilistic Automation",
     "Governance Override": "Governance Correction/Override",
 }
 
@@ -347,7 +349,11 @@ def preview_materialization(
     hkid_conflicts = complete_hkid_conflicts(plan.groups, records, policy)
     if hkid_conflicts and not governance_override:
         conflicts.add("complete_hkid_conflict")
-    if governance_override and origin != "Governance Override":
+    if governance_override and origin not in {
+        "Governance Override",
+        "Tiered Overlap Automated",
+        "Splink Overlap Automated",
+    }:
         conflicts.add("invalid_governance_override_origin")
     memberships = _current_memberships(plan.record_ids)
     conflicts.update(_existing_group_conflicts(plan.groups, memberships))
@@ -379,6 +385,8 @@ def preview_materialization(
     if same_source_groups and origin not in HUMAN_ORIGINS and origin not in {
         "Tiered One-to-Many Automated",
         "Splink Incomplete Automated",
+        "Tiered Overlap Automated",
+        "Splink Overlap Automated",
     }:
         conflicts.add("same_source_duplicates_require_human_decision")
 
@@ -629,6 +637,33 @@ def _validate_origin(
         if not values or values.review_status not in {"Agreed", "Adjudicated"} or not values.final_decision:
             frappe.throw("The Component Review is not finalized")
         return dict(values)
+    elif origin in {"Tiered Overlap Automated", "Splink Overlap Automated"}:
+        if origin_doctype != "CCD Identity Overlap Resolution":
+            frappe.throw(f"{origin} must originate from an Identity Overlap Resolution")
+        values = frappe.db.get_value(
+            origin_doctype,
+            origin_document,
+            [
+                "status",
+                "seed_doctype",
+                "seed_document",
+                "seed_origin",
+                "participant_records_json",
+            ],
+            as_dict=True,
+        )
+        expected_seed_origin = (
+            "Tiered One-to-Many Automated"
+            if origin == "Tiered Overlap Automated"
+            else "Splink Automated"
+        )
+        if (
+            not values
+            or str(values.status or "") != "Applying"
+            or str(values.seed_origin or "") != expected_seed_origin
+        ):
+            frappe.throw("The automatic overlap resolution is not current and applying")
+        return dict(values)
     elif origin == "Governance Override":
         _require_manager()
         return {}
@@ -816,6 +851,17 @@ def _validate_origin_plan(
         }
         if decision_type != expected_types.get(str(provenance.get("final_decision"))):
             frappe.throw("The identity plan contradicts the final component decision")
+    elif origin in {"Tiered Overlap Automated", "Splink Overlap Automated"}:
+        if decision_type != "Same":
+            frappe.throw("Automatic overlap resolution may materialize only All Same")
+        frozen_records = {
+            str(value)
+            for value in json.loads(provenance.get("participant_records_json") or "[]")
+        }
+        if not frozen_records or frozen_records != set(plan.record_ids):
+            frappe.throw(
+                "The automatic overlap plan does not match its frozen complete scope"
+            )
 
 
 def _decision_type(
@@ -875,17 +921,23 @@ def materialize_identity(
     is_automated = origin in {
         "Tiered Evidence",
         "Tiered One-to-Many Automated",
+        "Tiered Overlap Automated",
         "Splink Automated",
         "Splink Incomplete Automated",
+        "Splink Overlap Automated",
         "Hybrid Automated",
     }
     channel = (
         "hybrid"
         if origin == "Hybrid Automated"
         else "splink"
-        if origin in {"Splink Automated", "Splink Incomplete Automated"}
+        if origin in {
+            "Splink Automated",
+            "Splink Incomplete Automated",
+            "Splink Overlap Automated",
+        }
         else "one_to_many"
-        if origin == "Tiered One-to-Many Automated"
+        if origin in {"Tiered One-to-Many Automated", "Tiered Overlap Automated"}
         else "tiered"
     )
     if require_enabled and not materialization_enabled(automated=is_automated, channel=channel):
