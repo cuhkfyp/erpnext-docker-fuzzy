@@ -18,7 +18,6 @@ from typing import Any
 import frappe
 
 from db_connector.api_fuzzy_canary import (
-    APPROVED_HIGH_REASON,
     COMPONENT_REVIEW_DOCTYPE,
     RECOMMENDATION_DOCTYPE,
     RUN_DOCTYPE,
@@ -38,7 +37,11 @@ from db_connector.api_fuzzy_evaluation import (
 )
 from db_connector.api_identity_resolution import materialization_enabled
 from db_connector.fuzzy_matching.blocking import BLOCKING_VERSION, generate_candidate_pairs
-from db_connector.fuzzy_matching.canary import CanaryEdge, analyze_canary_edges
+from db_connector.fuzzy_matching.canary import (
+    CanaryEdge,
+    analyze_canary_edges,
+    approved_high_rule,
+)
 from db_connector.fuzzy_matching.identity import identity_fingerprint
 from db_connector.fuzzy_matching.models import build_evidence, tiered_result
 from db_connector.fuzzy_matching.types import MatchTier
@@ -344,7 +347,9 @@ def _create_scope(
         conflict_mode="gated",
         trusted_identifiers=trusted,
     )
-    if result.tier != MatchTier.HIGH or APPROVED_HIGH_REASON not in result.reasons:
+    if result.tier != MatchTier.HIGH or not approved_high_rule(
+        result.reasons, trusted
+    ):
         frappe.throw(
             f"Synthetic scope {scope['key']} is not an approved deterministic High pair"
         )

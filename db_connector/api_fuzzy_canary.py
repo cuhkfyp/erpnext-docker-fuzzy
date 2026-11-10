@@ -31,7 +31,10 @@ from db_connector.fuzzy_matching.blocking import (
 )
 from db_connector.fuzzy_matching.canary import (
     CanaryEdge,
+    NAME_CORROBORATED_HIGH_REASON,
+    TRUSTED_IDENTIFIER_EXACT_PREFIX,
     analyze_canary_edges,
+    approved_high_rule,
     canonical_identity_groups,
     identity_partition_fingerprint,
     ordered_pair,
@@ -54,7 +57,11 @@ RUN_DOCTYPE = "CCD Match Canary Run"
 RECOMMENDATION_DOCTYPE = "CCD Match Recommendation"
 EVENT_DOCTYPE = "CCD Match Recommendation Event"
 COMPONENT_REVIEW_DOCTYPE = "CCD Match Component Review"
-APPROVED_HIGH_REASON = "exact_name_plus_independent_evidence"
+APPROVED_HIGH_REASON = NAME_CORROBORATED_HIGH_REASON
+APPROVED_HIGH_RULES = (
+    NAME_CORROBORATED_HIGH_REASON,
+    f"{TRUSTED_IDENTIFIER_EXACT_PREFIX}<policy-trusted-global-identifier>",
+)
 QC_SAMPLE_SIZE = 100
 CANARY_WRITE_BATCH_SIZE = 250
 COMPONENT_DECISIONS = {"All Same", "Partial Match", "All Different", "Unsure"}
@@ -476,6 +483,255 @@ def _append_event(
             "metadata_json": _json(metadata or {}),
         }
     ).insert(ignore_permissions=True)
+
+
+def _json_list(value: Any) -> list[str]:
+    try:
+        loaded = json.loads(value or "[]") if isinstance(value, str) else value
+    except (TypeError, ValueError, json.JSONDecodeError):
+        frappe.throw("Stored canary provenance is not valid JSON")
+    if not isinstance(loaded, (list, tuple)):
+        frappe.throw("Stored canary provenance is not a JSON list")
+    return [str(item) for item in loaded]
+
+
+def _trusted_identifier_repair_plan(run: Any) -> dict[str, Any]:
+    """Plan the exact trusted-ID High correction without changing state."""
+    if run.status not in {"Ready", "Active"}:
+        frappe.throw("Only a Ready or Active canary may be repaired")
+    if _snapshot_hash(run.policy_snapshot_json) != str(run.policy_snapshot_sha256):
+        frappe.throw("The canary policy snapshot is corrupt")
+    policy = MatchingPolicy.from_dict(json.loads(run.policy_snapshot_json))
+    rows = frappe.get_all(
+        RECOMMENDATION_DOCTYPE,
+        filters={"canary_run": run.name, "status": "Exception"},
+        fields=[
+            "name",
+            "status",
+            "cluster_fingerprint",
+            "component_review",
+            "left_source",
+            "right_source",
+            "left_record",
+            "right_record",
+            "left_modified_at",
+            "right_modified_at",
+            "reason_codes_json",
+            "safety_reasons_json",
+        ],
+        order_by="cluster_fingerprint, name",
+        limit_page_length=100_000,
+    )
+    current_modified: dict[str, str] = {}
+    record_ids = sorted(
+        {
+            str(value)
+            for row in rows
+            for value in (row.left_record, row.right_record)
+        }
+    )
+    for chunk in _chunks(record_ids):
+        for record in frappe.get_all(
+            "CCD Master",
+            filters={"name": ["in", chunk]},
+            fields=["name", "modified"],
+            limit_page_length=max(len(chunk), 1),
+        ):
+            current_modified[str(record.name)] = str(record.modified)
+
+    changes: list[dict[str, Any]] = []
+    by_component: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        safety = set(_json_list(row.safety_reasons_json))
+        if "unvalidated_high_rule" not in safety:
+            continue
+        reasons = _json_list(row.reason_codes_json)
+        trusted = {
+            attribute
+            for attribute in policy.trusted_global_identifiers
+            if policy.globally_comparable(str(row.left_source), attribute)
+            and policy.globally_comparable(str(row.right_source), attribute)
+        }
+        if not approved_high_rule(reasons, trusted):
+            continue
+        stale = (
+            current_modified.get(str(row.left_record))
+            != str(row.left_modified_at or "")
+            or current_modified.get(str(row.right_record))
+            != str(row.right_modified_at or "")
+        )
+        new_safety = sorted(safety - {"unvalidated_high_rule"})
+        if stale and "stale_record" not in new_safety:
+            new_safety.append("stale_record")
+            new_safety.sort()
+        change = {
+            "name": str(row.name),
+            "cluster_fingerprint": str(row.cluster_fingerprint),
+            "component_review": str(row.component_review or ""),
+            "old_safety_reasons": sorted(safety),
+            "new_safety_reasons": new_safety,
+            "trusted_identifiers": sorted(trusted),
+            "reason_codes": reasons,
+            "stale": stale,
+        }
+        changes.append(change)
+        by_component[change["cluster_fingerprint"]].append(change)
+
+    cleared_components: list[str] = []
+    retained_components: list[str] = []
+    for component, component_changes in sorted(by_component.items()):
+        component_rows = [
+            row for row in rows if str(row.cluster_fingerprint) == component
+        ]
+        changed_names = {item["name"] for item in component_changes}
+        clears_complete_component = (
+            len(component_rows) == len(component_changes)
+            and all(not item["new_safety_reasons"] for item in component_changes)
+            and all(str(row.name) in changed_names for row in component_rows)
+        )
+        target = cleared_components if clears_complete_component else retained_components
+        target.append(component)
+        for item in component_changes:
+            item["new_status"] = "Proposed" if clears_complete_component else "Exception"
+
+    return {
+        "run": str(run.name),
+        "zero_write": True,
+        "changed_recommendation_count": len(changes),
+        "changed_component_count": len(by_component),
+        "cleared_component_count": len(cleared_components),
+        "retained_exception_component_count": len(retained_components),
+        "stale_recommendation_count": sum(bool(item["stale"]) for item in changes),
+        "cleared_component_keys": cleared_components,
+        "retained_exception_component_keys": retained_components,
+        "changes": changes,
+    }
+
+
+@frappe.whitelist()
+def preview_trusted_identifier_high_rule_repair(run_name: str) -> dict[str, Any]:
+    """Preview the exact-ID High classification repair without writes."""
+    _require_manager()
+    return _trusted_identifier_repair_plan(frappe.get_doc(RUN_DOCTYPE, run_name))
+
+
+def install_repair_trusted_identifier_high_rule(run_name: str) -> dict[str, Any]:
+    """Bench-only audited repair of the exact trusted-ID High classification."""
+    _require_manager()
+    if not frappe.db.sql(
+        f"SELECT name FROM `tab{RUN_DOCTYPE}` WHERE name=%s FOR UPDATE",
+        (run_name,),
+    ):
+        frappe.throw("CCD Match Canary Run no longer exists")
+    run = frappe.get_doc(RUN_DOCTYPE, run_name)
+    plan = _trusted_identifier_repair_plan(run)
+    if not plan["changes"]:
+        return plan
+
+    now = frappe.utils.now_datetime()
+    actor = frappe.session.user or "Administrator"
+    cleared = set(plan["cleared_component_keys"])
+    for change in plan["changes"]:
+        recommendation = frappe.get_doc(RECOMMENDATION_DOCTYPE, change["name"])
+        from_status = str(recommendation.status)
+        to_status = str(change["new_status"])
+        frappe.db.set_value(
+            RECOMMENDATION_DOCTYPE,
+            recommendation.name,
+            {
+                "status": to_status,
+                "safety_reasons_json": _json(change["new_safety_reasons"]),
+            },
+            update_modified=False,
+        )
+        recommendation.status = to_status
+        _append_event(
+            recommendation,
+            "Safety Reclassified",
+            from_status,
+            to_status,
+            "trusted_global_identifier_high_rule_authorization_correction",
+            {
+                "old_safety_reasons": change["old_safety_reasons"],
+                "new_safety_reasons": change["new_safety_reasons"],
+                "reason_codes": change["reason_codes"],
+                "trusted_identifiers": change["trusted_identifiers"],
+            },
+        )
+
+    review_names = sorted(
+        {
+            str(change["component_review"])
+            for change in plan["changes"]
+            if change["component_review"]
+            and change["cluster_fingerprint"] in cleared
+        }
+    )
+    for review_name in review_names:
+        review = frappe.get_doc(COMPONENT_REVIEW_DOCTYPE, review_name)
+        if review.review_status not in OPEN_REVIEW_STATUSES:
+            frappe.throw(
+                f"Component Review {review.name} has a completed human decision and cannot be superseded automatically"
+            )
+        frappe.db.set_value(
+            COMPONENT_REVIEW_DOCTYPE,
+            review.name,
+            {
+                "review_status": "Stale",
+                "stale": 1,
+                "materialization_status": "Superseded",
+                "materialization_error": (
+                    "Superseded by trusted global identifier High-rule classification repair"
+                ),
+                "finalized_at": now,
+                "finalized_by": actor,
+            },
+            update_modified=False,
+        )
+
+    counts = _refresh_run_counts(run.name)
+    workflow = _refresh_review_workflow_counts(run.name)
+    summary = json.loads(run.summary_json or "{}")
+    current_status_counts = {
+        str(row.status): int(row.count)
+        for row in frappe.get_all(
+            RECOMMENDATION_DOCTYPE,
+            filters={"canary_run": run.name},
+            fields=["status", "count(name) as count"],
+            group_by="status",
+        )
+    }
+    current_safety_counts: Counter[str] = Counter()
+    for value in frappe.get_all(
+        RECOMMENDATION_DOCTYPE,
+        filters={"canary_run": run.name},
+        pluck="safety_reasons_json",
+        limit_page_length=100_000,
+    ):
+        current_safety_counts.update(_json_list(value))
+    summary["approved_high_rules"] = list(APPROVED_HIGH_RULES)
+    summary["status_counts"] = dict(sorted(current_status_counts.items()))
+    summary["safety_reason_counts"] = dict(sorted(current_safety_counts.items()))
+    summary["trusted_identifier_high_rule_repair"] = {
+        "repaired_at": str(now),
+        "repaired_by": actor,
+        "changed_recommendation_count": plan["changed_recommendation_count"],
+        "changed_component_count": plan["changed_component_count"],
+        "cleared_component_count": plan["cleared_component_count"],
+        "retained_exception_component_count": plan[
+            "retained_exception_component_count"
+        ],
+        "stale_recommendation_count": plan["stale_recommendation_count"],
+    }
+    run.db_set("summary_json", _json(summary), update_modified=False)
+    frappe.db.commit()
+    return {
+        **{key: value for key, value in plan.items() if key != "changes"},
+        **counts,
+        **workflow,
+        "zero_write": False,
+        "status": "Applied",
+    }
 
 
 def _write_generated_recommendations(
@@ -1094,7 +1350,7 @@ def run_canary(run_name: str) -> None:
                         pair.source_pair,
                         tuple(pair.blocking_routes),
                         tuple(result.reasons),
-                        APPROVED_HIGH_REASON in result.reasons,
+                        approved_high_rule(result.reasons, trusted),
                     )
                 )
             elif result.tier == MatchTier.CONFLICT:
@@ -1155,6 +1411,7 @@ def run_canary(run_name: str) -> None:
             "policy_snapshot_sha256": run.policy_snapshot_sha256,
             "blocking_version": HIGH_BLOCKING_VERSION,
             "approved_high_rule": APPROVED_HIGH_REASON,
+            "approved_high_rules": list(APPROVED_HIGH_RULES),
             "approved_high_validation_run": run.high_validation_run,
             "approved_threshold_evaluation_run": run.threshold_evaluation_run,
             "splink_review_threshold": float(run.splink_review_threshold or 0),

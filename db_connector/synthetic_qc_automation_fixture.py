@@ -14,7 +14,6 @@ from typing import Any
 import frappe
 
 from db_connector.api_fuzzy_canary import (
-    APPROVED_HIGH_REASON,
     RECOMMENDATION_DOCTYPE,
     RUN_DOCTYPE,
     _append_event,
@@ -35,7 +34,11 @@ from db_connector.fuzzy_matching.blocking import (
     BLOCKING_VERSION,
     generate_candidate_pairs,
 )
-from db_connector.fuzzy_matching.canary import CanaryEdge, analyze_canary_edges
+from db_connector.fuzzy_matching.canary import (
+    CanaryEdge,
+    analyze_canary_edges,
+    approved_high_rule,
+)
 from db_connector.fuzzy_matching.identity import identity_fingerprint
 from db_connector.fuzzy_matching.models import build_evidence, tiered_result
 from db_connector.fuzzy_matching.types import MatchTier
@@ -215,7 +218,9 @@ def _build_edges(
             conflict_mode="gated",
             trusted_identifiers=trusted,
         )
-        if result.tier != MatchTier.HIGH or APPROVED_HIGH_REASON not in result.reasons:
+        if result.tier != MatchTier.HIGH or not approved_high_rule(
+            result.reasons, trusted
+        ):
             frappe.throw("A synthetic QC pair is not deterministic Tiered High")
         edges.append(
             CanaryEdge(

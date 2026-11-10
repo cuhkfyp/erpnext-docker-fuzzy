@@ -11,6 +11,27 @@ from typing import Any, Iterable
 
 ONE_TO_MANY_REASON = "one_to_many_source_conflict"
 TRUSTED_IDENTIFIER_CONFLICT_PREFIX = "transitive_trusted_identifier_conflict:"
+NAME_CORROBORATED_HIGH_REASON = "exact_name_plus_independent_evidence"
+TRUSTED_IDENTIFIER_EXACT_PREFIX = "trusted_global_id_exact:"
+
+
+def approved_high_rule(
+    reasons: Iterable[str], trusted_identifiers: Iterable[str]
+) -> bool:
+    """Return whether a High result uses a frozen, validated deterministic route.
+
+    The policy has two independent High routes: exact full name plus independent
+    evidence, or an exact complete identifier that both sources govern as global.
+    A name-conflict warning does not cancel the latter route; contradictory
+    complete identifiers are still rejected later by the component safety gate.
+    """
+    reason_set = {str(reason) for reason in reasons}
+    if NAME_CORROBORATED_HIGH_REASON in reason_set:
+        return True
+    return any(
+        f"{TRUSTED_IDENTIFIER_EXACT_PREFIX}{attribute}" in reason_set
+        for attribute in {str(value) for value in trusted_identifiers}
+    )
 
 
 def ordered_pair(left_id: Any, right_id: Any) -> tuple[str, str]:

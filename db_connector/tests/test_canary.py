@@ -3,6 +3,7 @@ import unittest
 from fuzzy_matching.canary import (
     CanaryEdge,
     analyze_canary_edges,
+    approved_high_rule,
     canonical_identity_groups,
     identity_partition_fingerprint,
     summarize_one_to_many_research,
@@ -14,6 +15,27 @@ def edge(left, right, left_source, right_source, source_pair="A::B"):
 
 
 class CanaryGateTests(unittest.TestCase):
+    def test_exact_policy_trusted_identifier_is_an_approved_high_route(self):
+        self.assertTrue(
+            approved_high_rule(
+                ["trusted_global_id_exact:hkid", "name_conflict_warning"],
+                {"hkid"},
+            )
+        )
+
+    def test_untrusted_identifier_reason_is_not_an_approved_high_route(self):
+        self.assertFalse(
+            approved_high_rule(["trusted_global_id_exact:hkid"], {"hksr_num"})
+        )
+
+    def test_name_plus_independent_evidence_remains_an_approved_high_route(self):
+        self.assertTrue(
+            approved_high_rule(
+                ["exact_name_plus_independent_evidence"],
+                set(),
+            )
+        )
+
     def test_one_to_many_research_defaults_to_three_and_treats_missing_fields_as_neutral(self):
         rows = [
             {
