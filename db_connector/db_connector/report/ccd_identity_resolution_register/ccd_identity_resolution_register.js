@@ -1,4 +1,11 @@
 frappe.query_reports["CCD Identity Resolution Register"] = {
+	onload(report) {
+		// This is an operational current-state register. Frappe automatically
+		// marks script reports as prepared after a slow run, but a prepared
+		// result exists only for the exact filter set that generated it. Force
+		// every Desk filter (including Linked) through the live report path.
+		report.ignore_prepared_report = true;
+	},
 	filters: [
 		{
 			fieldname: "identity_state",
