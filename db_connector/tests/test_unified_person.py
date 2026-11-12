@@ -120,6 +120,13 @@ class UnifiedPersonStorageContractTests(unittest.TestCase):
             / "ccd_identity_resolution_settings"
             / "ccd_identity_resolution_settings.js"
         ).read_text(encoding="utf-8")
+        run_script = (
+            app_root
+            / "db_connector"
+            / "doctype"
+            / "ccd_unified_person_backfill_run"
+            / "ccd_unified_person_backfill_run.js"
+        ).read_text(encoding="utf-8")
         run_schema = json.loads(
             (
                 app_root
@@ -139,6 +146,10 @@ class UnifiedPersonStorageContractTests(unittest.TestCase):
             "db_connector.api_unified_person.enqueue_unified_person_reconciliation",
             settings_script,
         )
+        self.assertIn("Refresh Progress", run_script)
+        self.assertIn("Queue / Resume in Background", run_script)
+        self.assertIn("refreshes every three seconds", run_script)
+        self.assertIn("counters update only after its commit", run_script)
         fields = {field["fieldname"]: field for field in run_schema["fields"]}
         self.assertIn("run_purpose", fields)
         self.assertIn("background_job_id", fields)
