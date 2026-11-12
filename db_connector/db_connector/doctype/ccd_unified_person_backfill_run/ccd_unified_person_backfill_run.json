@@ -4,14 +4,15 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "backfill_key", "status", "scope_fingerprint", "batch_size", "initial_ccd_master_count",
+  "backfill_key", "run_purpose", "status", "scope_fingerprint", "batch_size", "initial_ccd_master_count",
   "expected_person_count", "processed_record_count", "issued_person_count", "created_membership_count",
   "remaining_record_count", "batch_count", "initial_modified_sha256", "final_modified_sha256",
-  "ccd_master_modified_unchanged", "started_at", "started_by", "last_batch_at", "completed_at",
+  "ccd_master_modified_unchanged", "started_at", "started_by", "background_job_id", "enqueued_at", "last_batch_at", "completed_at",
   "completed_by", "preview_json", "result_json", "error_summary"
  ],
  "fields": [
   {"fieldname": "backfill_key", "fieldtype": "Data", "hidden": 1, "label": "Backfill Key", "read_only": 1, "reqd": 1, "unique": 1},
+  {"default": "Initial Backfill", "fieldname": "run_purpose", "fieldtype": "Select", "in_list_view": 1, "label": "Run Purpose", "options": "Initial Backfill\nCatch-up Reconciliation", "read_only": 1, "reqd": 1},
   {"default": "Running", "fieldname": "status", "fieldtype": "Select", "in_list_view": 1, "label": "Status", "options": "Running\nCompleted\nFailed", "read_only": 1, "reqd": 1},
   {"fieldname": "scope_fingerprint", "fieldtype": "Data", "label": "Frozen Scope Fingerprint", "read_only": 1, "reqd": 1},
   {"fieldname": "batch_size", "fieldtype": "Int", "label": "Batch Size", "read_only": 1, "reqd": 1},
@@ -27,6 +28,8 @@
   {"default": "0", "fieldname": "ccd_master_modified_unchanged", "fieldtype": "Check", "label": "CCD Master.modified Unchanged", "read_only": 1},
   {"fieldname": "started_at", "fieldtype": "Datetime", "label": "Started At", "read_only": 1, "reqd": 1},
   {"fieldname": "started_by", "fieldtype": "Link", "label": "Started By", "options": "User", "read_only": 1, "reqd": 1},
+  {"fieldname": "background_job_id", "fieldtype": "Data", "label": "Background Job ID", "read_only": 1},
+  {"fieldname": "enqueued_at", "fieldtype": "Datetime", "label": "Enqueued At", "read_only": 1},
   {"fieldname": "last_batch_at", "fieldtype": "Datetime", "label": "Last Batch At", "read_only": 1},
   {"fieldname": "completed_at", "fieldtype": "Datetime", "label": "Completed At", "read_only": 1},
   {"fieldname": "completed_by", "fieldtype": "Link", "label": "Completed By", "options": "User", "read_only": 1},

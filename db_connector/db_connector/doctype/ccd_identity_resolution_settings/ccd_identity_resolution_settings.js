@@ -1240,7 +1240,7 @@ function hybrid_csv_cell(value) {
 
 function add_unified_person_control(frm) {
 	frm.add_custom_button(
-		__("Unified Person Backfill / Status"),
+		__("Unified Person Reconciliation / Status"),
 		() => frappe.call({
 			method: "db_connector.api_unified_person.get_unified_person_backfill_status",
 			freeze: true,
@@ -1276,26 +1276,18 @@ function add_unified_person_control(frm) {
 }
 
 function show_unified_person_status(frm, status) {
-	if (status.status === "Running") {
-		frappe.confirm(
-			__("Backfill {0} is running. Process the next 10 bounded batches now? Remaining records: {1}.", [status.backfill_run, status.remaining_record_count || 0]),
-			() => frappe.call({
-				method: "db_connector.api_unified_person.run_unified_person_backfill_batches",
-				args: { backfill_run: status.backfill_run, max_batches: 10 },
-				freeze: true,
-				callback(response) {
-					const result = response.message || {};
-					frappe.msgprint({
-						title: __("Unified Person backfill"),
-						indicator: result.status === "Completed" ? "green" : "blue",
-						message: `<p>${__("Status")}: ${esc(result.status)}</p>` +
-							`<p>${__("Remaining records")}: ${esc(result.remaining_record_count || 0)}</p>` +
-							`<p>${__("Committed batches")}: ${esc(result.batch_count || 0)}</p>`,
-					});
-					frm.reload_doc();
-				},
-			}),
-		);
+	if (status.status === "Running" || status.status === "Failed") {
+		show_unified_person_progress(frm, status);
+		return;
+	}
+	if (status.status === "Catch-up Required") {
+		frappe.call({
+			method: "db_connector.api_unified_person.preview_unified_person_backfill",
+			freeze: true,
+			callback(response) {
+				show_unified_person_preview(frm, response.message || {});
+			},
+		});
 		return;
 	}
 	if (status.status === "Completed") {
@@ -1319,23 +1311,103 @@ function show_unified_person_status(frm, status) {
 	});
 }
 
-function show_unified_person_preview(frm, preview) {
+function unified_person_run_link(run_name) {
+	if (!run_name) return "";
+	const href = `/app/ccd-unified-person-backfill-run/${encodeURIComponent(run_name)}`;
+	return `<a href="${href}" target="_blank" rel="noopener">${esc(run_name)}</a>`;
+}
+
+function show_unified_person_progress(frm, initial_status) {
+	let timer = null;
 	const dialog = new frappe.ui.Dialog({
-		title: __("Zero-write Unified Person backfill preview"),
+		title: __("Unified Person reconciliation progress"),
+		fields: [{ fieldname: "progress_html", fieldtype: "HTML" }],
+		primary_action_label: __("Queue / Resume in Background"),
+		primary_action() {
+			const run_name = dialog.__status?.backfill_run;
+			if (!run_name) return;
+			frappe.call({
+				method: "db_connector.api_unified_person.enqueue_unified_person_reconciliation",
+				args: { backfill_run: run_name, max_batches: 25 },
+				freeze: true,
+				callback() {
+					refresh_status();
+					if (!timer) timer = setInterval(refresh_status, 3000);
+				},
+			});
+		},
+	});
+
+	function render(status) {
+		dialog.__status = status;
+		const indicator = status.status === "Completed"
+			? "alert-success"
+			: (status.status === "Failed" ? "alert-danger" : "alert-info");
+		const queued = status.background_job_enqueued
+			? __("Running on the long worker")
+			: __("Not currently queued; use Queue / Resume in Background");
+		dialog.fields_dict.progress_html.$wrapper.html(
+			`<div class="alert ${indicator}">` +
+			`<p><b>${__("Run")}</b>: ${unified_person_run_link(status.backfill_run)}<br>` +
+			`<b>${__("Purpose")}</b>: ${esc(status.run_purpose || "Catch-up Reconciliation")}<br>` +
+			`<b>${__("Status")}</b>: ${esc(status.status || "")}<br>` +
+			`<b>${__("Worker")}</b>: ${esc(queued)}</p>` +
+			`<p><b>${__("Remaining records")}</b>: ${esc(status.remaining_record_count || 0)}<br>` +
+			`<b>${__("Processed / active memberships")}</b>: ${esc(status.processed_record_count || 0)}<br>` +
+			`<b>${__("Committed batches")}</b>: ${esc(status.batch_count || 0)}<br>` +
+			`<b>${__("Last committed batch")}</b>: ${esc(status.last_batch_at || "—")}</p>` +
+			(status.error_summary ? `<pre class="small text-danger">${esc(status.error_summary)}</pre>` : "") +
+			`<p class="text-muted">${__("The background job is restartable and continues if this dialog or page is closed.")}</p></div>`,
+		);
+		if (status.status === "Completed") {
+			dialog.get_primary_btn().hide();
+			if (timer) clearInterval(timer);
+			timer = null;
+		} else {
+			dialog.get_primary_btn().show();
+		}
+	}
+
+	function refresh_status() {
+		frappe.call({
+			method: "db_connector.api_unified_person.get_unified_person_backfill_status",
+			callback(response) {
+				render(response.message || {});
+			},
+		});
+	}
+
+	dialog.$wrapper.on("hidden.bs.modal", () => {
+		if (timer) clearInterval(timer);
+		timer = null;
+		frm.reload_doc();
+	});
+	dialog.show();
+	render(initial_status || {});
+	if (initial_status?.background_job_enqueued) timer = setInterval(refresh_status, 3000);
+}
+
+function show_unified_person_preview(frm, preview) {
+	const source_rows = (preview.missing_source_counts || [])
+		.map((row) => `<tr><td>${esc(row.ccd_reg_source || "(blank)")}</td><td>${esc(row.missing_record_count || 0)}</td></tr>`)
+		.join("");
+	const dialog = new frappe.ui.Dialog({
+		title: __("Zero-write Unified Person reconciliation preview"),
 		fields: [
 			{
 				fieldname: "summary",
 				fieldtype: "HTML",
 				options: `<div class="alert alert-info"><p><b>${__("CCD Masters")}</b>: ${esc(preview.ccd_master_count || 0)}<br>` +
-					`<b>${__("Expected Unified People")}</b>: ${esc(preview.expected_unified_person_count || 0)}<br>` +
-					`<b>${__("Existing active memberships")}</b>: ${esc(preview.existing_active_membership_count || 0)}</p>` +
+					`<b>${__("Existing active memberships")}</b>: ${esc(preview.existing_active_membership_count || 0)}<br>` +
+					`<b>${__("Missing assignments to reconcile")}</b>: ${esc(preview.remaining_ccd_master_count || 0)}</p>` +
+					(source_rows ? `<table class="table table-bordered"><thead><tr><th>${__("CCD Registration Source")}</th><th>${__("Missing")}</th></tr></thead><tbody>${source_rows}</tbody></table>` : "") +
 					`<p><b>${__("Frozen scope fingerprint")}</b>:<br><code>${esc(preview.scope_fingerprint)}</code></p>` +
 					`<p><strong>${__("This preview changed no records.")}</strong></p></div>`,
 			},
-			{ fieldname: "batch_size", fieldtype: "Int", label: __("Records per bounded batch"), default: 2000, reqd: 1 },
+			{ fieldname: "batch_size", fieldtype: "Int", label: __("Records per committed batch"), default: 5000, reqd: 1 },
 			{ fieldname: "confirm_scope_fingerprint", fieldtype: "Data", label: __("Type the exact scope fingerprint to confirm"), reqd: 1 },
 		],
-		primary_action_label: __("Start Restartable Backfill"),
+		primary_action_label: __("Start Background Reconciliation"),
 		primary_action(values) {
 			if (values.confirm_scope_fingerprint !== preview.scope_fingerprint) {
 				frappe.msgprint(__("The confirmation must exactly match the preview fingerprint."));
@@ -1346,10 +1418,26 @@ function show_unified_person_preview(frm, preview) {
 				args: values,
 				freeze: true,
 				callback(response) {
-					dialog.hide();
 					const result = response.message || {};
-					frappe.msgprint(__("Backfill run {0} is {1}. Use Unified Person Backfill / Status to process bounded batches.", [result.backfill_run || "", result.status || ""]));
-					frm.reload_doc();
+					if (result.status === "Completed") {
+						dialog.hide();
+						frappe.msgprint(__("No Unified Person assignments remain to reconcile."));
+						return;
+					}
+					frappe.call({
+						method: "db_connector.api_unified_person.enqueue_unified_person_reconciliation",
+						args: { backfill_run: result.backfill_run, max_batches: 25 },
+						freeze: true,
+						callback() {
+							dialog.hide();
+							frappe.call({
+								method: "db_connector.api_unified_person.get_unified_person_backfill_status",
+								callback(status_response) {
+									show_unified_person_progress(frm, status_response.message || result);
+								},
+							});
+						},
+					});
 				},
 			});
 		},

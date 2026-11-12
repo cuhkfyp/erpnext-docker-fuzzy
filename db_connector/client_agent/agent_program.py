@@ -15,7 +15,7 @@ from urllib.parse import quote as urlquote, urlsplit, urlunsplit
 import socketio
 import urllib3
 
-AGENT_PROGRAM_VERSION = "2026.11.06-governed-staging-v3.1"
+AGENT_PROGRAM_VERSION = "2026.11.12-zero-delta-reconciliation-v3.2"
 
 import truststore
 truststore.inject_into_ssl()
@@ -656,9 +656,9 @@ def release_central_sync_lease(session, lease, log_prefix, error=""):
 
 def report_zero_delta(session, config, log_prefix):
     if not config or not config.get("enabled"):
-        return
+        return {{"state": "Not Reported"}}
     try:
-        request_with_retry(
+        response = request_with_retry(
             session,
             "POST",
             f"{{erpnext_url}}/api/method/{{AGENT_SYNC_API}}.report_no_changes",
@@ -670,8 +670,15 @@ def report_zero_delta(session, config, log_prefix):
                 "database_name": db_database,
             }},
         )
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"zero-delta status rejected (HTTP {{response.status_code}}): "
+                f"{{response.text[:300]}}"
+            )
+        return _api_message(response)
     except Exception as report_error:
         write_log(f"{{log_prefix}}: could not report zero-delta state: {{report_error}}", "WARN")
+        return {{"state": "Report Failed", "message": str(report_error)}}
 
 def report_reconciliation_required(session, config, reason_code, log_prefix):
     if not config:
@@ -2431,11 +2438,27 @@ def execute_step(step, prev_result):
                 if to_insert or to_delete or to_update:
                     acquire_master_mutation_slot()
                 else:
-                    report_zero_delta(
+                    _zero_delta_result = report_zero_delta(
                         sess, _master_sync_config, "SYNC_TO_CCD_MASTER_BULK"
                     )
+                    _zero_delta_state = str(
+                        (_zero_delta_result or {{}}).get("state") or ""
+                    )
+                    if _zero_delta_state != "Succeeded":
+                        _zero_delta_message = str(
+                            (_zero_delta_result or {{}}).get("message")
+                            or "mandatory downstream reconciliation is incomplete"
+                        )
+                        write_log(
+                            "SYNC_TO_CCD_MASTER_BULK: zero data delta, but "
+                            f"server state is {{_zero_delta_state}} — "
+                            f"{{_zero_delta_message}}",
+                            "ERROR",
+                        )
+                        return prev_result
                     write_log(
-                        "SYNC_TO_CCD_MASTER_BULK: zero delta — no synchronization slot acquired"
+                        "SYNC_TO_CCD_MASTER_BULK: zero delta and downstream "
+                        "post-processing complete — no synchronization slot acquired"
                     )
 
                 for i in range(0, len(to_insert), batch_size):

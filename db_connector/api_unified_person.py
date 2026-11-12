@@ -1054,6 +1054,26 @@ def _modified_snapshot_sha256() -> tuple[int, str]:
     return count, digest.hexdigest()
 
 
+def _missing_membership_source_counts() -> list[dict[str, Any]]:
+    return [
+        {
+            "ccd_reg_source": str(row.ccd_reg_source or ""),
+            "missing_record_count": int(row.missing_record_count or 0),
+        }
+        for row in frappe.db.sql(
+            f"""SELECT master.ccd_reg_source, COUNT(*) AS missing_record_count
+                  FROM `tabCCD Master` master
+                  LEFT JOIN `tab{MEMBERSHIP_DOCTYPE}` membership
+                    ON membership.ccd_master=master.name
+                   AND membership.status='Active'
+                 WHERE membership.name IS NULL
+                 GROUP BY master.ccd_reg_source
+                 ORDER BY missing_record_count DESC, master.ccd_reg_source""",
+            as_dict=True,
+        )
+    ]
+
+
 def _backfill_preview() -> dict[str, Any]:
     master_count, modified_sha256 = _modified_snapshot_sha256()
     current_identity = frappe.db.sql(
@@ -1072,9 +1092,11 @@ def _backfill_preview() -> dict[str, Any]:
     last_sequence = int(
         frappe.db.get_single_value(SETTINGS_DOCTYPE, "last_sequence") or 0
     )
+    missing_sources = _missing_membership_source_counts()
+    remaining = sum(row["missing_record_count"] for row in missing_sources)
     expected_people = master_count - grouped_members + identity_groups
     payload = {
-        "version": "unified-person-backfill-v1",
+        "version": "unified-person-reconciliation-v2",
         "ccd_master_count": master_count,
         "ccd_master_modified_sha256": modified_sha256,
         "current_identity_group_count": identity_groups,
@@ -1083,13 +1105,15 @@ def _backfill_preview() -> dict[str, Any]:
         "existing_unified_person_count": people,
         "existing_active_membership_count": active_memberships,
         "last_sequence": last_sequence,
+        "remaining_ccd_master_count": remaining,
+        "missing_source_counts": missing_sources,
     }
     fingerprint = hashlib.sha256(_json(payload).encode()).hexdigest()
     return {
         "zero_write": True,
         "scope_fingerprint": fingerprint,
         **payload,
-        "remaining_ccd_master_count": max(master_count - active_memberships, 0),
+        "reconciliation_required": bool(remaining),
         "controls_disabled": _controls_disabled(),
     }
 
@@ -1110,18 +1134,24 @@ def get_unified_person_backfill_status() -> dict[str, Any]:
     rows = frappe.get_all(
         BACKFILL_DOCTYPE,
         fields=[
-            "name", "status", "scope_fingerprint", "batch_size",
+            "name", "run_purpose", "status", "scope_fingerprint", "batch_size",
             "initial_ccd_master_count", "expected_person_count",
             "processed_record_count", "issued_person_count",
             "created_membership_count", "remaining_record_count", "batch_count",
             "started_at", "last_batch_at", "completed_at",
-            "ccd_master_modified_unchanged", "result_json", "error_summary",
+            "ccd_master_modified_unchanged", "background_job_id", "enqueued_at",
+            "result_json", "error_summary",
         ],
         order_by="started_at desc, name desc",
         limit_page_length=1,
     )
     if not rows:
-        return {"schema_ready": True, "status": "Not Started"}
+        remaining = _missing_membership_count()
+        return {
+            "schema_ready": True,
+            "status": "Catch-up Required" if remaining else "Not Started",
+            "remaining_record_count": remaining,
+        }
     row = dict(rows[0])
     row["backfill_run"] = row.pop("name")
     if row.get("result_json"):
@@ -1130,6 +1160,18 @@ def get_unified_person_backfill_status() -> dict[str, Any]:
         except (TypeError, ValueError):
             row["result"] = {}
     row.pop("result_json", None)
+    if row.get("status") == "Running" and row.get("background_job_id"):
+        from frappe.utils.background_jobs import is_job_enqueued
+
+        row["background_job_enqueued"] = bool(
+            is_job_enqueued(str(row["background_job_id"]))
+        )
+    elif row.get("status") != "Running":
+        remaining = _missing_membership_count()
+        row["current_missing_record_count"] = remaining
+        if remaining and row.get("status") == "Completed":
+            row["status"] = "Catch-up Required"
+            row["remaining_record_count"] = remaining
     return {"schema_ready": True, **row}
 
 
@@ -1139,17 +1181,6 @@ def start_unified_person_backfill(
     batch_size: int | str = DEFAULT_BACKFILL_BATCH_SIZE,
 ) -> dict[str, Any]:
     _require_manager()
-    if not _controls_disabled():
-        frappe.throw(
-            "Materialization, Automatic Tiered, and Automatic QC must remain disabled during the initial Unified Person backfill"
-        )
-    completed_run = frappe.db.get_single_value(SETTINGS_DOCTYPE, "backfill_run")
-    if frappe.db.get_single_value(SETTINGS_DOCTYPE, "backfill_completed"):
-        return {
-            "backfill_run": str(completed_run or ""),
-            "status": "Completed",
-            "idempotent": True,
-        }
     running = frappe.db.get_value(
         BACKFILL_DOCTYPE,
         {"status": "Running"},
@@ -1165,6 +1196,14 @@ def start_unified_person_backfill(
             "remaining_record_count": int(running.remaining_record_count or 0),
             "idempotent": True,
         }
+    initial_population = not bool(
+        frappe.db.get_single_value(SETTINGS_DOCTYPE, "backfill_completed")
+    )
+    if initial_population and not _controls_disabled():
+        frappe.throw(
+            "Materialization, Automatic Tiered, and Automatic QC must remain "
+            "disabled during the initial Unified Person backfill"
+        )
     batch_size = int(batch_size or DEFAULT_BACKFILL_BATCH_SIZE)
     if batch_size < 1 or batch_size > MAX_BACKFILL_BATCH_SIZE:
         frappe.throw(
@@ -1173,8 +1212,17 @@ def start_unified_person_backfill(
     preview = _backfill_preview()
     if str(confirm_scope_fingerprint or "") != preview["scope_fingerprint"]:
         frappe.throw("The Unified Person population changed; run a fresh preview")
+    if not preview["remaining_ccd_master_count"]:
+        return {
+            "backfill_run": str(
+                frappe.db.get_single_value(SETTINGS_DOCTYPE, "backfill_run") or ""
+            ),
+            "status": "Completed",
+            "remaining_record_count": 0,
+            "idempotent": True,
+        }
     key = hashlib.sha256(
-        f"unified-person-backfill-v1\x1f{preview['scope_fingerprint']}".encode()
+        f"unified-person-reconciliation-v2\x1f{preview['scope_fingerprint']}".encode()
     ).hexdigest()
     existing = frappe.db.get_value(
         BACKFILL_DOCTYPE,
@@ -1189,6 +1237,9 @@ def start_unified_person_backfill(
         {
             "doctype": BACKFILL_DOCTYPE,
             "backfill_key": key,
+            "run_purpose": (
+                "Initial Backfill" if initial_population else "Catch-up Reconciliation"
+            ),
             "status": "Running",
             "scope_fingerprint": preview["scope_fingerprint"],
             "batch_size": batch_size,
@@ -1268,7 +1319,10 @@ def _backfill_units(seed_records: Iterable[str]) -> tuple[tuple[tuple[str, ...],
 
 
 def _bulk_issue_backfill_units(
-    units: Iterable[tuple[tuple[str, ...], str]], run_name: str
+    units: Iterable[tuple[tuple[str, ...], str]],
+    run_name: str,
+    *,
+    catch_up: bool = False,
 ) -> tuple[int, int]:
     units = tuple(units)
     sequences = _reserve_sequences(len(units))
@@ -1308,10 +1362,16 @@ def _bulk_issue_backfill_units(
         )
     for sequence, (records, group_name) in zip(sequences, units):
         number = format_unified_person_number(sequence)
+        origin_type = "Reconciliation" if catch_up else "Backfill"
+        assignment_reason = (
+            "post_import_unified_person_catch_up"
+            if catch_up
+            else "initial_unified_person_backfill"
+        )
         person_values.append(
             (
                 number, now, now, actor, actor, 0, 0, number, sequence, "Active", None,
-                len(records), group_name or None, now, actor, "Backfill", BACKFILL_DOCTYPE,
+                len(records), group_name or None, now, actor, origin_type, BACKFILL_DOCTYPE,
                 run_name, now,
             )
         )
@@ -1329,7 +1389,7 @@ def _bulk_issue_backfill_units(
                     source_record_key or None,
                     source_lineage_key(governed_source, source_record_key) or None,
                     group_name or None, "Active",
-                    "initial_unified_person_backfill", BACKFILL_DOCTYPE, run_name, now,
+                    assignment_reason, BACKFILL_DOCTYPE, run_name, now,
                 )
             )
     if person_values:
@@ -1356,6 +1416,7 @@ def _complete_backfill(run_name: str) -> dict[str, Any]:
     )
     result = {
         "backfill_run": run.name,
+        "run_purpose": str(run.run_purpose or "Initial Backfill"),
         "status": "Completed",
         "initial_ccd_master_count": int(run.initial_ccd_master_count or 0),
         "final_ccd_master_count": final_count,
@@ -1394,9 +1455,12 @@ def _complete_backfill(run_name: str) -> dict[str, Any]:
 @frappe.whitelist()
 def run_unified_person_backfill_batch(backfill_run: str) -> dict[str, Any]:
     _require_manager()
-    if not _controls_disabled():
-        frappe.throw("All materialization and automation controls must remain disabled")
     run = frappe.get_doc(BACKFILL_DOCTYPE, backfill_run)
+    if (
+        str(run.run_purpose or "Initial Backfill") == "Initial Backfill"
+        and not _controls_disabled()
+    ):
+        frappe.throw("All materialization and automation controls must remain disabled")
     if run.status == "Completed":
         return json.loads(run.result_json or "{}") or {
             "backfill_run": run.name,
@@ -1430,7 +1494,11 @@ def run_unified_person_backfill_batch(backfill_run: str) -> dict[str, Any]:
             reconcile_units.append(unit)
         else:
             bulk_units.append(unit)
-    issued, memberships = _bulk_issue_backfill_units(bulk_units, run.name)
+    issued, memberships = _bulk_issue_backfill_units(
+        bulk_units,
+        run.name,
+        catch_up=str(run.run_purpose or "") == "Catch-up Reconciliation",
+    )
     for records, _group in reconcile_units:
         result = reconcile_unified_person_scope(
             records,
@@ -1486,6 +1554,82 @@ def run_unified_person_backfill_batches(
         if result.get("status") == "Completed":
             break
     return result
+
+
+def _run_unified_person_reconciliation_job(
+    backfill_run: str, max_batches: int = 25
+) -> dict[str, Any]:
+    try:
+        result = run_unified_person_backfill_batches(
+            backfill_run, max_batches=max_batches
+        )
+        frappe.db.commit()
+        return result
+    except Exception:
+        error = frappe.get_traceback()[-2000:]
+        if frappe.db.exists(BACKFILL_DOCTYPE, backfill_run):
+            frappe.db.set_value(
+                BACKFILL_DOCTYPE,
+                backfill_run,
+                {"status": "Failed", "error_summary": error},
+                update_modified=False,
+            )
+            frappe.db.commit()
+        raise
+
+
+@frappe.whitelist()
+def enqueue_unified_person_reconciliation(
+    backfill_run: str, max_batches: int | str = 25
+) -> dict[str, Any]:
+    _require_manager()
+    run = frappe.get_doc(BACKFILL_DOCTYPE, backfill_run)
+    if run.status == "Completed":
+        return {
+            "backfill_run": run.name,
+            "status": "Completed",
+            "idempotent": True,
+        }
+    if run.status == "Failed":
+        frappe.db.set_value(
+            BACKFILL_DOCTYPE,
+            run.name,
+            {"status": "Running", "error_summary": None},
+            update_modified=False,
+        )
+    elif run.status != "Running":
+        frappe.throw("Only a Running or Failed Unified Person reconciliation can be queued")
+    count = int(max_batches or 25)
+    if count < 1 or count > 25:
+        frappe.throw("Queue between 1 and 25 bounded batches")
+    job_id = f"ccd-unified-person-reconciliation-{run.name}"
+    from frappe.utils.background_jobs import is_job_enqueued
+
+    already_queued = bool(is_job_enqueued(job_id))
+    if not already_queued:
+        frappe.enqueue(
+            "db_connector.api_unified_person._run_unified_person_reconciliation_job",
+            queue="long",
+            timeout=21600,
+            enqueue_after_commit=True,
+            job_id=job_id,
+            backfill_run=run.name,
+            max_batches=count,
+        )
+    now = frappe.utils.now_datetime()
+    frappe.db.set_value(
+        BACKFILL_DOCTYPE,
+        run.name,
+        {"background_job_id": job_id, "enqueued_at": now},
+        update_modified=False,
+    )
+    return {
+        "backfill_run": run.name,
+        "status": "Queued" if not already_queued else "Already Queued",
+        "background_job_id": job_id,
+        "remaining_record_count": int(run.remaining_record_count or 0),
+        "idempotent": already_queued,
+    }
 
 
 def _canonical_person(number: str) -> str:

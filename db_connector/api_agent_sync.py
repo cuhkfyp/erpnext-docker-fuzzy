@@ -1578,6 +1578,40 @@ def complete_legacy_sync(
     return {"released": released, "state": "Succeeded" if released else "Failed"}
 
 
+def _missing_unified_person_assignments(source_id: str) -> int:
+    """Return unfinished mandatory post-processing for one active source."""
+    if not (
+        frappe.db.exists("DocType", "CCD Unified Person Settings")
+        and frappe.db.table_exists("CCD Unified Person Membership")
+        and frappe.db.get_single_value(
+            "CCD Unified Person Settings", "backfill_completed"
+        )
+    ):
+        return 0
+    return int(
+        frappe.db.sql(
+            """SELECT COUNT(*)
+                 FROM `tabCCD Master` master
+                 LEFT JOIN `tabCCD Unified Person Membership` membership
+                   ON membership.ccd_master=master.name
+                  AND membership.status='Active'
+                WHERE master.ccd_reg_source=%s
+                  AND membership.name IS NULL""",
+            (source_id,),
+        )[0][0]
+        or 0
+    )
+
+
+def _zero_delta_reconciliation_message(missing_count: int) -> str:
+    return (
+        f"Reconciliation Required: {missing_count:,} CCD Master record(s) have "
+        "not completed mandatory Unified Person post-processing. Open CCD "
+        "Identity Resolution Settings > Identity Integrity > Unified Person "
+        "Reconciliation / Status."
+    )
+
+
 @frappe.whitelist(methods=["POST"])
 def report_no_changes(
     registration: str,
@@ -1622,6 +1656,40 @@ def report_no_changes(
             f"interruption: {expected:,} exact existing row(s), "
             f"{cint(snapshot.get('mapping_count'))} mapped fields; zero Master writes"
         )
+        missing_unified = _missing_unified_person_assignments(source)
+        if missing_unified:
+            message = _zero_delta_reconciliation_message(missing_unified)
+            frappe.db.set_value(
+                REGISTRATION_DOCTYPE,
+                doc.name,
+                {
+                    "agent_sync_state": "Reconciliation Required",
+                    "agent_sync_active_host": str(physical_hostname or ""),
+                    "agent_sync_active_database": str(database_name or ""),
+                    "agent_sync_heartbeat_at": finished_at,
+                    "agent_sync_finished_at": finished_at,
+                    "agent_sync_rows_processed": 0,
+                    "agent_sync_last_error": message,
+                    "agent_sync_last_result": (
+                        f"Baseline confirmation completed, but downstream "
+                        f"Unified Person reconciliation is incomplete for "
+                        f"{missing_unified:,} record(s)"
+                    ),
+                    "agent_baseline_adoption_state": BASELINE_ADOPTION_COMPLETED,
+                    "agent_baseline_adoption_expected_count": expected,
+                    "agent_baseline_adoption_progress": progress,
+                    "agent_baseline_adoption_event": result[:1000],
+                },
+                update_modified=False,
+            )
+            return {
+                "state": "Reconciliation Required",
+                "changed": 0,
+                "baseline_adoption": True,
+                "confirmed_existing": progress,
+                "missing_unified_person_assignments": missing_unified,
+                "message": message,
+            }
         frappe.db.set_value(
             REGISTRATION_DOCTYPE,
             doc.name,
@@ -1646,6 +1714,29 @@ def report_no_changes(
             "changed": 0,
             "baseline_adoption": True,
             "confirmed_existing": progress,
+        }
+    missing_unified = _missing_unified_person_assignments(source)
+    if missing_unified:
+        message = _zero_delta_reconciliation_message(missing_unified)
+        _set_state(
+            doc.name,
+            agent_sync_state="Reconciliation Required",
+            agent_sync_active_host=str(physical_hostname or ""),
+            agent_sync_active_database=str(database_name or ""),
+            agent_sync_heartbeat_at=now_datetime(),
+            agent_sync_finished_at=now_datetime(),
+            agent_sync_rows_processed=0,
+            agent_sync_last_error=message,
+            agent_sync_last_result=(
+                f"Zero data delta, but mandatory downstream reconciliation is "
+                f"incomplete for {missing_unified:,} record(s)"
+            ),
+        )
+        return {
+            "state": "Reconciliation Required",
+            "changed": 0,
+            "missing_unified_person_assignments": missing_unified,
+            "message": message,
         }
     _set_state(
         doc.name,

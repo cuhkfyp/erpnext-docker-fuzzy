@@ -1,4 +1,5 @@
 import ast
+import json
 import pathlib
 import unittest
 
@@ -108,6 +109,53 @@ class UnifiedPersonStorageContractTests(unittest.TestCase):
                 forbidden_set_calls.append(node.lineno)
         self.assertEqual(forbidden_set_calls, [])
         self.assertNotIn("UPDATE `tabCCD Master`", source)
+
+    def test_restartable_reconciliation_is_available_in_desk(self):
+        app_root = pathlib.Path(__file__).resolve().parents[1]
+        source = (app_root / "api_unified_person.py").read_text(encoding="utf-8")
+        settings_script = (
+            app_root
+            / "db_connector"
+            / "doctype"
+            / "ccd_identity_resolution_settings"
+            / "ccd_identity_resolution_settings.js"
+        ).read_text(encoding="utf-8")
+        run_schema = json.loads(
+            (
+                app_root
+                / "db_connector"
+                / "doctype"
+                / "ccd_unified_person_backfill_run"
+                / "ccd_unified_person_backfill_run.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        self.assertIn("def enqueue_unified_person_reconciliation(", source)
+        self.assertIn('queue="long"', source)
+        self.assertIn('enqueue_after_commit=True', source)
+        self.assertIn("Catch-up Reconciliation", source)
+        self.assertIn("Unified Person Reconciliation / Status", settings_script)
+        self.assertIn(
+            "db_connector.api_unified_person.enqueue_unified_person_reconciliation",
+            settings_script,
+        )
+        fields = {field["fieldname"]: field for field in run_schema["fields"]}
+        self.assertIn("run_purpose", fields)
+        self.assertIn("background_job_id", fields)
+        self.assertIn("enqueued_at", fields)
+
+    def test_zero_delta_sync_cannot_hide_missing_unified_assignments(self):
+        source_path = pathlib.Path(__file__).resolve().parents[1] / "api_agent_sync.py"
+        source = source_path.read_text(encoding="utf-8")
+        report_start = source.index("def report_no_changes(")
+        report_end = source.index("\ndef report_reconciliation_required(", report_start)
+        report_source = source[report_start:report_end]
+
+        self.assertIn("_missing_unified_person_assignments(source)", report_source)
+        self.assertIn('agent_sync_state="Reconciliation Required"', report_source)
+        self.assertIn(
+            '"missing_unified_person_assignments": missing_unified', report_source
+        )
 
 
 if __name__ == "__main__":

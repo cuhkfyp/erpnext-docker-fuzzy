@@ -15,7 +15,7 @@ class ClientAgentArtifactTests(unittest.TestCase):
     def test_agent_has_a_visible_deployment_version(self):
         source = AGENT_SOURCE.read_text(encoding="utf-8")
         self.assertIn(
-            'AGENT_PROGRAM_VERSION = "2026.11.06-governed-staging-v3.1"',
+            'AGENT_PROGRAM_VERSION = "2026.11.12-zero-delta-reconciliation-v3.2"',
             source,
         )
         self.assertIn("CCD Agent version:", source)
@@ -49,6 +49,15 @@ class ClientAgentArtifactTests(unittest.TestCase):
     def test_generated_job_daemon_is_valid_python(self):
         daemon_source = self._generated_job_daemon()
         compile(daemon_source, "generated_job_daemon.py", "exec")
+
+    def test_zero_delta_requires_server_postprocessing_completion(self):
+        daemon_source = self._generated_job_daemon()
+        self.assertIn("_zero_delta_state != \"Succeeded\"", daemon_source)
+        self.assertIn("zero data delta, but ", daemon_source)
+        self.assertIn("server state is {_zero_delta_state}", daemon_source)
+        self.assertIn("zero delta and downstream ", daemon_source)
+        self.assertIn("post-processing complete", daemon_source)
+        self.assertIn("return _api_message(response)", daemon_source)
 
     def test_v3_fence_precedes_every_pipeline_and_stale_daemon_stops(self):
         daemon_source = self._generated_job_daemon()
