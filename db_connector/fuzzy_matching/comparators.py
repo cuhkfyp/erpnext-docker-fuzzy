@@ -96,7 +96,34 @@ def compare_exact(
 
 
 def compare_phone(attribute: str, left: Any, right: Any) -> Evidence:
-    return compare_exact(attribute, left, right, norm.phone)
+    left_tokens = frozenset(norm.matching_phone_tokens(left))
+    right_tokens = frozenset(norm.matching_phone_tokens(right))
+    if not left_tokens or not right_tokens:
+        return Evidence(
+            attribute,
+            EvidenceLevel.MISSING,
+            0.0,
+            bool(left_tokens),
+            bool(right_tokens),
+            "one_or_both_values_missing",
+        )
+    if left_tokens & right_tokens:
+        return Evidence(
+            attribute,
+            EvidenceLevel.EXACT,
+            1.0,
+            True,
+            True,
+            "phone_token_exact",
+        )
+    return Evidence(
+        attribute,
+        EvidenceLevel.DISAGREE,
+        0.0,
+        True,
+        True,
+        "phone_disagree",
+    )
 
 
 def compare_email(attribute: str, left: Any, right: Any) -> Evidence:

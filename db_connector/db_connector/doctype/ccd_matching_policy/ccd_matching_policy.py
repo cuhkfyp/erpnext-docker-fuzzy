@@ -4,6 +4,11 @@ from frappe.model.document import Document
 
 class CCDMatchingPolicy(Document):
     def validate(self):
+        if self.phone_evidence_strategy not in {
+            "Configured Field Only",
+            "All Valid Phone Fields",
+        }:
+            frappe.throw("Unsupported phone evidence strategy")
         if not 0 < float(self.high_precision_target or 0) <= 1:
             frappe.throw("High precision target must be between 0 and 1")
         if int(self.minimum_high_samples or 0) < 1:

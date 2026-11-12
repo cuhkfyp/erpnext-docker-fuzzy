@@ -31,6 +31,11 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertTrue(restored.globally_comparable("A", "hkid"))
         self.assertEqual(restored.profile("A").field_for("hkid"), "hkid_num")
 
+    def test_policy_snapshot_round_trip_preserves_phone_evidence_strategy(self):
+        policy = MatchingPolicy(phone_evidence_strategy="All Valid Phone Fields")
+        restored = MatchingPolicy.from_dict(self.module._policy_snapshot(policy))
+        self.assertEqual(restored.phone_evidence_strategy, "All Valid Phone Fields")
+
     def test_canonical_record_value_does_not_repeat_source_field_lookup(self):
         policy = MatchingPolicy(
             source_profiles={
@@ -247,6 +252,39 @@ class EvaluationHelperTests(unittest.TestCase):
         self.assertIn("hkid", fields)
         self.assertNotIn("res_addr1", fields)
         self.assertNotIn("res_area", fields)
+
+    def test_all_phone_strategy_projects_every_governed_phone_field(self):
+        policy = MatchingPolicy(
+            source_profiles={
+                "A": SourceProfile("A", {"phone": "mobile"})
+            },
+            phone_evidence_strategy="All Valid Phone Fields",
+        )
+        phone_fields = (
+            "phone_num",
+            "mobile",
+            "res_phone",
+            "contact1_phone",
+            "contact2_phone",
+        )
+        meta = types.SimpleNamespace(
+            fields=[
+                types.SimpleNamespace(fieldname=fieldname)
+                for fieldname in (
+                    "ccd_reg_source",
+                    "ccd_source_key",
+                    *phone_fields,
+                )
+            ]
+        )
+        with patch.object(
+            self.module.frappe,
+            "get_meta",
+            return_value=meta,
+            create=True,
+        ):
+            fields = self.module._evaluation_record_fields(policy)
+        self.assertTrue(set(phone_fields).issubset(fields))
 
     def test_probability_training_sample_is_bounded_and_keeps_review_records(self):
         records = [{"record_id": f"R{index}", "source": "A"} for index in range(100)]

@@ -14,7 +14,7 @@ def _normalized(attribute: str, value: Any) -> str:
     if attribute in {"hkid", "hksr_num"}:
         return norm.identifier(value)
     if attribute == "phone":
-        return norm.phone(value)
+        return "|".join(norm.matching_phone_tokens(value))
     if attribute == "email":
         return norm.email(value)
     if attribute == "birthday":

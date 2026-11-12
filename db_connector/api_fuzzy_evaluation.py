@@ -37,7 +37,12 @@ from db_connector.fuzzy_matching.metrics import (
     wilson_interval,
 )
 from db_connector.fuzzy_matching.models import compare_all_models
-from db_connector.fuzzy_matching.policy import MatchingPolicy
+from db_connector.fuzzy_matching.policy import (
+    PHONE_EVIDENCE_ALL_VALID,
+    PHONE_EVIDENCE_CONFIGURED,
+    PHONE_EVIDENCE_FIELDS,
+    MatchingPolicy,
+)
 from db_connector.fuzzy_matching.profiling import profile_attributes
 from db_connector.fuzzy_matching.sampling import (
     balanced_quotas,
@@ -375,6 +380,10 @@ def _policy_from_doc(doc: Any) -> MatchingPolicy:
             ),
             "max_block_size": doc.max_block_size or 10_000,
             "max_candidate_pairs": doc.max_candidate_pairs or 500_000,
+            "phone_evidence_strategy": str(
+                getattr(doc, "phone_evidence_strategy", "")
+                or PHONE_EVIDENCE_CONFIGURED
+            ),
         }
     )
 
@@ -410,6 +419,7 @@ def _policy_snapshot(policy: MatchingPolicy) -> dict[str, Any]:
         "minimum_positive_labels_per_split": policy.minimum_positive_labels_per_split,
         "max_block_size": policy.max_block_size,
         "max_candidate_pairs": policy.max_candidate_pairs,
+        "phone_evidence_strategy": policy.phone_evidence_strategy,
     }
 
 
@@ -458,7 +468,11 @@ def _splink_record(record: dict[str, Any], policy: MatchingPolicy) -> dict[str, 
         "eng_given_prefix": norm.english_compact(record.get("eng_firstname"))[:2],
         "surname_key": chi_surname or norm.english_compact(record.get("eng_surname")),
         "birthday": norm.birthday(record.get("birthday")),
-        "phone": norm.phone(record.get("phone")),
+        "phone": (
+            list(norm.phone_tokens(record.get("phone")))
+            if policy.phone_evidence_strategy == PHONE_EVIDENCE_ALL_VALID
+            else norm.phone(record.get("phone"))
+        ),
         "email": norm.email(record.get("email")),
         "global_id": "|".join(sorted(global_values)),
     }
@@ -527,6 +541,8 @@ def _evaluation_record_fields(
             for fieldname in profile.field_map.values()
             if fieldname
         )
+    if policy.phone_evidence_strategy == PHONE_EVIDENCE_ALL_VALID:
+        fields.update(PHONE_EVIDENCE_FIELDS)
     fields.update(_formula_record_fields((formulas or {}).values()))
 
     meta = frappe.get_meta("CCD Master")
@@ -726,7 +742,9 @@ def _high_exact_values(
         "eng_firstname_words": eng_firstname_words,
         "eng_firstname_compact": norm.english_compact(eng_firstname_words),
         "birthday": norm.birthday(policy.value(record, "birthday")),
-        "phone": norm.phone(policy.value(record, "phone")),
+        "phone": frozenset(
+            norm.matching_phone_tokens(policy.value(record, "phone"))
+        ),
         "email": norm.email(policy.value(record, "email")),
         "trusted": {
             attribute: (
@@ -803,9 +821,10 @@ def _deterministic_high_exact(
         left_values["eng_firstname_compact"],
         right_values["eng_firstname_compact"],
     )
-    exact_secondary = any(
+    phone_exact = bool(left_values["phone"] & right_values["phone"])
+    exact_secondary = phone_exact or any(
         _exact_available(left_values[attribute], right_values[attribute])
-        for attribute in ("birthday", "phone", "email")
+        for attribute in ("birthday", "email")
     )
     return (chinese_exact or (english_surname_exact and english_firstname_exact)) and exact_secondary
 
@@ -1220,6 +1239,7 @@ def _ensure_default_pilot_policy(policy_version: str) -> dict[str, Any]:
             "title": f"CCD Recommendation-Only Matching Pilot {policy_version}",
             "status": "Draft",
             "trusted_global_identifiers": "hkid",
+            "phone_evidence_strategy": PHONE_EVIDENCE_CONFIGURED,
             "high_precision_target": 0.95,
             "minimum_high_samples": 30,
             "minimum_positive_labels_per_split": 10,
@@ -1254,13 +1274,23 @@ def ensure_default_pilot_policy(
 def create_policy_revision(
     source_policy: str = DEFAULT_PILOT_POLICY_VERSION,
     target_policy: str = "pilot-1.7",
+    phone_evidence_strategy: str = "",
 ) -> dict[str, Any]:
     """Clone governed policy controls, then import only current revisions."""
     _require_manager()
+    requested_phone_strategy = str(phone_evidence_strategy or "").strip()
+    if requested_phone_strategy and requested_phone_strategy not in {
+        PHONE_EVIDENCE_CONFIGURED,
+        PHONE_EVIDENCE_ALL_VALID,
+    }:
+        frappe.throw("Unsupported phone evidence strategy")
     if frappe.db.exists("CCD Matching Policy", target_policy):
         target = frappe.get_doc("CCD Matching Policy", target_policy)
         if target.status != "Draft":
             frappe.throw("An existing policy revision must remain Draft to resynchronize")
+        if requested_phone_strategy:
+            target.phone_evidence_strategy = requested_phone_strategy
+            target.save(ignore_permissions=True)
         result = _sync_policy_source_profiles(target_policy)
         result["created"] = False
         return result
@@ -1272,6 +1302,11 @@ def create_policy_revision(
             "title": f"CCD Recommendation-Only Matching Pilot {target_policy}",
             "status": "Draft",
             "trusted_global_identifiers": source.trusted_global_identifiers,
+            "phone_evidence_strategy": (
+                requested_phone_strategy
+                or source.phone_evidence_strategy
+                or PHONE_EVIDENCE_CONFIGURED
+            ),
             "high_precision_target": source.high_precision_target,
             "minimum_high_samples": source.minimum_high_samples,
             "minimum_positive_labels_per_split": (

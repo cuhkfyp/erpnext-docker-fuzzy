@@ -30,6 +30,16 @@ class SplinkAdapterTests(unittest.TestCase):
         self.assertEqual(converted["global_id"], "")
         self.assertEqual(original["chi_full"], "")
 
+    def test_empty_phone_array_becomes_null_but_tokens_remain_arrays(self):
+        converted = _null_missing_comparison_values(
+            [
+                {"record_id": "R1", "source": "A", "phone": []},
+                {"record_id": "R2", "source": "B", "phone": ["91234567"]},
+            ]
+        )
+        self.assertIsNone(converted[0]["phone"])
+        self.assertEqual(converted[1]["phone"], ["91234567"])
+
     def test_empty_requested_pair_set_does_not_train_or_require_splink(self):
         self.assertEqual(
             score_requested_pairs([], [], [], minimum_probability=0.5),

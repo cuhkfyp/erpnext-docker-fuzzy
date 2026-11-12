@@ -11,12 +11,29 @@ DEFAULT_ALIASES: dict[str, tuple[str, ...]] = {
     "chi_firstname": ("chi_firstname",),
     "eng_surname": ("eng_surname",),
     "eng_firstname": ("eng_firstname",),
-    "phone": ("phone_num", "res_phone", "phone"),
+    "phone": (
+        "phone_num",
+        "mobile",
+        "res_phone",
+        "contact1_phone",
+        "contact2_phone",
+        "phone",
+    ),
     "email": ("email", "contact_email"),
     "birthday": ("birthday", "dob"),
     "hksr_num": ("hksr_num",),
     "hkid": ("hkid", "hkid_num"),
 }
+
+PHONE_EVIDENCE_CONFIGURED = "Configured Field Only"
+PHONE_EVIDENCE_ALL_VALID = "All Valid Phone Fields"
+PHONE_EVIDENCE_FIELDS = (
+    "phone_num",
+    "mobile",
+    "res_phone",
+    "contact1_phone",
+    "contact2_phone",
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +69,7 @@ class MatchingPolicy:
     minimum_positive_labels_per_split: int = 10
     max_block_size: int = 10_000
     max_candidate_pairs: int = 500_000
+    phone_evidence_strategy: str = PHONE_EVIDENCE_CONFIGURED
 
     def profile(self, source: str) -> SourceProfile:
         return self.source_profiles.get(source, SourceProfile(source=source))
@@ -67,6 +85,24 @@ class MatchingPolicy:
         # names. Do not look up their original source fieldname a second time.
         if record.get("record_id") and attribute in record:
             return record.get(attribute)
+        if (
+            attribute == "phone"
+            and self.phone_evidence_strategy == PHONE_EVIDENCE_ALL_VALID
+        ):
+            if attribute in profile.disabled_attributes:
+                return None
+            fields = dict.fromkeys(
+                (
+                    profile.field_for(attribute),
+                    *PHONE_EVIDENCE_FIELDS,
+                    *self.aliases.get(attribute, ()),
+                )
+            )
+            return tuple(
+                record.get(fieldname)
+                for fieldname in fields
+                if fieldname and record.get(fieldname) not in (None, "")
+            )
         explicit = profile.field_for(attribute)
         if explicit:
             return record.get(explicit)
@@ -123,6 +159,10 @@ class MatchingPolicy:
             ),
             max_block_size=int(value.get("max_block_size", 10_000)),
             max_candidate_pairs=int(value.get("max_candidate_pairs", 500_000)),
+            phone_evidence_strategy=str(
+                value.get("phone_evidence_strategy")
+                or PHONE_EVIDENCE_CONFIGURED
+            ),
         )
 
     def attributes(self) -> Iterable[str]:

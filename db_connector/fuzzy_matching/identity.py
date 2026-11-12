@@ -27,7 +27,7 @@ def _normalized_attribute(attribute: str, value: Any) -> str:
     if attribute in {"eng_surname", "eng_firstname"}:
         return norm.english_words(value)
     if attribute == "phone":
-        return norm.phone(value)
+        return "|".join(norm.matching_phone_tokens(value))
     if attribute == "email":
         return norm.email(value)
     if attribute == "birthday":

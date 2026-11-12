@@ -1,7 +1,11 @@
 import unittest
 
 from fuzzy_matching.models import compare_all_models
-from fuzzy_matching.policy import MatchingPolicy, SourceProfile
+from fuzzy_matching.policy import (
+    PHONE_EVIDENCE_ALL_VALID,
+    MatchingPolicy,
+    SourceProfile,
+)
 from fuzzy_matching.types import CandidatePair, EvidenceLevel, MatchTier
 
 
@@ -104,6 +108,41 @@ class BossExamplesTests(unittest.TestCase):
         }
         result = compare_all_models(pair(), left, right, self.policy)
         self.assertEqual(result.tiered_gated.tier, MatchTier.HIGH)
+
+    def test_exact_name_plus_any_valid_phone_token_reaches_high(self):
+        profiles = {
+            source: SourceProfile(source, {"phone": "mobile"})
+            for source in ("A", "B")
+        }
+        policy = MatchingPolicy(
+            source_profiles=profiles,
+            phone_evidence_strategy=PHONE_EVIDENCE_ALL_VALID,
+        )
+        left = {
+            "record_id": "L",
+            "source": "A",
+            "chi_surname": "彭",
+            "chi_firstname": "建邦",
+            "mobile": "97312175/93520882/12345678",
+            "res_phone": "25672313",
+        }
+        right = {
+            "record_id": "R",
+            "source": "B",
+            "chi_surname": "彭",
+            "chi_firstname": "建邦",
+            "mobile": "97312175",
+            "contact1_phone": "97882239",
+        }
+        # Canonical evaluation records retain the governed token collection.
+        left["phone"] = policy.value(left, "phone")
+        right["phone"] = policy.value(right, "phone")
+        result = compare_all_models(pair(), left, right, policy)
+        self.assertEqual(result.tiered_gated.tier, MatchTier.HIGH)
+        self.assertEqual(
+            result.tiered_gated.evidence["phone"].reason,
+            "phone_token_exact",
+        )
 
 
 class IdentifierPolicyTests(unittest.TestCase):

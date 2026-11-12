@@ -266,8 +266,7 @@ def blocking_keys(record: dict[str, Any], policy: MatchingPolicy) -> set[str]:
             # deterministic global-identifier evidence.
             keys.add(f"unverified_id:{attribute}:{value}")
 
-    phone = norm.phone(policy.value(record, "phone"))
-    if phone:
+    for phone in norm.matching_phone_tokens(policy.value(record, "phone")):
         keys.add(f"phone:{phone}")
     email = norm.email(policy.value(record, "email"))
     if email:
@@ -352,8 +351,7 @@ def _deterministic_high_blocking_keys_for_routes(
                 keys.add(f"global_id:{attribute}:{value}")
 
     if "phone" in routes:
-        phone = norm.phone(policy.value(record, "phone"))
-        if phone:
+        for phone in norm.matching_phone_tokens(policy.value(record, "phone")):
             keys.add(f"phone:{phone}")
     if "email" in routes:
         email = norm.email(policy.value(record, "email"))

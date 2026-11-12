@@ -1,5 +1,37 @@
 frappe.ui.form.on("CCD Matching Policy", {
 	refresh(frm) {
+		if (!frm.is_new() && frappe.user.has_role("System Manager")) {
+			frm.add_custom_button(__("Create Draft Revision"), () => {
+				frappe.prompt(
+					[
+						{ fieldname: "target_policy", fieldtype: "Data", label: __("New Policy Version"), reqd: 1 },
+						{
+							fieldname: "phone_evidence_strategy",
+							fieldtype: "Select",
+							label: __("Phone Evidence Strategy"),
+							options: "Configured Field Only\nAll Valid Phone Fields",
+							default: frm.doc.phone_evidence_strategy || "Configured Field Only",
+							reqd: 1,
+						},
+					],
+					(values) => frappe.call({
+						method: "db_connector.api_fuzzy_evaluation.create_policy_revision",
+						args: {
+							source_policy: frm.doc.name,
+							target_policy: values.target_policy,
+							phone_evidence_strategy: values.phone_evidence_strategy,
+						},
+						freeze: true,
+						callback(response) {
+							if (response.message?.policy) {
+								frappe.set_route("Form", "CCD Matching Policy", response.message.policy);
+							}
+						},
+					}),
+					__("Create Governed Draft Policy Revision"),
+				);
+			}, __("Governance"));
+		}
 		if (frm.is_new() || !["Draft", "Pilot"].includes(frm.doc.status)) return;
 		if (frm.doc.status === "Draft" && frappe.user.has_role("System Manager")) {
 			frm.add_custom_button(__("Promote to Pilot"), () => {

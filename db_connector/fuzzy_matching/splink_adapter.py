@@ -43,7 +43,10 @@ def _null_missing_comparison_values(
     for record in records:
         row = dict(record)
         for fieldname in COMPARISON_FIELDS:
-            if row.get(fieldname) == "":
+            value = row.get(fieldname)
+            if value == "" or (
+                isinstance(value, (list, tuple, set, frozenset)) and not value
+            ):
                 row[fieldname] = None
         output.append(row)
     return output
@@ -80,7 +83,7 @@ def runtime_smoke_check() -> dict[str, Any]:
             "chi_full": "王小明",
             "eng_full": "WONG SIU MING",
             "birthday": "1980-01-01",
-            "phone": "91234567",
+            "phone": ["91234567"],
             "email": "a@example.invalid",
         },
         {
@@ -89,7 +92,7 @@ def runtime_smoke_check() -> dict[str, Any]:
             "chi_full": "陳大文",
             "eng_full": "CHAN TAI MAN",
             "birthday": "1970-02-02",
-            "phone": "92345678",
+            "phone": ["92345678"],
             "email": "b@example.invalid",
         },
         {
@@ -98,7 +101,7 @@ def runtime_smoke_check() -> dict[str, Any]:
             "chi_full": "王小明",
             "eng_full": "WONG SIU MING",
             "birthday": "1980-01-01",
-            "phone": "91234567",
+            "phone": ["91234567"],
             "email": "a@example.invalid",
         },
         {
@@ -107,7 +110,7 @@ def runtime_smoke_check() -> dict[str, Any]:
             "chi_full": "陳大文",
             "eng_full": "CHAN TAI MAN",
             "birthday": "1970-02-02",
-            "phone": "92345678",
+            "phone": ["92345678"],
             "email": "b@example.invalid",
         },
     ]
@@ -178,17 +181,31 @@ def fit_predict(
         )
     if "birthday" in frame:
         comparisons.append(cl.ExactMatch("birthday"))
+    phone_is_array = "phone" in frame and any(
+        isinstance(value, (list, tuple, set, frozenset))
+        for value in frame["phone"]
+        if value is not None
+    )
     if "phone" in frame:
-        comparisons.append(cl.ExactMatch("phone"))
+        comparisons.append(
+            cl.ArrayIntersectAtSizes("phone", [1])
+            if phone_is_array
+            else cl.ExactMatch("phone")
+        )
     if "email" in frame:
         comparisons.append(cl.ExactMatch("email").configure(term_frequency_adjustments=True))
     if not comparisons:
         raise ValueError("Splink requires at least one configured comparison column")
 
     route_values = {}
-    for fieldname in ("global_id", "phone", "email", "chi_full"):
+    # Phone arrays are compared by token intersection. Candidate generation
+    # already creates one block per validated token; the internal EM/prediction
+    # blocks remain scalar to avoid an opaque whole-array equality rule.
+    for fieldname in ("global_id", "email", "chi_full"):
         if fieldname in frame:
             route_values[fieldname] = frame[fieldname].fillna("").astype(str)
+    if "phone" in frame and not phone_is_array:
+        route_values["phone"] = frame["phone"].fillna("").astype(str)
     if "birthday" in frame and "surname_key" in frame:
         route_values["dob_surname"] = (
             frame["birthday"].fillna("").astype(str)

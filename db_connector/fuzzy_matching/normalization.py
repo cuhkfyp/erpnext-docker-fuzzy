@@ -15,6 +15,7 @@ _NON_ALNUM = re.compile(r"[^0-9a-z]+")
 _NON_ID = re.compile(r"[^0-9A-Z]+")
 _HK_PHONE_INITIAL_DIGITS = frozenset("23456789")
 _SEQUENTIAL_DIGIT_RUNS = ("0123456789", "9876543210")
+_PHONE_HARD_SEPARATOR = re.compile(r"[/,;|\n\r]+")
 
 
 def text(value: Any) -> str:
@@ -67,10 +68,31 @@ def english_initials(value: Any) -> str:
 
 
 def phone(value: Any) -> str:
+    """Return the legacy single configured phone value.
+
+    This behaviour is intentionally frozen for policies that pre-date the
+    multi-field phone strategy.  In particular, an existing policy continues
+    to interpret one configured field exactly as it did when it was approved.
+    New policies use :func:`phone_tokens` through a collection-valued canonical
+    phone attribute.
+    """
     raw = text(value)
     if not raw:
         return ""
     digits = "".join(re.findall(r"\d", raw))
+    if digits.startswith("00852"):
+        digits = digits[5:]
+    elif digits.startswith("852") and len(digits) > 8:
+        digits = digits[3:]
+    if len(digits) != 8 or digits[0] not in _HK_PHONE_INITIAL_DIGITS:
+        return ""
+    if any(digits in run for run in _SEQUENTIAL_DIGIT_RUNS):
+        return ""
+    return digits
+
+
+def _valid_phone_digits(raw_digits: Any) -> str:
+    digits = "".join(re.findall(r"\d", text(raw_digits)))
     if digits.startswith("00852"):
         digits = digits[5:]
     elif digits.startswith("852") and len(digits) > 8:
@@ -82,7 +104,61 @@ def phone(value: Any) -> str:
         return ""
     if any(digits in run for run in _SEQUENTIAL_DIGIT_RUNS):
         return ""
+    # Reject obvious repeated placeholders while retaining ordinary duplicated
+    # digits in real subscriber numbers.
+    if any(digits == digits[:size] * (8 // size) for size in (1, 2, 4)):
+        return ""
     return digits
+
+
+def phone_tokens(value: Any) -> tuple[str, ...]:
+    """Return every distinct, plausible Hong Kong subscriber number.
+
+    CCD phone fields commonly contain slash-separated relatives, emergency
+    contacts, labels, spaces, or country prefixes.  Hard separators represent
+    separate values; spaces and hyphens may format one number.  Invalid,
+    foreign, sequential, and repeated placeholders never become evidence.
+    """
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return tuple(
+            sorted(
+                {
+                    token
+                    for item in value
+                    for token in phone_tokens(item)
+                }
+            )
+        )
+    raw = text(value)
+    if not raw:
+        return ()
+    tokens: set[str] = set()
+    for segment in _PHONE_HARD_SEPARATOR.split(raw):
+        groups = re.findall(r"\d+", segment)
+        if not groups:
+            continue
+        # Preserve complete digit groups when a free-text segment contains
+        # more than one number; otherwise allow formatted 4+4 / country-code
+        # groups to be combined.
+        complete = [_valid_phone_digits(group) for group in groups]
+        tokens.update(value for value in complete if value)
+        combined = _valid_phone_digits("".join(groups))
+        if combined:
+            tokens.add(combined)
+    return tuple(sorted(tokens))
+
+
+def matching_phone_tokens(value: Any) -> tuple[str, ...]:
+    """Return governed tokens without reinterpreting frozen scalar evidence.
+
+    A tuple/list marks the new all-valid-fields strategy. A scalar marks the
+    legacy configured-field strategy and therefore keeps its original
+    normalization semantics.
+    """
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return phone_tokens(value)
+    normalized = phone(value)
+    return (normalized,) if normalized else ()
 
 
 def email(value: Any) -> str:
