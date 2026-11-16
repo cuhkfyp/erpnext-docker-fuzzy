@@ -1,5 +1,26 @@
 # CCD Identity Resolution Implementation Status
 
+## Scalar Splink compatibility repair — 2026-11-16
+
+The multi-phone adapter introduced a scalar-policy regression by appending the
+phone blocking route after email and Chinese name. Route order controls both
+the shared candidate budget and the first three surviving EM training blocks;
+the changed order therefore fitted a different old-policy model. Restore the
+frozen scalar order `global_id, phone, email, chi_full`. Array-phone policies
+still omit the scalar phone route and keep their existing order. This restores
+the approved adapter behavior, rather than changing the cutoff or authorizing
+a new model.
+
+Verification on Development: all 500 stored probabilistic evaluation scores
+for the threshold evaluation behind queue `inqr69n5cd` replayed within database
+rounding (maximum absolute error `4.942961595588713e-10`), using the same 5,000
+training IDs and 123,283-record frozen population. The three requested
+diagnostic pairs under draft `pilot-2.0` retained their preceding multi-phone
+scores (tolerance `1e-8`). The focused adapter, policy, evaluation, blocking,
+and Unified Person suites passed 67 tests. A permanent regression test checks
+the actual generated scalar and array blocking columns before training.
+Stored evaluations, queues, labels and authorizations were not rewritten.
+
 ## Safe takeover checkpoint
 
 | Item | Verified state |

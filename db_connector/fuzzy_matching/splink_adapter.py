@@ -201,11 +201,13 @@ def fit_predict(
     # Phone arrays are compared by token intersection. Candidate generation
     # already creates one block per validated token; the internal EM/prediction
     # blocks remain scalar to avoid an opaque whole-array equality rule.
-    for fieldname in ("global_id", "email", "chi_full"):
-        if fieldname in frame:
+    # Order is part of the frozen scalar model: prediction budgets are spent
+    # in this order and EM uses the first three surviving blocks. Appending
+    # scalar phone after chi_full changes the fitted model despite identical
+    # data, seed and adapter version. Array policies skip only the phone block.
+    for fieldname in ("global_id", "phone", "email", "chi_full"):
+        if fieldname in frame and not (fieldname == "phone" and phone_is_array):
             route_values[fieldname] = frame[fieldname].fillna("").astype(str)
-    if "phone" in frame and not phone_is_array:
-        route_values["phone"] = frame["phone"].fillna("").astype(str)
     if "birthday" in frame and "surname_key" in frame:
         route_values["dob_surname"] = (
             frame["birthday"].fillna("").astype(str)

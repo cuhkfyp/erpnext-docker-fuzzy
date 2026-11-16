@@ -3,12 +3,44 @@ from unittest.mock import patch
 
 from fuzzy_matching.splink_adapter import (
     ProbabilityPrediction,
+    available,
+    fit_predict,
     _null_missing_comparison_values,
     score_requested_pairs,
 )
 
 
 class SplinkAdapterTests(unittest.TestCase):
+    def test_scalar_and_array_policies_preserve_frozen_block_order(self):
+        if not available():
+            self.skipTest("Optional Splink runtime is not installed")
+
+        class StopBeforeTraining(Exception):
+            pass
+
+        # Distinct values expose which evidence each opaque block represents.
+        # fit_predict spends its pair budget in this order and trains EM on
+        # only the first three surviving blocks, making order model-critical.
+        for array_phone, expected in (
+            (False, ["ID-1", "91234567", "a@example.invalid", "Example"]),
+            (True, ["ID-1", "a@example.invalid", "Example"]),
+        ):
+            with self.subTest(array_phone=array_phone):
+                rows = [
+                    {"record_id": source, "source": source,
+                     "global_id": "ID-1", "chi_full": "Example",
+                     "phone": ["91234567"] if array_phone else "91234567",
+                     "email": "a@example.invalid"}
+                    for source in ("A", "B")
+                ]
+                with patch("splink.Linker", side_effect=StopBeforeTraining) as linker:
+                    with self.assertRaises(StopBeforeTraining):
+                        fit_predict(rows, max_prediction_pairs=10)
+                frames = linker.call_args.args[0]
+                for frame in frames:
+                    blocks = [column for column in frame if column.startswith("__block_")]
+                    self.assertEqual([frame.iloc[0][column] for column in blocks], expected)
+
     def test_missing_comparison_values_become_null_not_exact_empty_text(self):
         original = {
             "record_id": "R1",
