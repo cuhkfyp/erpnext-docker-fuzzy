@@ -2,6 +2,40 @@
 
 ## Executive decision
 
+### Current Development update — 2026-11-20
+
+The August POC below remains unchanged as historical evidence. The subsequent
+Development workflow now includes **guarded ultra-high Splink automation**;
+Splink is no longer limited to optional review in this separately authorized
+scope.
+
+1. **Tiered Evidence:** authorized High rules support reversible, safety-gated
+   identity linking, including separately governed component/overlap handling.
+2. **Ultra-high Splink:** probabilities **at or above `0.997092444`** may support
+   unattended, reversible identity materialization within the frozen
+   `pilot-1.9` authorization. Prospective validation and the second management
+   approval after holdout QC are recorded in ERPNext. A qualifying score alone
+   is insufficient: current evidence, exclusions, component/group safety,
+   authorization checks and channel controls must also permit application.
+   Eligible work runs in bounded background batches with ongoing QC controls.
+3. **Other Splink candidates:** remain an optional ranked review pool unless
+   covered by a separate approved route, such as lower-score Hybrid. The
+   ultra-high approval does not automatically authorize a lower cutoff.
+
+This Development authorization uses an explicitly accepted **80% Wilson 95%
+precision lower-bound target**; it must not be confused with the original POC's
+95% target or interpreted as proof of 99.709% observed accuracy. It is not
+blanket UAT/production approval, physical record merging, or permission to
+transfer the cutoff to a changed model/source population without the applicable
+governance checks. Historical approvals, labels and decision provenance remain
+auditable.
+
+See the separate [November recommended operating model and updated diagram](RECOMMENDED_OPERATING_MODEL_2026-11.md)
+for the current routes, Desk workflow and QC model. The original diagram below
+is deliberately retained.
+
+### Historical executive decision — August 2026
+
 **POC status:** Completed. Before 2026-08-19, the ERPNext evaluation approvals
 and Pilot promotion were recorded by the project operator; they were not
 management approvals. On 2026-08-19, management reviewed the POC results and
