@@ -18,14 +18,10 @@ scope.
    is insufficient: current evidence, exclusions, component/group safety,
    authorization checks and channel controls must also permit application.
    Eligible work runs in bounded background batches with ongoing QC controls.
-3. **Other Splink candidates:** remain an optional ranked review pool unless
-   covered by a separate approved route, such as lower-score Hybrid. The
-   ultra-high approval does not automatically authorize a lower cutoff.
+3. **Other Splink candidates:** remain an optional ranked review.
 
-This Development authorization uses an explicitly accepted **80% Wilson 95%
-precision lower-bound target**; it must not be confused with the original POC's
-95% target or interpreted as proof of 99.709% observed accuracy. It is not
-blanket UAT/production approval, physical record merging, or permission to
+This Development authorization is not blanket UAT/production approval,
+physical record merging, or permission to
 transfer the cutoff to a changed model/source population without the applicable
 governance checks. Historical approvals, labels and decision provenance remain
 auditable.
