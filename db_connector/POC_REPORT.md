@@ -14,10 +14,7 @@ scope.
 2. **Ultra-high Splink:** probabilities **at or above `0.997092444`** may support
    unattended, reversible identity materialization within the frozen
    `pilot-1.9` authorization. Prospective validation and the second management
-   approval after holdout QC are recorded in ERPNext. A qualifying score alone
-   is insufficient: current evidence, exclusions, component/group safety,
-   authorization checks and channel controls must also permit application.
-   Eligible work runs in bounded background batches with ongoing QC controls.
+   approval after holdout QC are recorded in ERPNext.
 3. **Other Splink candidates:** remain an optional ranked review.
 
 This Development authorization is not blanket UAT/production approval,
