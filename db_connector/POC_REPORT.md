@@ -17,6 +17,23 @@ scope.
    approval after holdout QC are recorded in ERPNext.
 3. **Other Splink candidates:** remain an optional ranked review.
 
+#### Ultra-high Splink approval results
+
+At the approved cutoff of **`0.997092444`**, Evaluation Run `g97llvc73u`
+recorded the following prospective validation and applied holdout QC results:
+
+| Approval evidence | Same | Different | Precision |
+| --- | ---: | ---: | ---: |
+| Prospective validation | 157 | 8 | **95.15%** |
+| Applied holdout QC | 48 | 1 | **97.96%** |
+| **Combined** | **205** | **9** | **95.79%** |
+
+The second approval was recorded on **8 November 2026**, after all 49 applied
+holdout pairs completed QC. Combined observed precision was **205 Same out of
+214 reviewed pairs**. This is the overall reviewed-cohort result, not a claim
+of equal precision across source pairs; the model-score cutoff is not the
+measured precision.
+
 ### Historical executive decision — August 2026
 
 **POC status:** Completed. Before 2026-08-19, the ERPNext evaluation approvals
