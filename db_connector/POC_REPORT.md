@@ -17,16 +17,6 @@ scope.
    approval after holdout QC are recorded in ERPNext.
 3. **Other Splink candidates:** remain an optional ranked review.
 
-This Development authorization is not blanket UAT/production approval,
-physical record merging, or permission to
-transfer the cutoff to a changed model/source population without the applicable
-governance checks. Historical approvals, labels and decision provenance remain
-auditable.
-
-See the separate [November recommended operating model and updated diagram](RECOMMENDED_OPERATING_MODEL_2026-11.md)
-for the current routes, Desk workflow and QC model. The original diagram below
-is deliberately retained.
-
 ### Historical executive decision — August 2026
 
 **POC status:** Completed. Before 2026-08-19, the ERPNext evaluation approvals
